@@ -5,6 +5,15 @@ PostToolUse, opencode tool.execute.after, Kiro agent hooks) — it must fire on 
 commit regardless of which agent (or no agent) made it. Each commit gets a real
 markdown file under specs/history/, plus a mirrored row in the micro_docs sqlite
 table for Phase 3's indexer to pick up.
+
+Deliberately post-commit, not pre-commit/commit-msg: the history doc's filename is keyed
+by the commit SHA, which doesn't exist until the commit object is created, and doc
+generation calls an AI provider that must never be able to block or fail a commit (see
+the "Generation fails -> Commit succeeds" guarantee in
+specs/documentation/auto-commit-docs.md). `main()` commits whatever it writes under
+specs/ as a second, separate commit rather than leaving it as a dangling uncommitted
+change — guarded by `_AUTO_COMMIT_MARKER` so that follow-up commit's own post-commit
+firing doesn't recurse.
 """
 
 from __future__ import annotations
@@ -23,6 +32,11 @@ command -v specky >/dev/null 2>&1 && specky commit-doc || true
 """
 
 HOOK_MARKER = "specky commit-doc"
+
+# Prefix for the follow-up commit `main()` makes for whatever it writes under specs/. Checked
+# at the top of `main()` so that commit's own post-commit firing recognizes itself and returns
+# immediately instead of generating a doc *for* the doc-sync commit and recursing forever.
+_AUTO_COMMIT_MARKER = "docs: sync specky docs [skip specky]"
 
 # Diffs are truncated to this many characters before going into a prompt — long enough for
 # context, short enough to keep prompt cost/latency predictable regardless of commit size.
@@ -142,8 +156,29 @@ def sync() -> list[Path]:
     return written
 
 
+def _commit_doc_updates(repo_root: Path) -> None:
+    """Stage and commit whatever `_sync_one` just wrote under specs/, as its own commit —
+    covers the history file, any feature/workflow doc, and update_modules_index()'s
+    best-effort MODULES.md edit (generator.py) without having to track each path. Best-effort
+    like the rest of this module: a failure here (e.g. another hook rejects the commit) is
+    printed, not raised — the original commit already succeeded and must stay that way."""
+    try:
+        subprocess.run(["git", "add", "specs"], cwd=repo_root, check=True)
+        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo_root)
+        if staged.returncode == 0:
+            return  # nothing written this run (e.g. commit was skipped by classification)
+        subprocess.run(["git", "commit", "-m", _AUTO_COMMIT_MARKER], cwd=repo_root, check=True)
+        print("specky commit-doc: committed doc updates")
+    except subprocess.CalledProcessError as exc:
+        print(f"specky commit-doc: doc updates written but not committed ({exc})")
+
+
 def main() -> None:
     repo_root = _repo_root()
+    commit = _commit_info("HEAD")
+    if commit.message.startswith(_AUTO_COMMIT_MARKER):
+        return  # this commit *is* our own doc-sync commit from below — don't recurse
+
     config_path = repo_root / "specky.toml"
     try:
         provider = load_provider_from_toml(config_path)
@@ -151,7 +186,8 @@ def main() -> None:
         print(f"specky commit-doc: skipping ({exc})")
         return
 
-    _sync_one(repo_root, _commit_info("HEAD"), provider)
+    _sync_one(repo_root, commit, provider)
+    _commit_doc_updates(repo_root)
 
 
 def install_git_hook() -> Path:
