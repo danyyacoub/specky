@@ -138,8 +138,8 @@ def commits_for_doc(repo_root: Path, doc_path: str) -> list[dict]:
 def to_mermaid(graph: dict) -> str:
     lines = [
         "flowchart LR",
-        "  classDef feature fill:#dbeafe,stroke:#2563eb",
-        "  classDef workflow fill:#fef3c7,stroke:#d97706",
+        "  classDef feature fill:#eef1ff,stroke:#4f46e5",
+        "  classDef workflow fill:#fff7ed,stroke:#b45309",
     ]
     for node in graph["nodes"]:
         label = node["title"].replace('"', "'")
