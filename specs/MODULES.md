@@ -39,3 +39,15 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 | Doc | Purpose |
 |---|---|
 | [chat/local-rag-server.md](chat/local-rag-server.md) | Local HTTP server that answers documentation questions by retrieving context from FTS5 index |
+
+## Search
+
+| Doc | Purpose |
+|---|---|
+| [search/fts5-syntax-safety.md](search/fts5-syntax-safety.md) | Handle FTS5 syntax characters safely in search and chat queries |
+
+## Rendering
+
+| Doc | Purpose |
+|---|---|
+| [rendering/diagram-support.md](rendering/diagram-support.md) | Server-side mermaid diagram rendering with glossary tooltips and styled tables in the HTML viewer |

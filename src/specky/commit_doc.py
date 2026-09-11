@@ -85,6 +85,17 @@ def record_micro_doc(repo_root: Path, commit: Commit, summary: str) -> None:
         conn.close()
 
 
+def record_commit_link(repo_root: Path, sha: str, doc_rel_path: str) -> None:
+    conn = connect(repo_root)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO commit_links (sha, path) VALUES (?, ?)", (sha, doc_rel_path)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def missing_shas(repo_root: Path) -> list[str]:
     """Every commit sha in HEAD's history that doesn't yet have a specs/history/<sha8>.md."""
     history_dir = repo_root / "specs" / "history"
@@ -111,6 +122,7 @@ def _sync_one(repo_root: Path, commit: Commit, provider: Provider) -> list[Path]
     if feature_doc_path:
         print(f"specky commit-doc: updated {feature_doc_path}")
         written.append(feature_doc_path)
+        record_commit_link(repo_root, commit.sha, str(feature_doc_path.relative_to(repo_root)))
     return written
 
 

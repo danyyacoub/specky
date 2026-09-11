@@ -30,6 +30,17 @@ def main() -> None:
     subparsers.add_parser(
         "sync", help="Backfill micro-docs for any commit that doesn't have one yet (idempotent)"
     )
+    subparsers.add_parser("features", help="List feature docs")
+    subparsers.add_parser("workflows", help="List workflow docs")
+    subparsers.add_parser("tags", help="List tags and the docs carrying them")
+    subparsers.add_parser("graph", help="Print the feature/workflow graph as Mermaid")
+    subparsers.add_parser(
+        "tag", help="Backfill type/tags frontmatter for docs written before this feature existed"
+    )
+    commit_info_p = subparsers.add_parser(
+        "commit-info", help="Show tags and related feature/workflow docs for a commit"
+    )
+    commit_info_p.add_argument("sha")
 
     args = parser.parse_args()
 
@@ -123,6 +134,73 @@ def main() -> None:
             print(f"specky render-html: {exc}", file=sys.stderr)
             sys.exit(1)
         print(f"specky render-html: wrote {index_path}")
+        return
+
+    if args.command in ("features", "workflows"):
+        from specky import catalog
+        from specky.db import repo_root
+
+        docs = (catalog.list_features if args.command == "features" else catalog.list_workflows)(
+            repo_root()
+        )
+        if not docs:
+            print(f"specky {args.command}: none yet — run `specky tag` to classify existing docs")
+        for doc in docs:
+            tags = f" [{', '.join(doc['tags'])}]" if doc["tags"] else ""
+            print(f"{doc['path']}  —  {doc['title']}{tags}  ({doc['commits']} commits)")
+        return
+
+    if args.command == "commit-info":
+        from specky import catalog
+        from specky.db import repo_root
+
+        info = catalog.commit_info(repo_root(), args.sha)
+        if not info["docs"]:
+            print(f"specky commit-info: no feature/workflow doc linked to {args.sha}")
+            return
+        print(f"tags: {', '.join(info['tags']) or '(none)'}")
+        for doc in info["docs"]:
+            print(f"{doc['path']}  —  {doc['title']} ({doc['type']})")
+        return
+
+    if args.command == "tags":
+        from specky import catalog
+        from specky.db import repo_root
+
+        by_tag = catalog.list_tags(repo_root())
+        if not by_tag:
+            print("specky tags: none yet — run `specky tag` to classify existing docs")
+        for tag, docs in by_tag.items():
+            print(f"{tag} ({len(docs)})")
+            for doc in docs:
+                print(f"    {doc['path']}  —  {doc['title']}")
+        return
+
+    if args.command == "graph":
+        from specky import catalog
+        from specky.db import repo_root
+
+        graph = catalog.build_graph(repo_root())
+        print(f"```mermaid\n{catalog.to_mermaid(graph)}\n```")
+        return
+
+    if args.command == "tag":
+        from specky.ai_provider import load_provider_from_toml
+        from specky.db import repo_root
+        from specky.generator import backfill_tags
+
+        root = repo_root()
+        try:
+            provider = load_provider_from_toml(root / "specky.toml")
+            updated = backfill_tags(root, provider)
+        except Exception as exc:
+            print(f"specky tag: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not updated:
+            print("specky tag: already up to date")
+        else:
+            for path in updated:
+                print(f"specky tag: tagged {path}")
         return
 
     if args.command == "serve":

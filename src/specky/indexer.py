@@ -10,6 +10,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from specky import frontmatter
 from specky.db import connect, fts_match_query
 
 
@@ -26,6 +27,8 @@ def _title_for(content: str, fallback: str) -> str:
 
 
 def _reset_tables(conn) -> None:
+    # micro_docs and commit_links are written incrementally by commit_doc.py and aren't
+    # derived from a rescan, so they're deliberately left out of this wipe.
     conn.execute("DELETE FROM documents")
     conn.execute("DELETE FROM documents_fts")
     conn.execute("DELETE FROM commits")
@@ -39,19 +42,24 @@ def index_documents(repo_root: Path, conn) -> int:
 
     count = 0
     for md_path in sorted(specs_root.rglob("*.md")):
-        content = md_path.read_text()
+        raw = md_path.read_text()
+        meta, content = frontmatter.parse(raw)
         domain = _domain_for(md_path, specs_root)
         title = _title_for(content, md_path.stem)
         rel_path = str(md_path.relative_to(repo_root))
         updated_at = datetime.fromtimestamp(md_path.stat().st_mtime, tz=timezone.utc).isoformat()
+        doc_type = meta.get("type", "") if isinstance(meta.get("type", ""), str) else ""
+        tags = ",".join(meta.get("tags", []))
+        related = ",".join(meta.get("related", []))
 
         conn.execute(
-            "INSERT INTO documents (path, domain, title, content, updated_at) VALUES (?, ?, ?, ?, ?)",
-            (rel_path, domain, title, content, updated_at),
+            "INSERT INTO documents (path, domain, title, content, doc_type, tags, related, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (rel_path, domain, title, content, doc_type, tags, related, updated_at),
         )
         conn.execute(
-            "INSERT INTO documents_fts (path, domain, title, content) VALUES (?, ?, ?, ?)",
-            (rel_path, domain, title, content),
+            "INSERT INTO documents_fts (path, domain, title, content, tags) VALUES (?, ?, ?, ?, ?)",
+            (rel_path, domain, title, content, tags),
         )
         count += 1
     return count
@@ -77,9 +85,16 @@ def index_commits(repo_root: Path, conn) -> int:
         )
         row = conn.execute("SELECT summary FROM micro_docs WHERE sha = ?", (sha,)).fetchone()
         summary = row[0] if row else ""
+        tag_rows = conn.execute(
+            "SELECT DISTINCT documents.tags FROM commit_links "
+            "JOIN documents ON documents.path = commit_links.path "
+            "WHERE commit_links.sha = ? AND documents.tags != ''",
+            (sha,),
+        ).fetchall()
+        tags = ",".join(sorted({t for (row_tags,) in tag_rows for t in row_tags.split(",") if t}))
         conn.execute(
-            "INSERT INTO commits_fts (sha, message, summary) VALUES (?, ?, ?)",
-            (sha, subject, summary),
+            "INSERT INTO commits_fts (sha, message, summary, tags) VALUES (?, ?, ?, ?)",
+            (sha, subject, summary, tags),
         )
         count += 1
     return count

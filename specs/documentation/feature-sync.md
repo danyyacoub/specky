@@ -1,3 +1,8 @@
+---
+type: workflow
+tags: [documentation, sync]
+---
+
 # Documentation — Feature Sync
 
 ## What It Does

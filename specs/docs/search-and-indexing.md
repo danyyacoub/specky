@@ -1,3 +1,8 @@
+---
+type: workflow
+tags: [search, documentation]
+---
+
 # Docs — Search And Indexing
 
 ## What It Does

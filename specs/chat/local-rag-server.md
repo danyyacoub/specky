@@ -1,3 +1,8 @@
+---
+type: feature
+tags: [documentation, search, chat]
+---
+
 # Chat — Local RAG Server
 
 ## What It Does

@@ -1,3 +1,8 @@
+---
+type: feature
+tags: [documentation]
+---
+
 # Cli — Sync
 
 ## What It Does

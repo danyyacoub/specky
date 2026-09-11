@@ -49,6 +49,11 @@ Before reading code, load the canonical references so the doc stays consistent w
 Create/update the doc in `specs/<domain>/` using the descriptive filename (Naming Convention above), following this style:
 
 ```markdown
+---
+type: feature
+tags: [kebab-case-business-concept]
+---
+
 # {Domain Name} — {One-line purpose}
 
 ## What It Does
@@ -71,6 +76,17 @@ GLOSSARY.md so a scenario is unambiguous.}
 |---|---|---|---|
 | {short name} | {starting state / inputs, using glossary terms} | {action or trigger} | {observable outcome / computed value} |
 ```
+
+**Frontmatter rules**:
+- `type`: `feature` for step 5's "Feature" or "Specific case" types, `workflow` for "Workflow".
+- `tags`: 1-3 kebab-case tags naming the business/domain concept (e.g. `billing`, `refunds`), not
+  implementation details. Run `specky tags` first and reuse an existing tag if one fits — tags are only
+  useful for search/grouping if they're shared across docs, not invented per-doc.
+- `related` (optional): add `related: [domain/topic]` only when this doc is genuinely tied to another
+  one that shares no tag — e.g. a workflow that calls into a feature from a different domain. Leave it
+  out otherwise; shared tags already cover most links and show up in `specky graph`.
+- If updating an existing doc, keep its `related` list as-is unless it's actually wrong now — it's
+  hand-authored, not something to regenerate from scratch.
 
 **Acceptance-tests rules**:
 - **Always include an Acceptance Tests section.** If the domain is purely descriptive with no testable behaviour, say so explicitly in that section rather than omitting it.

@@ -1,3 +1,8 @@
+---
+type: workflow
+tags: [documentation]
+---
+
 # Domain Documentation Workflow
 
 ## What It Does

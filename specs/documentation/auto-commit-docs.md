@@ -1,3 +1,8 @@
+---
+type: feature
+tags: [documentation]
+---
+
 # Documentation — Auto Commit Docs
 
 ## What It Does
