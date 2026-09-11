@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.venv*/
+dist/
+build/
+*.egg-info/
+.specky/
+specky.toml
+.DS_Store

@@ -1,0 +1,23 @@
+[project]
+name = "specky"
+version = "0.1.0"
+description = "Cross-agent plugin that generates and maintains functional documentation in place, with a SQLite-backed searchable history and an HTML viewer for non-technical stakeholders."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.0.0",
+    "anthropic>=0.40.0",
+    "httpx>=0.27.0",
+    "jinja2>=3.1.0",
+]
+
+[project.scripts]
+specky = "specky.cli:main"
+specky-mcp = "specky.mcp_server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/specky"]

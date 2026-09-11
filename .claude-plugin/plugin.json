@@ -1,0 +1,5 @@
+{
+  "name": "specky",
+  "description": "Generates and maintains functional documentation in place, indexes it and commit history in SQLite, and renders a searchable HTML viewer for non-technical stakeholders.",
+  "version": "0.1.0"
+}
