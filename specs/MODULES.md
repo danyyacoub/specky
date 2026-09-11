@@ -22,6 +22,7 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 | [documentation/auto-commit-docs.md](documentation/auto-commit-docs.md) | Automatically generate AI summaries of commits via git post-commit hook |
 | [documentation/feature-sync.md](documentation/feature-sync.md) | Automatically generate and update feature/workflow documentation on each commit |
 | [documentation/feature-classification-and-tags.md](documentation/feature-classification-and-tags.md) | Classify and tag features and workflows for search and discovery |
+| [documentation/auto-doc-commit.md](documentation/auto-doc-commit.md) | Automatically commit generated history and feature docs as a follow-up commit instead of leaving them uncommitted |
 
 ## Cli
 
@@ -52,3 +53,4 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 | Doc | Purpose |
 |---|---|
 | [rendering/diagram-support.md](rendering/diagram-support.md) | Server-side mermaid diagram rendering with glossary tooltips and styled tables in the HTML viewer |
+| [rendering/html-viewer-shell.md](rendering/html-viewer-shell.md) | Interactive HTML viewer with tag/type filtering and cross-doc navigation |
