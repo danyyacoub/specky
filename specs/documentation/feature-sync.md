@@ -18,6 +18,21 @@ On each commit, feature sync automatically detects whether your changes affect a
 
 6. **Optional: Update commit changelog** — If `specky sync` is running, a corresponding micro-doc (commit summary) is also generated.
 
+```mermaid
+flowchart TD
+    A[Commit made] --> B{Affects a documented feature/workflow?}
+    B -->|No - refactor/format/config| C[Skip - no doc changes]
+    B -->|Yes| D{Doc already exists at specs/domain/topic.md?}
+    D -->|Yes| E[Revise existing doc in place]
+    D -->|No| F[Generate new doc]
+    E --> G[Update MODULES.md index]
+    F --> G
+    G --> H{specky sync running?}
+    H -->|Yes| I[Also write commit micro-doc]
+    H -->|No| J[Done]
+    I --> J
+```
+
 ## Outcomes
 
 | Outcome | When | Result |

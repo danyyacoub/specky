@@ -11,6 +11,17 @@ Search-and-indexing builds a searchable database of all specs and git history. U
 3. **Generate static site** — `specky render-html` reads the index and writes a complete website to `.specky/site/index.html` with sidebar navigation grouped by topic, individual doc pages, and a search box.
 4. **Search works offline** — The search index is embedded directly into each page (not fetched from a server), so users can double-click the HTML file or open it with `file://` URL and search without any network connection.
 
+```mermaid
+flowchart TD
+    A[specs/**/*.md + git log] --> B[specky index]
+    B --> C[.specky/index.db - SQLite FTS5]
+    C --> D[specky search 'term']
+    C --> E[specky render-html]
+    D --> F[Terminal results]
+    E --> G[.specky/site/index.html]
+    G --> H[Opened via file:// - works offline]
+```
+
 ## Outcomes
 
 | Scenario | Result |

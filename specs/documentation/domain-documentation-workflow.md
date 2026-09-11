@@ -13,6 +13,22 @@ When you need to document a feature, module, or domain in the codebase, this wor
 6. **Write the functional doc** — create or update a markdown file in `specs/<domain>/` using kebab-case topic names (not `README.md`) with sections for: What It Does, How It Works, Outcomes or Statuses, and Acceptance Tests.
 7. **Update shared glossary if needed** — if the domain introduces a genuinely new term other specs will need, add it to `specs/GLOSSARY.md`.
 
+```mermaid
+flowchart TD
+    A[1. Identify domain] --> B[2. Discover related code]
+    B --> C{3. Existing spec?}
+    C -->|Yes| D[Update existing file]
+    C -->|No| E[Plan new file]
+    D --> F[4. Load PRODUCT.md + GLOSSARY.md]
+    E --> F
+    F --> G[5. Understand functionality]
+    G --> H[6. Write the functional doc]
+    H --> I{7. New glossary term?}
+    I -->|Yes| J[Add to GLOSSARY.md]
+    I -->|No| K[Done]
+    J --> K
+```
+
 ## Outcomes
 
 | Outcome | Meaning |

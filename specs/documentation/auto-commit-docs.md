@@ -14,6 +14,24 @@ Every commit you make automatically gets a one-paragraph AI-generated summary de
 
 4. **Index for search** — Summaries are mirrored into a local SQLite `micro_docs` table, keyed by full commit SHA, so they're searchable during Phase 3 indexing and Phase 4 chat.
 
+Per-commit runtime flow, once steps 1-2 are set up once:
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Git
+    participant Hook as Post-commit Hook
+    participant Provider as AI Provider
+    participant History as specs/history/
+
+    User->>Git: git commit
+    Git->>Hook: fires post-commit
+    Hook->>Provider: commit diff + metadata
+    Provider-->>Hook: one-paragraph summary
+    Hook->>History: write <sha8>.md
+    Hook->>Hook: mirror into micro_docs table
+```
+
 ## Outcomes
 
 | Outcome | When | Result |

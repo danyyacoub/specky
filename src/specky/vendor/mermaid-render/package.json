@@ -1,0 +1,9 @@
+{
+  "name": "specky-mermaid-render",
+  "private": true,
+  "type": "module",
+  "description": "Render-time-only Node tool: turns a mermaid source string into SVG via beautiful-mermaid. Not shipped to readers of the generated site -- see render.mjs and CLAUDE.md.",
+  "dependencies": {
+    "beautiful-mermaid": "^1.1.3"
+  }
+}

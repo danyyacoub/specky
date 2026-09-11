@@ -17,6 +17,18 @@ else
   warn "uv not found on PATH — see https://docs.astral.sh/uv/"
 fi
 python3 --version 2>/dev/null | sed 's/^/  [ok]   /' || warn "python3 not found"
+if command -v node >/dev/null 2>&1; then
+  ok "node: $(node --version)"
+else
+  warn "node not found — only needed for rendering ```mermaid``` diagrams (optional)"
+fi
+
+echo "== mermaid diagram rendering =="
+if [ -d src/specky/vendor/mermaid-render/node_modules ]; then
+  ok "vendor/mermaid-render dependencies installed"
+else
+  warn "not set up (diagrams fall back to plain text) — run: npm install --prefix src/specky/vendor/mermaid-render"
+fi
 
 echo "== config =="
 if [ -f specky.toml ]; then

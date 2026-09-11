@@ -55,6 +55,9 @@ Leave it off and the site still works — the widget just tells you to start it.
 
 - Python 3.11+
 - [`uv`](https://docs.astral.sh/uv/)
+- Node (optional) — only for rendering ```mermaid``` diagrams in the HTML viewer. Run
+  `npm install --prefix src/specky/vendor/mermaid-render` once; without it, diagrams
+  fall back to plain-text source and everything else works as usual.
 
 ## Local install (Claude Code)
 

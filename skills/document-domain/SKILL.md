@@ -57,6 +57,8 @@ Create/update the doc in `specs/<domain>/` using the descriptive filename (Namin
 ## How It Works
 {Numbered steps explaining the process. Each step is one sentence with a bold label.}
 
+{Diagram, if this doc qualifies — see Diagrams rules below. Placed right after the numbered steps.}
+
 ## {Outcomes / Statuses / Results}
 {Table showing possible outcomes and their meaning}
 
@@ -82,8 +84,25 @@ GLOSSARY.md so a scenario is unambiguous.}
 - Compact — no verbose explanations.
 - Focus on WHAT and WHY, not implementation details.
 - Tables for structured information.
-- No code blocks unless showing a formula or threshold.
+- No code blocks unless showing a formula, threshold, or a diagram (see below).
 - Understandable by non-technical stakeholders.
+
+**Diagram rules**:
+- **Workflow** docs (step 5's "Workflow" type): always include a diagram of the sequence.
+- **Feature** or **specific case** docs: include a diagram only when it earns its space —
+  the process branches into a real decision tree (not just a flat outcomes table), or
+  distinct roles/actors (user, service, external system, another domain) hand off to each
+  other. A single actor doing a straight sequence of steps doesn't need one; the numbered
+  list already covers it.
+- Use a fenced ` ```mermaid ` block — renders natively on GitHub and most markdown viewers,
+  degrades to readable text everywhere else.
+- Pick the diagram type to match the shape: `flowchart` for branching/decision logic,
+  `sequenceDiagram` for multiple roles/actors exchanging steps. Don't use both for the same
+  doc.
+- Keep node/actor labels short and reuse exact `GLOSSARY.md` terms — the diagram is a map of
+  the same steps in "How It Works", not a separate source of truth. If the two drift, the
+  numbered list wins.
+- Skip it if the doc's type doesn't qualify — a diagram on every doc is clutter, not clarity.
 
 ### 7. Update the `MODULES.md` index
 Open `specs/MODULES.md` at the repo root and keep the index current. It is a set of `| Doc | Purpose |` tables — one section per domain, in whatever order best reflects the product.
@@ -102,7 +121,8 @@ Open `specs/MODULES.md` at the repo root and keep the index current. It is a set
 If documentation already exists:
 - Read the current code to check if functionality has changed.
 - Compare with existing doc content.
-- Only update sections that are outdated or missing (including the Acceptance Tests section).
+- Only update sections that are outdated or missing (including the Acceptance Tests section
+  and, per the Diagram rules above, a missing or now-stale diagram).
 - Preserve any manually-added context that's still accurate.
 - Report what was updated and why.
 

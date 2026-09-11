@@ -39,6 +39,10 @@ scripts/reindex.sh [query] # rebuild the FTS5 index then search it — fast loop
 scripts/mcp-inspector.sh   # open MCP Inspector against src/specky/mcp_server.py (needs Node/npx)
 ```
 
+`.claude/launch.json` serves `.specky/site/` on :8934 for the Browser tool's `preview_start` —
+use it to visually check rendered pages (e.g. mermaid diagrams) over `http://`, since the
+in-app preview snapshots `file://` and won't execute page scripts.
+
 ## Architecture
 
 Full details live in the docs themselves, indexed at [specs/MODULES.md](specs/MODULES.md).
@@ -55,8 +59,18 @@ Key entry points:
 - [`ai_provider.py`](src/specky/ai_provider.py) — single-method `Provider` protocol
   (`generate(prompt) -> str`); `load_provider_from_toml()` is the only construction path.
 - [`html_render.py`](src/specky/html_render.py) — whole static site inline in one module, must
-  work opened via `file://` with no server/build step (see
-  [docs/search-and-indexing.md](specs/docs/search-and-indexing.md)).
+  work opened via `file://` with no server/build step for the *reader* (see
+  [docs/search-and-indexing.md](specs/docs/search-and-indexing.md)). Glossary hover terms,
+  table styling, and diagram rendering are ported from the user's `glia` project's
+  `enrichment_render.py`, adapted from its sandboxed-iframe pages to specky's plain ones:
+  - ` ```mermaid ` fences render to a static `<svg>` at `render-html` *time* (server-side, via
+    [`vendor/mermaid-render/`](src/specky/vendor/mermaid-render/), a Node tool wrapping
+    `beautiful-mermaid`) — zero client JS shipped for diagrams. Needs a one-time
+    `npm install --prefix src/specky/vendor/mermaid-render`; without it, fenced source is left
+    as plain text rather than failing the render (`scripts/doctor.sh` checks this).
+  - `specs/GLOSSARY.md` terms are auto-linked to a hover tooltip on first mention per page
+    (`link_glossary()`), pure Python + a small vanilla-JS tooltip script — no new dependency.
+  - Markdown tables are wrapped in a scrollable, zebra-striped `figure.tw` (`_wrap_tables()`).
 
 Both doc-generation paths converge on the same convention: `specs/<domain>/<topic>.md`,
 kebab-case topic, not `README.md`.

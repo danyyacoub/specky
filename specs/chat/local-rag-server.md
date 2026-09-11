@@ -12,6 +12,24 @@ Optional chat widget on the generated docs site. Lets you ask questions and get 
 4. **AI generates answer** — Calls your configured provider (Anthropic, OpenAI-compatible, or local CLI) with context + question.
 5. **Widget shows answer** — Displays response with citations showing which doc path or commit sha each part came from.
 
+```mermaid
+sequenceDiagram
+    actor User
+    participant Widget as Ask Widget
+    participant Server as specky serve
+    participant Index as FTS5 Index
+    participant Provider as AI Provider
+
+    User->>Widget: type question, click Ask
+    Widget->>Server: POST question
+    Server->>Index: retrieve matching docs + commit summaries
+    Index-->>Server: up to 5 docs + 5 commits
+    Server->>Provider: context + question
+    Provider-->>Server: grounded answer
+    Server-->>Widget: answer + citations
+    Widget-->>User: displays answer
+```
+
 ## Outcomes
 
 | Server Status | Chat Widget Behavior |

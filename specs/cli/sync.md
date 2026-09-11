@@ -12,6 +12,21 @@
 4. **Generate and save** — For each missing commit, fetch its metadata, generate a micro-doc using your configured AI provider, write the file to `specs/history/`, and record it in the index database.
 5. **Report results** — Print which files were written, or report "already up to date" if nothing was missing.
 
+```mermaid
+flowchart TD
+    A[Run specky sync] --> B[List commits reachable from HEAD]
+    B --> C{Commit has specs/history/sha8.md?}
+    C -->|Yes| D[Skip]
+    C -->|No| E[Generate micro-doc via AI provider]
+    E --> F[Write file + record in index]
+    D --> G{More commits?}
+    F --> G
+    G -->|Yes| C
+    G -->|No| H{Any docs written?}
+    H -->|Yes| I[Print each file path]
+    H -->|No| J[Print 'already up to date']
+```
+
 ## Outcomes
 
 | Condition | Behavior |

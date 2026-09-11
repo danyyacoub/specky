@@ -9,3 +9,4 @@ build/
 specky.toml
 .DS_Store
 .serena/
+node_modules/
