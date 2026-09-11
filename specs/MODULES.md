@@ -33,3 +33,9 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 | Doc | Purpose |
 |---|---|
 | [docs/search-and-indexing.md](docs/search-and-indexing.md) | Index documentation and git history with SQLite FTS5, search via CLI, render searchable static HTML site |
+
+## Chat
+
+| Doc | Purpose |
+|---|---|
+| [chat/local-rag-server.md](chat/local-rag-server.md) | Local HTTP server that answers documentation questions by retrieving context from FTS5 index |
