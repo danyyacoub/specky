@@ -21,6 +21,7 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 | [documentation/domain-documentation-workflow.md](documentation/domain-documentation-workflow.md) | Workflow for generating and maintaining functional documentation for code domains |
 | [documentation/auto-commit-docs.md](documentation/auto-commit-docs.md) | Automatically generate AI summaries of commits via git post-commit hook |
 | [documentation/feature-sync.md](documentation/feature-sync.md) | Automatically generate and update feature/workflow documentation on each commit |
+| [documentation/feature-classification-and-tags.md](documentation/feature-classification-and-tags.md) | Classify and tag features and workflows for search and discovery |
 
 ## Cli
 
