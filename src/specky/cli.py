@@ -6,7 +6,6 @@ from pathlib import Path
 
 _NOT_YET_IMPLEMENTED = {
     "generate": "performed by the document-domain skill directly, not scheduled as a CLI command",
-    "serve": "Phase 4",
 }
 
 
@@ -21,7 +20,8 @@ def main() -> None:
     search = subparsers.add_parser("search", help="Keyword search over the index")
     search.add_argument("query", nargs="?")
     subparsers.add_parser("render-html", help="Render the static HTML doc site")
-    subparsers.add_parser("serve", help="Run the local AI chat companion server (Phase 4)")
+    serve = subparsers.add_parser("serve", help="Run the local AI chat companion for the HTML viewer")
+    serve.add_argument("--port", type=int, default=None)
     subparsers.add_parser("mcp", help="Run the MCP server over stdio")
     subparsers.add_parser(
         "commit-doc", help="Record a micro-doc for HEAD (invoked by the post-commit git hook)"
@@ -123,6 +123,17 @@ def main() -> None:
             print(f"specky render-html: {exc}", file=sys.stderr)
             sys.exit(1)
         print(f"specky render-html: wrote {index_path}")
+        return
+
+    if args.command == "serve":
+        from specky.chat_server import DEFAULT_PORT, serve as run_serve
+        from specky.db import repo_root
+
+        try:
+            run_serve(repo_root(), port=args.port or DEFAULT_PORT)
+        except OSError as exc:
+            print(f"specky serve: {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     phase = _NOT_YET_IMPLEMENTED.get(args.command)

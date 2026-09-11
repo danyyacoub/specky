@@ -1,7 +1,10 @@
 """Static HTML doc site: a searchable, file://-browsable view of the specs/ tree for
-non-technical readers. No build step and no external requests (fonts/JS fall back to
-system stacks) — every page is self-contained, so the whole site is just files you can
-open directly or zip up and send someone.
+non-technical readers. No build step (fonts/JS fall back to system stacks) — every page
+is self-contained, so the whole site is just files you can open directly or zip up and
+send someone. Search is fully static (the index is inlined, not fetched). The one page
+that reaches outside the file itself is the optional chat widget, which POSTs to a local
+`specky serve` companion on 127.0.0.1 (see chat_server.py) — browsing and search work
+identically whether or not that server is running.
 
 The look is adapted from Glia's design system (packages/design-system in that repo):
 a single blue accent rather than a busy palette, a neutral gray ramp capped at a dark
@@ -19,6 +22,7 @@ from pathlib import Path
 import markdown as md
 from jinja2 import Environment
 
+from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
 
 _env = Environment(autoescape=True)
@@ -38,12 +42,23 @@ _RAIL_TEMPLATE = _env.from_string(
     "{% endfor %}</div>"
 )
 
+_CHAT_WIDGET = (
+    '<button id="chat-toggle" class="chat-toggle">Ask</button>'
+    '<div id="chat-panel" class="chat-panel">'
+    '<div class="chat-header">Ask about these docs<span id="chat-status"></span></div>'
+    '<div id="chat-log" class="chat-log"></div>'
+    '<form id="chat-form" class="chat-form">'
+    '<input id="chat-input" placeholder="Ask a question…" autocomplete="off">'
+    "<button type=\"submit\">Send</button></form></div>"
+)
+
 _PAGE_TEMPLATE = _env.from_string(
     '<!doctype html><html><head><meta charset="utf-8">'
     "<title>{{ title }}</title><style>{{ css | safe }}</style></head>"
     '<body><div class="shell">{{ rail | safe }}'
     '<div class="main"><div class="card">{{ body | safe }}</div></div>'
-    "</div><script>const SPECKY_INDEX = {{ search_json | safe }};\n{{ search_js | safe }}"
+    "</div>" + _CHAT_WIDGET + "<script>const SPECKY_INDEX = {{ search_json | safe }};\n"
+    "const SPECKY_CHAT_PORT = {{ chat_port }};\n{{ search_js | safe }}\n{{ chat_js | safe }}"
     "</script></body></html>"
 )
 
@@ -126,6 +141,32 @@ body {
 .stat .n { font-size: 1.375rem; font-weight: 600; color: var(--primary); display: block; }
 .stat .label { font-size: 0.6875rem; color: var(--neutral-600); }
 .empty-state { color: var(--neutral-600); }
+.chat-toggle {
+  position: fixed; bottom: 24px; right: 24px; z-index: 20;
+  background: var(--primary); color: var(--neutral-0); border: none; border-radius: var(--radius-lg);
+  padding: 10px 18px; font-family: var(--font-sans); font-size: 0.8125rem; font-weight: 600;
+  box-shadow: var(--shadow-md); cursor: pointer;
+}
+.chat-panel {
+  position: fixed; bottom: 76px; right: 24px; z-index: 20; width: 340px; max-height: 460px;
+  background: var(--neutral-0); border-radius: var(--radius-lg); box-shadow: var(--shadow-md);
+  border: 1px solid var(--neutral-200); display: none; flex-direction: column; overflow: hidden;
+}
+.chat-panel.open { display: flex; }
+.chat-header {
+  padding: 12px 16px; font-weight: 600; font-size: 0.8125rem; border-bottom: 1px solid var(--neutral-200);
+  display: flex; justify-content: space-between; align-items: center;
+}
+#chat-status { font-weight: 400; color: var(--neutral-600); font-size: 0.6875rem; }
+.chat-log { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
+.chat-msg { font-size: 0.75rem; line-height: 1.5; padding: 6px 10px; border-radius: var(--radius-md); max-width: 90%; white-space: pre-wrap; }
+.chat-user { align-self: flex-end; background: var(--primary-50); color: var(--neutral-900); }
+.chat-assistant { align-self: flex-start; background: var(--neutral-50); color: var(--neutral-900); }
+.chat-sources { align-self: flex-start; color: var(--neutral-600); font-size: 0.6875rem; }
+.chat-error { align-self: flex-start; color: #b91c1c; background: #fef2f2; }
+.chat-form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--neutral-200); }
+.chat-form input { flex: 1; padding: 8px 10px; border: 1px solid var(--neutral-200); border-radius: var(--radius-md); font-family: var(--font-sans); font-size: 0.75rem; }
+.chat-form button { background: var(--primary); color: var(--neutral-0); border: none; border-radius: var(--radius-md); padding: 8px 14px; font-family: var(--font-sans); font-size: 0.75rem; font-weight: 600; cursor: pointer; }
 """
 
 SEARCH_JS = """
@@ -144,6 +185,57 @@ input?.addEventListener('input', () => {
     a.href = hit.html_path;
     a.innerHTML = `${hit.title}<div class="hit-domain">${hit.domain}</div>`;
     results.appendChild(a);
+  }
+});
+"""
+
+CHAT_JS = """
+const chatToggle = document.getElementById('chat-toggle');
+const chatPanel = document.getElementById('chat-panel');
+const chatLog = document.getElementById('chat-log');
+const chatForm = document.getElementById('chat-form');
+const chatInput = document.getElementById('chat-input');
+const chatStatus = document.getElementById('chat-status');
+
+chatToggle?.addEventListener('click', () => {
+  chatPanel.classList.toggle('open');
+  if (chatPanel.classList.contains('open')) chatInput.focus();
+});
+
+function addChatMessage(role, text) {
+  const div = document.createElement('div');
+  div.className = `chat-msg chat-${role}`;
+  div.textContent = text;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+chatForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const question = chatInput.value.trim();
+  if (!question) return;
+  addChatMessage('user', question);
+  chatInput.value = '';
+  chatStatus.textContent = 'Thinking…';
+  try {
+    const res = await fetch(`http://127.0.0.1:${SPECKY_CHAT_PORT}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    const data = await res.json();
+    chatStatus.textContent = '';
+    if (!res.ok) {
+      addChatMessage('error', data.error || 'Something went wrong.');
+      return;
+    }
+    addChatMessage('assistant', data.answer);
+    if (data.sources && data.sources.length) {
+      addChatMessage('sources', `Sources: ${data.sources.join(', ')}`);
+    }
+  } catch (err) {
+    chatStatus.textContent = '';
+    addChatMessage('error', 'Chat server not reachable. Run `specky serve` in this repo, then try again.');
   }
 });
 """
@@ -182,7 +274,14 @@ def _render_rail(domains: dict[str, list[dict]], active_html_name: str | None) -
 
 def _page(title: str, rail_html: str, body_html: str, search_json: str) -> str:
     return _PAGE_TEMPLATE.render(
-        title=title, css=CSS, rail=rail_html, body=body_html, search_js=SEARCH_JS, search_json=search_json
+        title=title,
+        css=CSS,
+        rail=rail_html,
+        body=body_html,
+        search_js=SEARCH_JS,
+        search_json=search_json,
+        chat_js=CHAT_JS,
+        chat_port=CHAT_PORT,
     )
 
 

@@ -1,6 +1,6 @@
 # specky
 
-A coding-agent plugin that generates and maintains functional documentation *in place*, indexes it and commit history in SQLite, and renders a searchable HTML viewer with an AI chat for non-technical stakeholders.
+A coding-agent plugin that generates and maintains functional documentation *in place*, indexes it and commit history in SQLite, and renders a searchable HTML viewer with an optional AI chat for non-technical stakeholders.
 
 Works as a Claude Code plugin (first-class) and via a shared `SKILL.md` + MCP config with opencode and Kiro.
 
@@ -8,9 +8,11 @@ See [specs/PRODUCT.md](specs/PRODUCT.md), [specs/MODULES.md](specs/MODULES.md), 
 
 ## Status
 
-Phase 3 done. Plugin manifest, `document-domain` skill, and a placeholder MCP server (`ping`) are in place (Phase 1). AI provider setup and automatic doc generation are in place (Phase 2): `specky init` configures a provider (Anthropic, an OpenAI-compatible endpoint, or an arbitrary local command — including the native `claude` CLI in print mode, if you don't want to set up a separate API key); `specky install-git-hook` makes every future commit write a short summary to `specs/history/<sha8>.md` *and* generate/update the feature-level reference doc it affects (`specs/<domain>/<topic>.md`), skipping commits with no feature-level behavior change. `specky sync` backfills any commit that doesn't have one yet.
+Phase 4 done. Plugin manifest, `document-domain` skill, and a placeholder MCP server (`ping`) are in place (Phase 1). AI provider setup and automatic doc generation are in place (Phase 2): `specky init` configures a provider (Anthropic, an OpenAI-compatible endpoint, or an arbitrary local command — including the native `claude` CLI in print mode, if you don't want to set up a separate API key); `specky install-git-hook` makes every future commit write a short summary to `specs/history/<sha8>.md` *and* generate/update the feature-level reference doc it affects (`specs/<domain>/<topic>.md`), skipping commits with no feature-level behavior change. `specky sync` backfills any commit that doesn't have one yet.
 
-Phase 3 adds indexing and a static HTML viewer: `specky index` walks `specs/**/*.md` and `git log` into a SQLite FTS5 index (`.specky/index.db`); `specky search "<query>"` does keyword search over it from the terminal; `specky render-html` renders a self-contained static site to `.specky/site/index.html` — sidebar nav grouped by domain, per-doc pages, and a client-side search box (the search index is inlined into each page, not fetched, so it works from a plain double-clicked `file://` URL with no server and no build step). Visual style is adapted from Glia's design system (single blue accent, capped-dark-gray neutrals, primary-tinted rail nav). AI chat in the viewer lands in Phase 4.
+Phase 3 adds indexing and a static HTML viewer: `specky index` walks `specs/**/*.md` and `git log` into a SQLite FTS5 index (`.specky/index.db`); `specky search "<query>"` does keyword search over it from the terminal; `specky render-html` renders a self-contained static site to `.specky/site/index.html` — sidebar nav grouped by domain, per-doc pages, and a client-side search box (the search index is inlined into each page, not fetched, so it works from a plain double-clicked `file://` URL with no server and no build step). Visual style is adapted from Glia's design system (single blue accent, capped-dark-gray neutrals, primary-tinted rail nav).
+
+Phase 4 adds an AI chat widget to the viewer: `specky serve` runs a small local HTTP server (default `127.0.0.1:8420`) that answers questions by retrieving grounding context from the same FTS5 index (docs + commit summaries) and calling whichever AI provider `specky init` configured. The generated site's "Ask" button POSTs to that server; if it's not running, the widget shows an inline message telling you to start it — every other page, including static search, works identically either way.
 
 ## Installing on a repo (Phase 1 + 2 workflow)
 
@@ -40,6 +42,14 @@ specky search "refund flow"   # or search from the terminal directly
 ```
 
 Open `.specky/site/index.html` in any browser — no server needed.
+
+To enable the "Ask about these docs" chat widget on that site, run the local companion alongside it:
+
+```bash
+specky serve   # chat companion on http://127.0.0.1:8420 — Ctrl+C to stop
+```
+
+Leave it off and the site still works — the widget just tells you to start it.
 
 ## Prerequisites
 
