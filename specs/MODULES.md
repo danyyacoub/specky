@@ -27,3 +27,9 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 | Doc | Purpose |
 |---|---|
 | [cli/sync.md](cli/sync.md) | Backfill micro-documentation for commits that don't yet have one (idempotent resync) |
+
+## Docs
+
+| Doc | Purpose |
+|---|---|
+| [docs/search-and-indexing.md](docs/search-and-indexing.md) | Index documentation and git history with SQLite FTS5, search via CLI, render searchable static HTML site |
