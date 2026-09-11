@@ -8,3 +8,4 @@ build/
 .specky/
 specky.toml
 .DS_Store
+.serena/

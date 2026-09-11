@@ -47,9 +47,9 @@ def _index_db_path(repo_root: Path) -> Path:
     return db_dir / "index.db"
 
 
-def _latest_commit() -> Commit:
+def _commit_info(rev: str = "HEAD") -> Commit:
     sha, author, date, message = subprocess.run(
-        ["git", "log", "-1", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%B"],
+        ["git", "log", "-1", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%B", rev],
         capture_output=True,
         text=True,
         check=True,
@@ -107,7 +107,7 @@ def main() -> None:
         print(f"specky commit-doc: skipping ({exc})")
         return
 
-    commit = _latest_commit()
+    commit = _commit_info("HEAD")
     summary = generate_micro_doc(commit, provider)
     history_path = write_history_file(repo_root, commit, summary)
     record_micro_doc(_index_db_path(repo_root), commit, summary)
