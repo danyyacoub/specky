@@ -10,7 +10,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from specky.db import connect
+from specky.db import connect, fts_match_query
 
 
 def _domain_for(md_path: Path, specs_root: Path) -> str:
@@ -98,12 +98,16 @@ def run_index(repo_root: Path) -> tuple[int, int]:
 
 
 def search(repo_root: Path, query: str, limit: int = 10) -> list[dict]:
+    match = fts_match_query(query)
+    if match is None:
+        return []
+
     conn = connect(repo_root)
     try:
         rows = conn.execute(
             "SELECT path, domain, title, snippet(documents_fts, 3, '>>', '<<', '…', 24) "
             "FROM documents_fts WHERE documents_fts MATCH ? ORDER BY rank LIMIT ?",
-            (query, limit),
+            (match, limit),
         ).fetchall()
         return [
             {"path": path, "domain": domain, "title": title, "snippet": snippet}

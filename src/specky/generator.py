@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from specky.ai_provider import Provider
-from specky.commit_doc import Commit
+from specky.commit_doc import DIFF_TRUNCATE_CHARS, Commit
 
 CLASSIFY_PROMPT = """You maintain a set of feature/workflow reference docs under specs/<domain>/<topic>.md \
 for this codebase. Given a commit's message and diff, decide whether it changes user-facing feature or \
@@ -76,7 +76,7 @@ def _strip_code_fence(text: str) -> str:
 
 
 def classify_change(commit: Commit, provider: Provider) -> Classification:
-    prompt = CLASSIFY_PROMPT.format(message=commit.message, diff=commit.diff[:8000])
+    prompt = CLASSIFY_PROMPT.format(message=commit.message, diff=commit.diff[:DIFF_TRUNCATE_CHARS])
     raw = _strip_code_fence(provider.generate(prompt))
     try:
         data = json.loads(raw)
@@ -109,7 +109,7 @@ def generate_feature_doc(
     prompt = (
         f"You maintain specs/{domain}/{topic}.md, the living reference doc for this feature/workflow.\n\n"
         f"{context}\n\n---\nThis commit changed the feature:\n\n"
-        f"Commit message:\n{commit.message}\n\nDiff (may be truncated):\n{commit.diff[:8000]}\n---\n\n"
+        f"Commit message:\n{commit.message}\n\nDiff (may be truncated):\n{commit.diff[:DIFF_TRUNCATE_CHARS]}\n---\n\n"
         + DOC_STYLE_INSTRUCTIONS.format(
             domain_title=domain.replace("-", " ").title(), topic_title=topic.replace("-", " ").title()
         )

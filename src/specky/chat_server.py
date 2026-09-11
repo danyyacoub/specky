@@ -10,12 +10,11 @@ search keep working with the server off; the widget just reports that chat is of
 from __future__ import annotations
 
 import json
-import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from specky.ai_provider import load_provider_from_toml
-from specky.db import connect
+from specky.db import connect, fts_match_query
 
 DEFAULT_PORT = 8420
 
@@ -28,20 +27,8 @@ _SYSTEM_PROMPT = (
 )
 
 
-def _fts_query(question: str) -> str | None:
-    """Wrap each word of free-form user text in quotes for a safe FTS5 MATCH.
-
-    Quoting every token as a literal phrase means stray FTS5 operator syntax in the
-    question ("-", "*", NEAR, AND...) is treated as plain text, not a query operator.
-    """
-    tokens = re.findall(r"\w+", question)
-    if not tokens:
-        return None
-    return " OR ".join(f'"{t}"' for t in tokens)
-
-
 def retrieve_context(repo_root: Path, question: str, limit: int = 5) -> list[dict]:
-    match = _fts_query(question)
+    match = fts_match_query(question)
     if match is None:
         return []
 

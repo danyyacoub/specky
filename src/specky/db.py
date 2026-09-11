@@ -8,6 +8,7 @@ tables are kept in sync by indexer.py's full-rebuild pass, not by triggers, sinc
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -61,3 +62,15 @@ def connect(repo_root: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(index_db_path(repo_root))
     conn.executescript(SCHEMA_SQL)
     return conn
+
+
+def fts_match_query(text: str) -> str | None:
+    """Build a safe FTS5 MATCH expression from free-form text, or None if there's nothing
+    to search for. Quotes every token as a literal phrase so stray FTS5 operator syntax in
+    the input (".", "-", "*", NEAR, AND...) is treated as plain text rather than a query
+    operator, and ORs them together so a multi-word query behaves like normal keyword search
+    (broader recall) instead of requiring every word to appear."""
+    tokens = re.findall(r"\w+", text)
+    if not tokens:
+        return None
+    return " OR ".join(f'"{t}"' for t in tokens)

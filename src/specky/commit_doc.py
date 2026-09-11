@@ -9,14 +9,13 @@ table for Phase 3's indexer to pick up.
 
 from __future__ import annotations
 
-import sqlite3
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from specky.ai_provider import ConfigError, Provider, load_provider_from_toml
-from specky.db import index_db_path, repo_root as _repo_root
+from specky.db import connect, repo_root as _repo_root
 
 POST_COMMIT_HOOK = """#!/bin/sh
 # Installed by `specky install-git-hook`. Records a short AI micro-doc for this commit.
@@ -24,6 +23,10 @@ command -v specky >/dev/null 2>&1 && specky commit-doc || true
 """
 
 HOOK_MARKER = "specky commit-doc"
+
+# Diffs are truncated to this many characters before going into a prompt — long enough for
+# context, short enough to keep prompt cost/latency predictable regardless of commit size.
+DIFF_TRUNCATE_CHARS = 8000
 
 
 @dataclass
@@ -51,7 +54,7 @@ def _commit_info(rev: str = "HEAD") -> Commit:
 def generate_micro_doc(commit: Commit, provider: Provider) -> str:
     prompt = (
         "Summarize what changed and why, in one short paragraph, for a commit history reader.\n\n"
-        f"Commit message:\n{commit.message}\n\nDiff (may be truncated):\n{commit.diff[:8000]}"
+        f"Commit message:\n{commit.message}\n\nDiff (may be truncated):\n{commit.diff[:DIFF_TRUNCATE_CHARS]}"
     )
     return provider.generate(prompt).strip()
 
@@ -70,13 +73,9 @@ def write_history_file(repo_root: Path, commit: Commit, summary: str) -> Path:
     return path
 
 
-def record_micro_doc(db_path: Path, commit: Commit, summary: str) -> None:
-    conn = sqlite3.connect(db_path)
+def record_micro_doc(repo_root: Path, commit: Commit, summary: str) -> None:
+    conn = connect(repo_root)
     try:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS micro_docs ("
-            "sha TEXT PRIMARY KEY, summary TEXT NOT NULL, created_at TEXT NOT NULL)"
-        )
         conn.execute(
             "INSERT OR REPLACE INTO micro_docs (sha, summary, created_at) VALUES (?, ?, ?)",
             (commit.sha, summary, datetime.now(timezone.utc).isoformat()),
@@ -104,7 +103,7 @@ def _sync_one(repo_root: Path, commit: Commit, provider: Provider) -> list[Path]
 
     summary = generate_micro_doc(commit, provider)
     history_path = write_history_file(repo_root, commit, summary)
-    record_micro_doc(index_db_path(repo_root), commit, summary)
+    record_micro_doc(repo_root, commit, summary)
     print(f"specky commit-doc: wrote {history_path}")
     written = [history_path]
 
