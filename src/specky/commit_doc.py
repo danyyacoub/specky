@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from specky.ai_provider import ConfigError, Provider, load_provider_from_toml
+from specky.db import index_db_path, repo_root as _repo_root
 
 POST_COMMIT_HOOK = """#!/bin/sh
 # Installed by `specky install-git-hook`. Records a short AI micro-doc for this commit.
@@ -32,19 +33,6 @@ class Commit:
     date: str
     message: str
     diff: str
-
-
-def _repo_root() -> Path:
-    result = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True
-    )
-    return Path(result.stdout.strip())
-
-
-def _index_db_path(repo_root: Path) -> Path:
-    db_dir = repo_root / ".specky"
-    db_dir.mkdir(exist_ok=True)
-    return db_dir / "index.db"
 
 
 def _commit_info(rev: str = "HEAD") -> Commit:
@@ -116,7 +104,7 @@ def _sync_one(repo_root: Path, commit: Commit, provider: Provider) -> list[Path]
 
     summary = generate_micro_doc(commit, provider)
     history_path = write_history_file(repo_root, commit, summary)
-    record_micro_doc(_index_db_path(repo_root), commit, summary)
+    record_micro_doc(index_db_path(repo_root), commit, summary)
     print(f"specky commit-doc: wrote {history_path}")
     written = [history_path]
 
