@@ -29,6 +29,9 @@ def main() -> None:
         "commit-doc", help="Record a micro-doc for HEAD (invoked by the post-commit git hook)"
     )
     subparsers.add_parser("install-git-hook", help="Install the post-commit micro-doc hook")
+    subparsers.add_parser(
+        "sync", help="Backfill micro-docs for any commit that doesn't have one yet (idempotent)"
+    )
 
     args = parser.parse_args()
 
@@ -63,6 +66,21 @@ def main() -> None:
             print(f"specky install-git-hook: {exc}", file=sys.stderr)
             sys.exit(1)
         print(f"Installed {hook_path}")
+        return
+
+    if args.command == "sync":
+        from specky.commit_doc import sync
+
+        try:
+            written = sync()
+        except Exception as exc:
+            print(f"specky sync: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not written:
+            print("specky sync: already up to date")
+        else:
+            for path in written:
+                print(f"specky sync: wrote {path}")
         return
 
     phase = _NOT_YET_IMPLEMENTED.get(args.command)

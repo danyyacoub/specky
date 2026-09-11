@@ -98,6 +98,32 @@ def record_micro_doc(db_path: Path, commit: Commit, summary: str) -> None:
         conn.close()
 
 
+def missing_shas(repo_root: Path) -> list[str]:
+    """Every commit sha in HEAD's history that doesn't yet have a specs/history/<sha8>.md."""
+    history_dir = repo_root / "specs" / "history"
+    done = {p.stem for p in history_dir.glob("*.md")} if history_dir.exists() else set()
+    all_shas = subprocess.run(
+        ["git", "rev-list", "--reverse", "HEAD"], capture_output=True, text=True, check=True
+    ).stdout.split()
+    return [sha for sha in all_shas if sha[:8] not in done]
+
+
+def sync() -> list[Path]:
+    """Generate a micro-doc for every commit that doesn't have one yet. Idempotent — safe to
+    re-run any time (e.g. after installing specky on a repo with existing history, or after a
+    commit the post-commit hook missed because `specky` wasn't on PATH yet)."""
+    repo_root = _repo_root()
+    provider = load_provider_from_toml(repo_root / "specky.toml")  # let ConfigError surface
+
+    written = []
+    for sha in missing_shas(repo_root):
+        commit = _commit_info(sha)
+        summary = generate_micro_doc(commit, provider)
+        written.append(write_history_file(repo_root, commit, summary))
+        record_micro_doc(_index_db_path(repo_root), commit, summary)
+    return written
+
+
 def main() -> None:
     repo_root = _repo_root()
     config_path = repo_root / "specky.toml"
