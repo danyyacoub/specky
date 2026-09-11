@@ -13,3 +13,16 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 | Doc | Purpose |
 |---|---|
 | _(none yet)_ | The `document-domain` skill itself is documented in [skills/document-domain/SKILL.md](../skills/document-domain/SKILL.md). |
+
+## Documentation
+
+| Doc | Purpose |
+|---|---|
+| [documentation/domain-documentation-workflow.md](documentation/domain-documentation-workflow.md) | Workflow for generating and maintaining functional documentation for code domains |
+| [documentation/auto-commit-docs.md](documentation/auto-commit-docs.md) | Automatically generate AI summaries of commits via git post-commit hook |
+
+## Cli
+
+| Doc | Purpose |
+|---|---|
+| [cli/sync.md](cli/sync.md) | Backfill micro-documentation for commits that don't yet have one (idempotent resync) |

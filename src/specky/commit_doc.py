@@ -108,19 +108,38 @@ def missing_shas(repo_root: Path) -> list[str]:
     return [sha for sha in all_shas if sha[:8] not in done]
 
 
+def _sync_one(repo_root: Path, commit: Commit, provider: Provider) -> list[Path]:
+    """History log entry (changelog trail) + feature/workflow reference doc, if this commit
+    affects one. The specs/<domain>/<topic>.md docs are the reference; specs/history/ is just
+    the supplementary per-commit trail alongside them."""
+    from specky.generator import sync_feature_doc
+
+    summary = generate_micro_doc(commit, provider)
+    history_path = write_history_file(repo_root, commit, summary)
+    record_micro_doc(_index_db_path(repo_root), commit, summary)
+    print(f"specky commit-doc: wrote {history_path}")
+    written = [history_path]
+
+    feature_doc_path = sync_feature_doc(repo_root, commit, provider)
+    if feature_doc_path:
+        print(f"specky commit-doc: updated {feature_doc_path}")
+        written.append(feature_doc_path)
+    return written
+
+
 def sync() -> list[Path]:
-    """Generate a micro-doc for every commit that doesn't have one yet. Idempotent — safe to
-    re-run any time (e.g. after installing specky on a repo with existing history, or after a
-    commit the post-commit hook missed because `specky` wasn't on PATH yet)."""
+    """Generate a micro-doc + feature/workflow doc update for every commit that doesn't have a
+    history entry yet. Idempotent for the history log — safe to re-run any time (e.g. after
+    installing specky on a repo with existing history, or after a commit the post-commit hook
+    missed because `specky` wasn't on PATH yet). Feature docs may be updated again on a re-sync
+    if a later run reclassifies the same commit differently; the history log is what gates which
+    commits get (re-)processed at all."""
     repo_root = _repo_root()
     provider = load_provider_from_toml(repo_root / "specky.toml")  # let ConfigError surface
 
     written = []
     for sha in missing_shas(repo_root):
-        commit = _commit_info(sha)
-        summary = generate_micro_doc(commit, provider)
-        written.append(write_history_file(repo_root, commit, summary))
-        record_micro_doc(_index_db_path(repo_root), commit, summary)
+        written += _sync_one(repo_root, _commit_info(sha), provider)
     return written
 
 
@@ -133,11 +152,7 @@ def main() -> None:
         print(f"specky commit-doc: skipping ({exc})")
         return
 
-    commit = _commit_info("HEAD")
-    summary = generate_micro_doc(commit, provider)
-    history_path = write_history_file(repo_root, commit, summary)
-    record_micro_doc(_index_db_path(repo_root), commit, summary)
-    print(f"specky commit-doc: wrote {history_path}")
+    _sync_one(repo_root, _commit_info("HEAD"), provider)
 
 
 def install_git_hook() -> Path:
