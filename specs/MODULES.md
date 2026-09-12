@@ -18,6 +18,7 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | [documentation/auto-doc-commit.md](documentation/auto-doc-commit.md) | Automatically commit generated history and feature docs as a follow-up commit instead of leaving them uncommitted |
 | [documentation/stale-doc-detection.md](documentation/stale-doc-detection.md) | Detect and flag documentation that lags behind the code it covers, with viewer badges and check warnings |
 | [documentation/doc-ownership.md](documentation/doc-ownership.md) | Add optional owner field to docs so readers know who to ask about them |
+| [documentation/acceptance-test-scaffolding.md](documentation/acceptance-test-scaffolding.md) | Generate pytest test scaffolds from Given/When/Then acceptance test tables in documentation |
 
 ## Cli
 
