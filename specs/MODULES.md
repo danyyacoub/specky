@@ -25,6 +25,7 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | [cli/check.md](cli/check.md) | Fail CI when changed code has a doc describing it that the range didn't update |
 | [cli/doctor.md](cli/doctor.md) | Diagnose a specky installation — toolchain, config, hook, index, site, doc backlog |
 | [cli/sync.md](cli/sync.md) | Backfill micro-documentation for commits that don't yet have one (idempotent resync) |
+| [cli/cost.md](cli/cost.md) | Report provider call statistics, cache hit rate, and character usage |
 
 ## Docs
 
