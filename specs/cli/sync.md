@@ -1,6 +1,6 @@
 ---
 type: workflow
-tags: [documentation, sync]
+tags: [sync, documentation]
 ---
 
 # Cli — Sync
