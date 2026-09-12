@@ -13,9 +13,9 @@ Every generated documentation file carries a `## Acceptance Tests` table listing
 
 1. **Query the index** — `specky tests` reads docs from the `.specky/index.db` database (the same index used for search), skipping `specs/history/` to avoid duplicating tests across historical commits.
 
-2. **Parse tables** — For each doc, find the `## Acceptance Tests` section and extract its tables. Tables with exactly three columns are parsed by position (Given/When/Then); tables with different headers are matched by column name instead, so the order doesn't matter.
+2. **Parse tables** — For each doc, find the `## Acceptance Tests` section and extract its tables. Columns are matched by header text first, so a table's column order doesn't matter and the assertion column can be called `Then (expected)`. A table whose headers aren't recognisable at all is read by position only when it has exactly three columns, and otherwise skipped rather than guessed at.
 
-3. **Name scenarios** — Each data row (that isn't a placeholder like "n/a", "–", or "TBD") becomes one test. The test name is derived from the doc path: `specs/domains/feature.md` becomes `test_domains_feature.py`.
+3. **Name scenarios** — Each data row (that isn't a placeholder like "n/a", "–", or "TBD") becomes one test, named from its `Scenario` column when the table has one and from its Given/When text when it doesn't. The file name comes from the doc path: `specs/domains/feature.md` becomes `test_domains_feature.py`.
 
 4. **Write test files** — Generate pytest scaffolds to `tests/spec/test_<domain>_<topic>.py`. Each test is decorated with `@pytest.mark.skip` and has the scenario as its docstring. No assertion — you fill that in.
 
