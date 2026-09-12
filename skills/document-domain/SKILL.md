@@ -85,8 +85,10 @@ GLOSSARY.md so a scenario is unambiguous.}
 - `related` (optional): add `related: [domain/topic]` only when this doc is genuinely tied to another
   one that shares no tag — e.g. a workflow that calls into a feature from a different domain. Leave it
   out otherwise; shared tags already cover most links and show up in `specky graph`.
-- If updating an existing doc, keep its `related` list as-is unless it's actually wrong now — it's
-  hand-authored, not something to regenerate from scratch.
+- `owner` (optional): never write one. It's a hand-written "who to ask" line (a name, team or
+  channel) that the viewer surfaces, and you have no way to know who that is.
+- If updating an existing doc, keep its `related` list and `owner` as-is unless they're actually
+  wrong now — both are hand-authored, not something to regenerate from scratch.
 
 **Acceptance-tests rules**:
 - **Always include an Acceptance Tests section.** If the domain is purely descriptive with no testable behaviour, say so explicitly in that section rather than omitting it.
