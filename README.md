@@ -164,6 +164,19 @@ No API key is needed in CI: `index` and `check` are both offline. Put the gate's
 `pyproject.toml` (see [`[check]`](#check--the-ci-gate)), because `specky.toml` is gitignored and so
 doesn't exist there.
 
+Every doc carries an `## Acceptance Tests` table of Given/When/Then rows. Turn those into a test
+file to fill in:
+
+```bash
+specky tests            # writes tests/spec/test_<domain>_<topic>.py, one test per row
+specky tests --force    # regenerate files you haven't edited yet
+```
+
+Each row becomes a `@pytest.mark.skip`ped function with the scenario as its docstring and no
+assertion — specky knows what the behaviour is, not how to prove it in your code. Drop the skip
+marker as you implement each one; existing files are never overwritten without `--force`, so the
+work you put in stays. Also offline, and `specs/history/` is left out.
+
 ## Diagnose
 
 ```bash

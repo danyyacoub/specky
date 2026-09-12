@@ -32,6 +32,10 @@ uv run specky check              # CI gate: exit 1 if changed code has a doc des
 uv run specky cost               # provider calls, cache hit rate, prompt/response chars per
                                  # command+model (--since DATE, --json). Every call is memoized in
                                  # the index unless `[ai] cache = false`; --clear-cache empties it
+uv run specky tests              # scaffold tests/spec/test_<domain>_<topic>.py from each doc's
+                                 # `## Acceptance Tests` table: one skipped, assertion-free test per
+                                 # row. Existing files are kept unless --force. Gitignored here —
+                                 # this repo's own scaffolds would duplicate tests/
 uv run specky index              # rebuild .specky/index.db (FTS5) from specs/ + git log
 uv run specky search "<query>"   # keyword search over the index
 uv run specky render-html        # write static site to .specky/site/index.html

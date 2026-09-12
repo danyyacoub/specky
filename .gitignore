@@ -10,3 +10,6 @@ specky.toml
 .DS_Store
 .serena/
 node_modules/
+# `specky tests` output. Users commit theirs; here it's just this repo dogfooding itself, and 126
+# skipped scaffolds duplicating tests/ would drown out scripts/test.sh.
+tests/spec/

@@ -98,6 +98,14 @@ def _cost(args: argparse.Namespace) -> None:
     print(json.dumps(report.as_dict(), indent=2) if args.json else "\n".join(report_lines(report)))
 
 
+def _tests(args: argparse.Namespace) -> None:
+    from specky.db import repo_root
+    from specky.testgen import emit, report_lines
+
+    for line in report_lines(emit(repo_root(), force=args.force)):
+        print(f"specky tests: {line}")
+
+
 def _setup_diagrams(args: argparse.Namespace) -> None:
     from specky.mermaid_tool import setup
 
@@ -240,6 +248,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--clear-cache", action="store_true", help="Drop every memoized response, keep the log"
     )
     cost_cmd.add_argument("--json", action="store_true", help="Machine-readable output")
+    tests_cmd = command(
+        "tests",
+        "Write pytest scaffolds from the Given/When/Then tables in specs/",
+        _tests,
+    )
+    tests_cmd.add_argument(
+        "--emit",
+        default="pytest",
+        choices=["pytest"],
+        help="Output format (only pytest so far, and it's the default)",
+    )
+    tests_cmd.add_argument(
+        "--force", action="store_true", help="Overwrite scaffolds that already exist"
+    )
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")
     command("render-html", "Render the static HTML doc site", _render_html)
