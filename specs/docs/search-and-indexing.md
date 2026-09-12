@@ -1,6 +1,6 @@
 ---
-type: workflow
-tags: [search, documentation]
+type: feature
+tags: [search, sync]
 ---
 
 # Docs — Search And Indexing
@@ -15,7 +15,7 @@ Search-and-indexing builds a searchable database of all specs and git history. U
 2. **Search from terminal** — `specky search "<query>"` finds matching docs and prints results with titles and text snippets.
 3. **Generate static site** — `specky render-html` reads the index and writes a complete website to `.specky/site/index.html` with sidebar navigation grouped by topic, individual doc pages, and a search box.
 4. **Search works offline** — The search index is embedded directly into each page (not fetched from a server), so users can double-click the HTML file or open it with `file://` URL and search without any network connection.
-5. **Reading and writing can overlap** — The index is a write-ahead-log database, so the post-commit hook can record a new commit's doc while `specky serve` is answering a question and `specky index` is rebuilding, without any of them failing on a locked database. A reader keeps the snapshot it started with until its query finishes, so results are always internally consistent even mid-rebuild.
+5. **Reading and writing can overlap** — The index uses write-ahead-log (WAL) mode, so the post-commit hook can record a new commit's doc while `specky serve` is answering a question and `specky index` is rebuilding, all without database locks or failures. A reader keeps the snapshot it started with until its query finishes, so results are always consistent even mid-rebuild.
 
 ```mermaid
 flowchart TD
