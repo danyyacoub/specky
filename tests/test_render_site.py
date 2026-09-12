@@ -118,7 +118,14 @@ def test_reading_the_site_needs_no_server(site):
 
     app_js = (site / "assets" / "app.js").read_text()
     assert not re.search(r"^\s*(?:import|export)\s", app_js, re.MULTILINE)
-    assert re.findall(r"fetch\(([^,]*)", app_js) == ["`${SPECKY_API}/chat`"]
+    # Every request goes through speckyFetch, so `fetch(` itself appears only in that one helper —
+    # two calls, the same-origin attempt and the companion-port fallback.
+    assert re.findall(r"[^y]fetch\((`[^`]*`)", app_js) == [
+        "`${speckyApiBase}${path}`",
+        "`${speckyApiBase}${path}`",
+    ]
+    assert app_js.count("speckyFetch('/chat'") == 1
+    assert app_js.count("speckyFetch(`/search") == 1
     # ...and on file:// that endpoint resolves to the companion server's own port, since a
     # file:// page has no origin for a relative URL to hang off.
     assert "`http://127.0.0.1:${SPECKY_CHAT_PORT}`" in app_js
@@ -176,3 +183,118 @@ def test_docs_sharing_a_domain_and_a_stem_each_get_their_own_page(tmp_repo, writ
     run_index(tmp_repo)
     site = render_site(tmp_repo).parent
     assert {"x-a-same.html", "x-b-same.html"} <= {p.name for p in site.glob("*.html")}
+
+
+# --- what the search box can find offline ------------------------------------------------
+# `site-data.js` is loaded eagerly by every page, with no gzip and no lazy loading on file://,
+# so what these pin is the *budget*: how much doc text ships, and what happens on a repo far
+# bigger than this one (a repo with 3,000 commits has ~3,000 specs/history/ docs).
+
+
+def _search_index(site: Path) -> list[dict]:
+    data = (site / "assets" / "site-data.js").read_text()
+    return json.loads(re.search(r"const SPECKY_INDEX = (\[.*?\]);\n", data, re.DOTALL).group(1))
+
+
+def test_a_phrase_in_a_docs_last_paragraph_is_searchable(site, tmp_repo, write_doc):
+    """The bug this closes: only a 160-char excerpt shipped, so nothing past the opening two
+    sentences was findable offline even though FTS5 had the whole doc."""
+    write_doc("billing/long.md", "# Long\n\n" + ("Filler prose. " * 200) + "\nA hyperbolic tangent.\n")
+    run_index(tmp_repo)
+    entries = _search_index(render_site(tmp_repo).parent)
+
+    long_doc = next(e for e in entries if e["title"] == "Long")
+    assert "hyperbolic tangent" in long_doc["body"]
+    assert "hyperbolic" not in long_doc["excerpt"]  # display text is still short
+
+
+def test_the_body_is_lowercased_stripped_plain_text(site):
+    """Lowercased at build time so the client isn't lowercasing every doc per keystroke, and
+    markdown syntax removed so a search for a word isn't defeated by a `**` next to it."""
+    entry = next(e for e in _search_index(site) if e["title"] == "Billing — Refund Flow")
+    assert "a refund uses the index." in entry["body"]
+    assert entry["body"] == entry["body"].lower()
+    assert "|" not in entry["body"] and "#" not in entry["body"]
+
+
+def test_an_identifier_keeps_its_underscores_in_the_body(tmp_repo, write_doc):
+    """Regression: stripping `_` as markdown emphasis turned `busy_timeout` into `busytimeout`, so
+    no snake_case identifier — the thing a reader of code docs actually types — matched offline,
+    while the served `/search` found it. Silent, and it defeated the whole point of shipping bodies.
+    """
+    write_doc("db/locking.md", "# Locking\n\nWriters wait via `busy_timeout=5000` instead.\n")
+    run_index(tmp_repo)
+    entry = next(e for e in _search_index(render_site(tmp_repo).parent) if e["title"] == "Locking")
+    assert "busy_timeout" in entry["body"]
+
+
+def test_each_entry_carries_the_doc_path_the_served_search_returns(site):
+    """`GET /search` answers with `specs/...` paths; the client maps them back through this."""
+    paths = {e["path"] for e in _search_index(site)}
+    assert "specs/billing/refund-flow.md" in paths
+
+
+@pytest.mark.parametrize(
+    "doc_count, regime",
+    [
+        (10, "whole docs"),  # tiny repo: budget/count is way over the per-doc ceiling
+        (500, "adaptive"),  # cap shrinks to fit the total budget
+        (3_000, "dropped"),  # past the floor: no bodies ship at all
+    ],
+)
+def test_the_search_payload_stays_bounded_as_a_repo_grows(doc_count, regime):
+    """specky is installed into other people's repos. This is the sizing check, so it's
+    parametrised over the three regimes rather than over this repo's own doc count."""
+    from specky.html_render import (
+        SEARCH_BODY_MAX_CHARS,
+        SEARCH_BODY_MIN_CHARS,
+        SEARCH_BODY_TOTAL_CHARS,
+        search_body_cap,
+    )
+
+    cap = search_body_cap(doc_count)
+    if regime == "dropped":
+        assert cap is None
+        return
+    assert SEARCH_BODY_MIN_CHARS <= cap <= SEARCH_BODY_MAX_CHARS
+    assert doc_count * cap <= max(SEARCH_BODY_TOTAL_CHARS, doc_count * SEARCH_BODY_MIN_CHARS)
+    if regime == "whole docs":
+        assert cap == SEARCH_BODY_MAX_CHARS
+
+
+def test_a_repo_too_large_for_bodies_ships_none_and_says_so(tmp_repo, write_doc, capsys):
+    """3,000 history docs is one 3,000-commit repo, not an extreme. Shipping ~400 chars each
+    would be a multi-megabyte blocking script on every page navigation, so the viewer degrades
+    to excerpt-only matching and the render says where full-text search lives instead."""
+    from specky.html_render import SEARCH_BODY_MIN_CHARS, SEARCH_BODY_TOTAL_CHARS
+
+    doc_count = SEARCH_BODY_TOTAL_CHARS // SEARCH_BODY_MIN_CHARS + 1
+    history = tmp_repo / "specs" / "history"
+    history.mkdir(parents=True, exist_ok=True)
+    for i in range(doc_count):
+        (history / f"{i:08x}.md").write_text(f"# Commit {i:08x}\n\nTouched something. " * 20)
+    run_index(tmp_repo)
+    site = render_site(tmp_repo).parent
+
+    entries = _search_index(site)
+    assert len(entries) == doc_count
+    assert all("body" not in e for e in entries)
+    assert (site / "assets" / "site-data.js").stat().st_size < 1_500_000
+    assert "specky serve" in capsys.readouterr().out
+
+
+def test_the_api_base_starts_same_origin_on_a_served_page(site):
+    """`serve --port N` serves the page and the API from that same port, which the baked-in
+    SPECKY_CHAT_PORT can't know — so a served page tries its own origin first and only falls back
+    to the chat port when a route comes back 404/405/501 (i.e. it's some other web server)."""
+    app_js = (site / "assets" / "app.js").read_text()
+    assert "let speckyApiBase = SPECKY_SERVED ? '' : SPECKY_API_FALLBACK;" in app_js
+    assert "SPECKY_NOT_THE_API = new Set([404, 405, 501])" in app_js
+
+
+def test_a_matched_body_shows_its_surrounding_context_in_the_result_row(site):
+    app_js = (site / "assets" / "app.js").read_text()
+    assert "SEARCH_CONTEXT_CHARS = 60" in app_js
+    assert "hit-context" in app_js
+    # Escape first, then promote FTS5's markers — the other order would let doc text inject HTML.
+    assert app_js.index("escapeHtml(snippet)") < app_js.index("'<mark>'")

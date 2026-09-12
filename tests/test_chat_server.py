@@ -402,3 +402,80 @@ def test_the_site_needs_no_token_even_when_the_api_does(tmp_repo, rendered_site)
     files would make the served viewer unopenable."""
     with _running(tmp_repo, ServeConfig(token="s3cret")) as port:
         assert _request(port, "GET", "/assets/site.css")[0] == 200
+
+
+# --- GET /search: the viewer's search box against the real index ---------------------------
+
+
+def test_search_returns_ranked_fts_hits(indexed_repo):
+    """The viewer ships a bounded slice of each doc; this endpoint has the whole index, which is
+    the only search that stays exact as a repo grows."""
+    with _running(indexed_repo) as port:
+        status, _, raw = _request(port, "GET", "/search?q=refund")
+    results = json.loads(raw)["results"]
+
+    assert status == 200
+    assert {r["path"] for r in results} == {
+        "specs/billing/refund-flow.md",
+        "specs/search/refund-report.md",
+    }
+    assert all({"path", "domain", "title", "snippet"} == set(r) for r in results)
+
+
+def test_search_finds_a_phrase_the_shipped_excerpt_would_miss(tmp_repo, write_doc):
+    """The whole point: an excerpt stops after 160 chars, the index doesn't."""
+    write_doc(
+        "billing/refund-flow.md",
+        "# Refunds\n\n" + ("Filler prose. " * 60) + "\nThe cutoff is a hyperbolic tangent.\n",
+    )
+    run_index(tmp_repo)
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(port, "GET", "/search?q=hyperbolic")
+    assert status == 200
+    assert [r["path"] for r in json.loads(raw)["results"]] == ["specs/billing/refund-flow.md"]
+
+
+def test_search_without_a_query_is_a_400(indexed_repo):
+    with _running(indexed_repo) as port:
+        blank = _request(port, "GET", "/search?q=%20%20")
+        missing = _request(port, "GET", "/search")
+    assert blank[0] == missing[0] == 400
+    assert "q is required" in json.loads(blank[2])["error"]
+
+
+def test_search_syntax_that_would_break_fts5_is_answered_not_crashed(indexed_repo):
+    """`fts_match_query` is what keeps a user's punctuation out of FTS5's grammar."""
+    with _running(indexed_repo) as port:
+        status, _, raw = _request(port, "GET", "/search?q=%22refund")  # a lone double quote
+    assert status == 200
+    assert isinstance(json.loads(raw)["results"], list)
+
+
+def test_search_caps_the_row_count_a_caller_can_ask_for(indexed_repo, monkeypatch):
+    asked = {}
+
+    def record(root, query, limit=10):
+        asked["limit"] = limit
+        return []
+
+    monkeypatch.setattr("specky.indexer.search", record)
+    with _running(indexed_repo) as port:
+        _request(port, "GET", "/search?q=refund&limit=100000")
+    assert asked["limit"] == chat_server.SEARCH_LIMIT_MAX
+
+
+def test_a_junk_limit_falls_back_to_the_default(indexed_repo):
+    with _running(indexed_repo) as port:
+        assert _request(port, "GET", "/search?q=refund&limit=lots")[0] == 200
+
+
+def test_search_obeys_the_origin_and_token_policy(indexed_repo):
+    """It reads doc text, so it's API surface, not static files — same gate as /chat."""
+    config = ServeConfig(allow_origins=("https://docs.example",), token="s3cret")
+    with _running(indexed_repo, config) as port:
+        wrong_origin = _request(port, "GET", "/search?q=refund", origin="https://evil.example")
+        no_token = _request(port, "GET", "/search?q=refund", origin="https://docs.example")
+        allowed = _request(
+            port, "GET", "/search?q=refund", origin="https://docs.example", token="s3cret"
+        )
+    assert (wrong_origin[0], no_token[0], allowed[0]) == (403, 403, 200)

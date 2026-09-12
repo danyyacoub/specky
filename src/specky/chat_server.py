@@ -11,6 +11,11 @@ The same process also serves `.specky/site/`, so `http://<host>:<port>/` is a wo
 viewer whose chat calls are same-origin. That's the path a deployed site takes; a
 double-clicked `file://` page still works and reaches `/chat` cross-origin.
 
+`GET /search?q=` answers the viewer's search box out of that same index. It exists because
+the page can only ship a bounded slice of each doc (see `search_body_cap` in
+html_render.py), and that bound tightens as a repo grows — a served page gets exact
+whole-body search instead, with nothing downloaded up front.
+
 Access control lives in `[serve]` in specky.toml and defaults to open
 (`allow_origins = ["*"]`, no token) so a site served from another port or host keeps
 working without configuration. Open means what it says: any page in a reader's browser can
@@ -30,7 +35,7 @@ import tomllib
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from specky.ai_provider import load_provider_from_toml
 from specky.db import connect, fts_match_query
@@ -42,6 +47,10 @@ DEFAULT_HOST = "127.0.0.1"
 # that header triggers a CORS preflight the widget would have to survive anyway, and this
 # is a local shared secret, not a bearer credential for a third party.
 TOKEN_HEADER = "X-Specky-Token"
+
+# Ceiling on `GET /search?limit=`: the viewer asks for 15, and a caller asking for 100k rows
+# would be asking this process to serialize the whole index in one response.
+SEARCH_LIMIT_MAX = 100
 
 _SYSTEM_PROMPT = (
     "You are a documentation assistant for this codebase. Answer the user's question "
@@ -269,11 +278,33 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             except Exception as exc:
                 self._json(400, {"error": str(exc)})
 
+        def _search(self, query: str, limit: int) -> None:
+            """The viewer's search box, answered from the FTS5 index instead of the payload the
+            page shipped: every doc, whole bodies, ranked — and nothing downloaded up front. See
+            `search_body_cap` in html_render.py for what the offline fallback can and can't do."""
+            from specky.indexer import search as search_index
+
+            if not query:
+                self._json(400, {"error": "q is required"})
+                return
+            self._json(200, {"results": search_index(repo_root, query, limit=limit)})
+
         def do_GET(self) -> None:
             """Serve `.specky/site/`, so the viewer and its chat share an origin."""
             if not self._origin_ok():
                 return
-            rel = unquote(urlparse(self.path).path).lstrip("/") or "index.html"
+            route = urlparse(self.path)
+            if route.path == "/search":
+                if not self._api_allowed():
+                    return
+                params = parse_qs(route.query)
+                try:
+                    limit = min(int(params.get("limit", ["10"])[0]), SEARCH_LIMIT_MAX)
+                except ValueError:
+                    limit = 10
+                self._search(params.get("q", [""])[0].strip(), limit)
+                return
+            rel = unquote(route.path).lstrip("/") or "index.html"
             if rel.endswith("/"):
                 rel += "index.html"
             target = (site_dir / rel).resolve()

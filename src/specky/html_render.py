@@ -279,6 +279,14 @@ a { color: inherit; }
 #search-results .hit { display: block; padding: 8px 12px; text-decoration: none; color: var(--text-primary); }
 #search-results .hit:hover, #search-results .hit:focus-visible { background: var(--surface-tertiary); }
 #search-results .hit-domain { color: var(--text-tertiary); font-size: 0.6875rem; }
+#search-results .hit-context {
+  color: var(--text-secondary); font-size: 0.6875rem; margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#search-results .hit-context mark {
+  background: var(--accent-soft); color: var(--text-primary); border-radius: 2px; padding: 0 1px;
+}
+#search-results { max-height: 60vh; overflow-y: auto; }
 
 .body-row { display: flex; height: 100vh; }
 .sidebar {
@@ -475,9 +483,50 @@ a { color: inherit; }
 .chat-html-frame { display: block; width: 100%; border: none; background: var(--surface); }
 """
 
+# Finding the companion server from wherever this page was opened. `specky serve` serves this page
+# *and* the API, so same-origin is the right first guess for any http(s) page — including one on
+# `serve --port N`, a port SPECKY_CHAT_PORT (baked in at render time) can't know about. If that
+# origin turns out to be a plain web server that doesn't know these routes, one 404/405 switches to
+# the chat port on the same host, and that choice sticks for the rest of the page's life. A file://
+# page has no origin to hang a relative URL off, so it starts at loopback.
+API_JS = """
+const SPECKY_SERVED = location.protocol.startsWith('http');
+const SPECKY_API_FALLBACK = SPECKY_SERVED
+  ? `${location.protocol}//${location.hostname}:${SPECKY_CHAT_PORT}`
+  : `http://127.0.0.1:${SPECKY_CHAT_PORT}`;
+// Statuses a static file server gives an API route it has never heard of.
+const SPECKY_NOT_THE_API = new Set([404, 405, 501]);
+let speckyApiBase = SPECKY_SERVED ? '' : SPECKY_API_FALLBACK;
+let speckyApiSettled = !SPECKY_SERVED;
+
+async function speckyFetch(path, init) {
+  try {
+    const res = await fetch(`${speckyApiBase}${path}`, init);
+    if (speckyApiSettled || !SPECKY_NOT_THE_API.has(res.status)) {
+      speckyApiSettled = true;
+      return res;
+    }
+  } catch (err) {
+    if (speckyApiSettled) throw err;
+  }
+  speckyApiBase = SPECKY_API_FALLBACK;
+  speckyApiSettled = true;
+  return fetch(`${speckyApiBase}${path}`, init);
+}
+"""
+
+# Search runs twice per keystroke, on purpose. The in-page index answers instantly and works with
+# no server (`d.body` is the whole doc up to the budget in `search_body_cap`, or absent on a repo
+# too large for that). Then, if a `specky serve` is reachable, the same query goes to its /search
+# endpoint, which matches the *complete* FTS5 index and replaces the local guess. Offline is
+# best-effort; served is exact.
 SEARCH_JS = """
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
+const docsByPath = new Map(SPECKY_INDEX.map((d) => [d.path, d]));
+const SEARCH_CONTEXT_CHARS = 60;
+const SEARCH_HIT_LIMIT = 15;
+let searchSeq = 0;
 
 function docMatchesFilters(tags, docType) {
   const tagOk = activeTags.size === 0 || tags.some((t) => activeTags.has(t));
@@ -485,21 +534,84 @@ function docMatchesFilters(tags, docType) {
   return tagOk && typeOk;
 }
 
-searchInput?.addEventListener('input', () => {
-  const q = searchInput.value.trim().toLowerCase();
+function escapeHtml(text) {
+  return text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+// ±60 chars around the first match, so a hit deep inside a long doc shows *why* it matched.
+function contextAround(body, q) {
+  const at = body.indexOf(q);
+  if (at < 0) return '';
+  const start = Math.max(0, at - SEARCH_CONTEXT_CHARS);
+  const end = Math.min(body.length, at + q.length + SEARCH_CONTEXT_CHARS);
+  return (start > 0 ? '…' : '')
+    + escapeHtml(body.slice(start, at))
+    + `<mark>${escapeHtml(body.slice(at, at + q.length))}</mark>`
+    + escapeHtml(body.slice(at + q.length, end))
+    + (end < body.length ? '…' : '');
+}
+
+// FTS5 snippets arrive with the '>>'/'<<' markers indexer.search asks for; escape first, then
+// promote the (now escaped) markers to <mark> — never the other way round.
+function markSnippet(snippet) {
+  return escapeHtml(snippet).replaceAll('&gt;&gt;', '<mark>').replaceAll('&lt;&lt;', '</mark>');
+}
+
+function showHits(hits) {
   searchResults.innerHTML = '';
-  if (!q) return;
-  const hits = SPECKY_INDEX.filter((d) =>
-    docMatchesFilters(d.tags, d.doc_type) &&
-    (d.title.toLowerCase().includes(q) || d.domain.toLowerCase().includes(q) || d.excerpt.toLowerCase().includes(q))
-  ).slice(0, 15);
   for (const hit of hits) {
     const a = document.createElement('a');
     a.className = 'hit';
-    a.href = hit.html_path;
-    a.innerHTML = `${hit.title}<div class="hit-domain">${hit.domain}</div>`;
+    a.href = hit.doc.html_path;
+    a.innerHTML = `${escapeHtml(hit.doc.title)}<div class="hit-domain">${escapeHtml(hit.doc.domain)}</div>`
+      + (hit.context ? `<div class="hit-context">${hit.context}</div>` : '');
     searchResults.appendChild(a);
   }
+}
+
+function localHits(q) {
+  const hits = [];
+  for (const d of SPECKY_INDEX) {
+    if (!docMatchesFilters(d.tags, d.doc_type)) continue;
+    const inBody = d.body ? d.body.includes(q) : false;
+    if (!inBody && !d.title.toLowerCase().includes(q) && !d.domain.toLowerCase().includes(q)
+        && !d.excerpt.toLowerCase().includes(q)) continue;
+    hits.push({ doc: d, context: inBody ? contextAround(d.body, q) : '' });
+    if (hits.length === SEARCH_HIT_LIMIT) break;
+  }
+  return hits;
+}
+
+// Tried from file:// too, not just when served: if `specky serve` is running, its index is the
+// better answer, and if it isn't, the fetch simply fails and the local hits already on screen stay.
+async function servedHits(q) {
+  const res = await speckyFetch(`/search?q=${encodeURIComponent(q)}&limit=${SEARCH_HIT_LIMIT}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const hits = [];
+  for (const row of data.results || []) {
+    const doc = docsByPath.get(row.path);
+    if (!doc || !docMatchesFilters(doc.tags, doc.doc_type)) continue;
+    hits.push({ doc, context: markSnippet(row.snippet || '') });
+  }
+  return hits;
+}
+
+searchInput?.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  const seq = ++searchSeq;
+  if (!q) {
+    searchResults.innerHTML = '';
+    return;
+  }
+  showHits(localHits(q));
+  servedHits(q)
+    .then((hits) => {
+      // Ignore a response the user has already typed past, and an empty served result set that
+      // would blank out usable local hits.
+      if (hits && hits.length && seq === searchSeq) showHits(hits);
+    })
+    .catch(() => { /* no server reachable — the local hits stand */ });
 });
 """
 
@@ -569,16 +681,6 @@ if (currentLink) {
 """
 
 CHAT_JS = """
-// Where the companion server is, from wherever this page was opened:
-//  - served by `specky serve` itself (same port) -> '' , i.e. same-origin /chat, no CORS at all
-//  - served by some other web server -> same host, chat's port (cross-origin, needs [serve] to allow it)
-//  - double-clicked file:// page -> loopback, chat's port (the original, offline case)
-const SPECKY_API = location.protocol.startsWith('http')
-  ? (location.port === String(SPECKY_CHAT_PORT)
-      ? ''
-      : `${location.protocol}//${location.hostname}:${SPECKY_CHAT_PORT}`)
-  : `http://127.0.0.1:${SPECKY_CHAT_PORT}`;
-
 const chatToggle = document.getElementById('chat-toggle');
 const chatPanel = document.getElementById('chat-panel');
 const chatLog = document.getElementById('chat-log');
@@ -634,7 +736,7 @@ chatForm?.addEventListener('submit', async (event) => {
   chatInput.value = '';
   chatStatus.textContent = 'Thinking…';
   try {
-    const res = await fetch(`${SPECKY_API}/chat`, {
+    const res = await speckyFetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question }),
@@ -771,11 +873,11 @@ for (const el of document.querySelectorAll('[data-term]')) {
 }
 """
 
-# One file, in this order, deliberately: SEARCH_JS calls docMatchesFilters() over
-# `activeTags`/`activeType`, which FILTER_JS declares — same script scope, so the top-level
-# `const`s resolve by the time an event handler runs. Splitting these into separate <script>
-# tags would break that.
-APP_JS_BLOCKS = (SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, MENTION_JS, GLOSSARY_JS)
+# One file, in this order, deliberately: SEARCH_JS reads `activeTags`/`activeType` (declared by
+# FILTER_JS) and calls `speckyFetch` (API_JS), which CHAT_JS also calls — same script scope, so
+# those top-level declarations resolve by the time an event handler runs. Splitting these into
+# separate <script> tags would break that.
+APP_JS_BLOCKS = (API_JS, SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, MENTION_JS, GLOSSARY_JS)
 
 _DOMAIN_ORDER_FIRST = "root"
 _DOMAIN_ORDER_LAST = "history"
@@ -833,11 +935,55 @@ def _slug(doc_path: str) -> str:
 
 
 def _excerpt(content: str, length: int = 160) -> str:
-    text = re.sub(r"^#.*$", "", content, count=1, flags=re.MULTILINE)
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-    text = re.sub(r"[#*`_>|]", "", text)
-    text = " ".join(text.split())
+    text = _plain_text(content, drop_first_heading=True)
     return f"{text[:length]}…" if len(text) > length else text
+
+
+def _plain_text(content: str, drop_first_heading: bool = False) -> str:
+    """Markdown reduced to the words a reader would search for: no syntax, no runs of space."""
+    text = (
+        re.sub(r"^#.*$", "", content, count=1, flags=re.MULTILINE)
+        if drop_first_heading
+        else content
+    )
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # `_` survives, unlike the other markdown punctuation: it's emphasis syntax perhaps once per
+    # doc, and part of an identifier constantly (`busy_timeout`, `run_index`) — and an identifier
+    # is what a reader of these docs actually types into the search box.
+    text = re.sub(r"[#*`>|]", "", text)
+    return " ".join(text.split())
+
+
+# --- the in-page search payload ---------------------------------------------------------
+# `assets/site-data.js` is a plain <script src> that *every* page loads eagerly, so its size is
+# paid on each navigation, and on file:// there is no gzip and no lazy loading to hide it. What
+# blows this up is doc *count*, not doc size: a repo with 3,000 commits has ~3,000 specs/history/
+# docs before it has a single feature doc. So the payload gets a total budget and the per-doc cap
+# adapts to it, instead of a fixed per-doc cap that bounds nothing.
+SEARCH_BODY_TOTAL_CHARS = 1_000_000
+SEARCH_BODY_MAX_CHARS = 8_000
+SEARCH_BODY_MIN_CHARS = 400
+
+
+def search_body_cap(doc_count: int) -> int | None:
+    """Chars of body text to ship per doc, or None to ship none at all.
+
+    Small repo → whole docs. ~500 docs → ~2 KB each. Past the point where even the floor
+    wouldn't fit the budget (~2,500 docs), None: the viewer falls back to excerpt-only matching,
+    which is what it did before bodies existed. A 4 MB blocking script on every page navigation
+    would be a worse answer than a weaker offline search, and a repo that big is exactly the one
+    that should be searching through `specky serve` against the FTS5 index anyway.
+    """
+    if doc_count <= 0 or doc_count * SEARCH_BODY_MIN_CHARS > SEARCH_BODY_TOTAL_CHARS:
+        return None
+    return min(SEARCH_BODY_MAX_CHARS, max(SEARCH_BODY_MIN_CHARS, SEARCH_BODY_TOTAL_CHARS // doc_count))
+
+
+def _search_body(content: str, cap: int) -> str:
+    """Match-only text: lowercased at build time so the client isn't lowercasing every doc on
+    every keystroke, and truncated to `cap` — the tail of a long doc is the part that stops being
+    findable offline, which is the trade the budget above buys."""
+    return _plain_text(content)[:cap].lower()
 
 
 # --- tables ---------------------------------------------------------------------------
@@ -1181,6 +1327,8 @@ def render_site(repo_root: Path) -> Path:
     glossary = load_glossary(repo_root)
     hover_map = {term.lower(): definition for term, definition in glossary.items()}
 
+    body_cap = search_body_cap(len(rows))
+
     domains: dict[str, list[dict]] = {}
     search_entries = []
     docs = []
@@ -1210,23 +1358,33 @@ def render_site(repo_root: Path) -> Path:
         )
         docs.append(doc)
         path_lookup[path] = {"title": title, "html_name": html_name}
-        search_entries.append(
-            {
-                "title": title,
-                "domain": domain,
-                "html_path": html_name,
-                "excerpt": _excerpt(content),
-                "tags": tags,
-                "doc_type": doc_type,
-                "slug": Path(path).stem,
-            }
-        )
+        entry = {
+            "title": title,
+            "domain": domain,
+            # `path` is what the served /search endpoint returns its hits as, so the client can
+            # map an FTS5 result back to the page it rendered.
+            "path": path,
+            "html_path": html_name,
+            "excerpt": _excerpt(content),
+            "tags": tags,
+            "doc_type": doc_type,
+            "slug": Path(path).stem,
+        }
+        if body_cap is not None:
+            entry["body"] = _search_body(content, body_cap)
+        search_entries.append(entry)
 
     feature_count = sum(1 for d in docs if d["doc_type"] == "feature")
     workflow_count = sum(1 for d in docs if d["doc_type"] == "workflow")
     tag_chips = [{"name": t, "cls": _tag_class(t)} for t in sorted(all_tags)]
 
     _write_assets(site_dir, search_entries, hover_map)
+    if body_cap is None:
+        print(
+            f"specky render-html: {len(docs)} docs is past the in-page search budget, so the "
+            "viewer's own search box matches titles and excerpts only. Run `specky serve` and "
+            "browse over http:// for full-text search against the index.",
+        )
     rail_html = _render_rail(domains, tag_chips, feature_count > 0, workflow_count > 0)
 
     any_mermaid_source = False
