@@ -1,5 +1,5 @@
 ---
-type: feature
+type: workflow
 tags: [documentation]
 ---
 
@@ -13,7 +13,7 @@ Each generated document can include an `owner:` field in its frontmatter — a n
 
 1. **Add an owner to the frontmatter**: Edit any classified document and add an `owner:` line (free text: a name, team, Slack channel, or any contact) to the YAML frontmatter at the top.
 
-2. **Owner persists across regenerations**: Because no automation generates an owner, `specky sync` and the git hook preserve your owner line exactly as written when regenerating the document.
+2. **Owner persists across regenerations**: Both the git hook (`specky sync`) and the document-domain skill preserve your owner line exactly as written when regenerating a document. The skill never generates an owner — it's always hand-authored.
 
 3. **Viewer shows "Who to ask"**: When rendered in the HTML viewer, the owner appears as a "Who to ask" line under the document header so readers know where to direct questions.
 
@@ -39,5 +39,6 @@ Each generated document can include an `owner:` field in its frontmatter — a n
 | A classified document with `owner: #support` | I run `specky check` | The document is not flagged; check reports it as advice only |
 | Two classified docs in my change, neither with an owner | I run `specky check` | Output includes a note listing both paths as unowned |
 | Five unowned docs in the changed range | I run `specky check` | All five are listed (limit applies only after ten) |
-| I regenerate a document with an existing `owner:` line | The hook runs `specky sync` | The owner line is preserved unchanged in the regenerated doc |
+| I regenerate a document with an existing `owner:` line using the hook | The hook runs `specky sync` | The owner line is preserved unchanged in the regenerated doc |
+| I regenerate a document with an existing `owner:` line using the skill | The document-domain skill updates the doc | The owner line is preserved unchanged |
 | A history doc (specs/history/abc123.md) exists | I run `specky check` | It is never flagged for missing owner, regardless of its frontmatter |
