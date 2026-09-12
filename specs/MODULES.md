@@ -16,6 +16,7 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | [documentation/feature-sync.md](documentation/feature-sync.md) | Automatically generate and update feature/workflow documentation on each commit |
 | [documentation/feature-classification-and-tags.md](documentation/feature-classification-and-tags.md) | Classify and tag features and workflows for search and discovery |
 | [documentation/auto-doc-commit.md](documentation/auto-doc-commit.md) | Automatically commit generated history and feature docs as a follow-up commit instead of leaving them uncommitted |
+| [documentation/stale-doc-detection.md](documentation/stale-doc-detection.md) | Detect and flag documentation that lags behind the code it covers, with viewer badges and check warnings |
 
 ## Cli
 
