@@ -46,10 +46,32 @@ Open `.specky/site/index.html` in any browser — no server needed.
 To enable the "Ask about these docs" chat widget on that site, run the local companion alongside it:
 
 ```bash
-specky serve   # chat companion on http://127.0.0.1:8420 — Ctrl+C to stop
+specky serve   # viewer + chat on http://127.0.0.1:8420 — Ctrl+C to stop
 ```
 
-Leave it off and the site still works — the widget just tells you to start it.
+That serves `.specky/site/` too, so `http://127.0.0.1:8420/` is the same viewer with the widget
+talking to it same-origin — handy when you want to share it over a port instead of a file path.
+Leave the server off and the double-clicked `file://` site still works; the widget just tells you
+to start it.
+
+### `[serve]` — who may talk to the chat server
+
+Optional, in `specky.toml`. The defaults are open, so the widget works from a `file://` page or
+from a site served on any other port with no configuration:
+
+```toml
+[serve]
+host = "127.0.0.1"          # bind address; anything else exposes this to the network
+allow_origins = ["*"]       # or e.g. ["https://docs.internal", "null"] ("null" = file:// pages)
+token = ""                  # when set, requests must carry it in an X-Specky-Token header
+```
+
+With those defaults, any page open in a reader's browser can POST to the port and read answers
+derived from your docs — bound to `127.0.0.1` that means software already on the machine, and
+bound wider it means anyone who can reach the port. Narrow `allow_origins`, or set a `token`, if
+the docs aren't for everyone who can reach the server. `specky serve` prints a warning when the
+bind address isn't loopback. Static files are never token-gated (a page can't send a header for
+its own `<link>`/`<script>` loads); the origin allowlist covers them.
 
 ## Prerequisites
 

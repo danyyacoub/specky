@@ -1,7 +1,15 @@
+import json
+import threading
+from contextlib import contextmanager
+from http.client import HTTPConnection
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+
 import pytest
 
 from specky import chat_server, db
 from specky.chat_server import (
+    ServeConfig,
     _build_prompt,
     _extract_html_snippet,
     _parse_scope,
@@ -151,3 +159,246 @@ def test_answer_question_returns_an_html_snippet_when_the_model_sends_one(indexe
     result = answer_question(indexed_repo, "refund table?")
     assert result["answer"] == "Here:"
     assert result["html_snippet"].startswith("<table>")
+
+
+# --- [serve] configuration ---------------------------------------------------------------
+
+
+def test_serve_config_defaults_to_todays_behaviour(tmp_repo):
+    """No specky.toml, or one without a [serve] table: loopback, open, no token. An existing
+    repo must not need a config change to keep working."""
+    config = ServeConfig.load(tmp_repo)
+    assert (config.host, config.port, config.allow_origins, config.token) == (
+        "127.0.0.1",
+        chat_server.DEFAULT_PORT,
+        ("*",),
+        "",
+    )
+    assert config.open_to_everyone
+
+
+def test_serve_config_reads_the_table_and_cli_flags_win(tmp_repo):
+    (tmp_repo / "specky.toml").write_text(
+        '[serve]\nhost = "0.0.0.0"\nport = 9000\n'
+        'allow_origins = ["https://docs.example"]\ntoken = "s3cret"\n'
+    )
+    config = ServeConfig.load(tmp_repo)
+    assert (config.host, config.port, config.token) == ("0.0.0.0", 9000, "s3cret")
+    assert not config.open_to_everyone
+
+    override = ServeConfig.load(tmp_repo, host="127.0.0.1", port=9999)
+    assert (override.host, override.port) == ("127.0.0.1", 9999)
+    assert override.token == "s3cret"  # untouched by the flags
+
+
+def test_a_single_origin_string_is_accepted(tmp_repo):
+    (tmp_repo / "specky.toml").write_text('[serve]\nallow_origins = "null"\n')
+    assert ServeConfig.load(tmp_repo).allow_origins == ("null",)
+
+
+@pytest.mark.parametrize(
+    "origins, origin, allowed",
+    [
+        (("*",), "https://evil.example", True),  # the default lets anything through
+        (("https://docs.example",), "https://docs.example", True),
+        (("https://docs.example",), "https://evil.example", False),
+        (("https://docs.example",), None, True),  # non-browser caller, never protected here
+        (("null",), "null", True),  # what a file:// page sends
+    ],
+)
+def test_origin_allowlist(origins, origin, allowed):
+    assert ServeConfig(allow_origins=origins).origin_allowed(origin) is allowed
+
+
+def test_a_narrowed_allowlist_echoes_the_origin_rather_than_a_wildcard():
+    """`*` back to a narrowed allowlist would hand every other origin access too."""
+    config = ServeConfig(allow_origins=("https://docs.example",))
+    assert config.acao_for("https://docs.example") == "https://docs.example"
+    assert ServeConfig().acao_for("https://docs.example") == "*"
+
+
+@pytest.mark.parametrize(
+    "token, supplied, ok",
+    [("", None, True), ("", "anything", True), ("s3cret", None, False), ("s3cret", "s3cret", True)],
+)
+def test_token_check(token, supplied, ok):
+    assert ServeConfig(token=token).token_ok(supplied) is ok
+
+
+@pytest.mark.parametrize(
+    "host, loopback",
+    [("127.0.0.1", True), ("localhost", True), ("::1", True), ("0.0.0.0", False), ("::", False)],
+)
+def test_loopback_detection_drives_the_exposure_warning(host, loopback):
+    assert chat_server._is_loopback(host) is loopback
+
+
+# --- the HTTP surface --------------------------------------------------------------------
+
+
+@contextmanager
+def _running(repo_root: Path, config: ServeConfig = ServeConfig()):
+    """The real handler on an ephemeral port — the header and path handling under test only
+    exist inside BaseHTTPRequestHandler, so there's nothing to unit-test underneath it."""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), chat_server._make_handler(repo_root, config))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def _request(port, method, path, *, origin=None, token=None, body=None):
+    conn = HTTPConnection("127.0.0.1", port, timeout=5)
+    headers = {}
+    if origin is not None:
+        headers["Origin"] = origin
+    if token is not None:
+        headers[chat_server.TOKEN_HEADER] = token
+    payload = None
+    if body is not None:
+        payload = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    try:
+        conn.request(method, path, body=payload, headers=headers)
+        res = conn.getresponse()
+        return res.status, res.headers, res.read()
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def answering(monkeypatch):
+    """Stub the whole retrieval+provider path: these tests are about access control."""
+    asked = []
+    monkeypatch.setattr(
+        chat_server,
+        "answer_question",
+        lambda _root, question: asked.append(question) or {"answer": "ok", "sources": []},
+    )
+    return asked
+
+
+def test_chat_answers_any_origin_under_the_default_config(tmp_repo, answering):
+    with _running(tmp_repo) as port:
+        status, headers, raw = _request(
+            port, "POST", "/chat", origin="https://anywhere.example", body={"question": "refunds?"}
+        )
+    assert status == 200
+    assert json.loads(raw)["answer"] == "ok"
+    assert headers["Access-Control-Allow-Origin"] == "*"
+    assert answering == ["refunds?"]
+
+
+def test_a_disallowed_origin_gets_403_and_no_cors_headers(tmp_repo, answering):
+    """No `Access-Control-Allow-Origin` on the rejection either, so the calling page can't even
+    read the error — and no provider call is made."""
+    config = ServeConfig(allow_origins=("https://docs.example",))
+    with _running(tmp_repo, config) as port:
+        status, headers, raw = _request(
+            port, "POST", "/chat", origin="https://evil.example", body={"question": "refunds?"}
+        )
+    assert status == 403
+    assert "allow_origins" in json.loads(raw)["error"]
+    assert "Access-Control-Allow-Origin" not in headers
+    assert answering == []
+
+
+def test_an_allowed_origin_is_echoed_and_varied_on(tmp_repo, answering):
+    config = ServeConfig(allow_origins=("https://docs.example",))
+    with _running(tmp_repo, config) as port:
+        status, headers, _ = _request(
+            port, "POST", "/chat", origin="https://docs.example", body={"question": "q"}
+        )
+    assert status == 200
+    assert headers["Access-Control-Allow-Origin"] == "https://docs.example"
+    # Without Vary, a shared cache can serve one origin's response (and its ACAO) to another.
+    assert headers["Vary"] == "Origin"
+
+
+def test_the_preflight_is_rejected_for_a_disallowed_origin(tmp_repo, answering):
+    config = ServeConfig(allow_origins=("https://docs.example",))
+    with _running(tmp_repo, config) as port:
+        assert _request(port, "OPTIONS", "/chat", origin="https://evil.example")[0] == 403
+        status, headers, _ = _request(port, "OPTIONS", "/chat", origin="https://docs.example")
+    assert status == 204
+    assert chat_server.TOKEN_HEADER in headers["Access-Control-Allow-Headers"]
+
+
+def test_a_configured_token_is_required(tmp_repo, answering):
+    with _running(tmp_repo, ServeConfig(token="s3cret")) as port:
+        no_token = _request(port, "POST", "/chat", body={"question": "q"})
+        wrong = _request(port, "POST", "/chat", token="guess", body={"question": "q"})
+        right = _request(port, "POST", "/chat", token="s3cret", body={"question": "q"})
+    assert (no_token[0], wrong[0], right[0]) == (403, 403, 200)
+    assert chat_server.TOKEN_HEADER in json.loads(no_token[2])["error"]
+    assert answering == ["q"]  # only the authenticated call reached the provider
+
+
+def test_an_unknown_post_path_is_404_not_a_chat_call(tmp_repo, answering):
+    with _running(tmp_repo) as port:
+        assert _request(port, "POST", "/whatever", body={"question": "q"})[0] == 404
+    assert answering == []
+
+
+# --- serving the rendered site ------------------------------------------------------------
+
+
+@pytest.fixture
+def rendered_site(tmp_repo) -> Path:
+    site = tmp_repo / ".specky" / "site"
+    (site / "assets").mkdir(parents=True)
+    (site / "index.html").write_text("<h1>docs</h1>")
+    (site / "assets" / "site.css").write_text(":root{}")
+    (tmp_repo / "secret.txt").write_text("not part of the site")
+    return site
+
+
+def test_the_site_is_served_from_the_same_origin_as_chat(tmp_repo, rendered_site):
+    """This is what makes a deployed viewer need no CORS at all: one port serves both."""
+    with _running(tmp_repo) as port:
+        root = _request(port, "GET", "/")
+        css = _request(port, "GET", "/assets/site.css")
+    assert (root[0], root[2]) == (200, b"<h1>docs</h1>")
+    assert root[1]["Content-Type"] == "text/html"
+    assert (css[0], css[2]) == (200, b":root{}")
+    assert css[1]["Content-Type"] == "text/css"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/../secret.txt",
+        "/assets/../../secret.txt",
+        "/%2e%2e/secret.txt",  # unquoted after the split, so the check has to run on the result
+        "/etc/passwd",
+    ],
+)
+def test_nothing_outside_the_site_directory_is_reachable(tmp_repo, rendered_site, path):
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(port, "GET", path)
+    assert status == 404
+    assert b"not part of the site" not in raw
+
+
+def test_an_unrendered_site_says_which_command_to_run(tmp_repo):
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(port, "GET", "/")
+    assert status == 404
+    assert "specky render-html" in json.loads(raw)["error"]
+
+
+def test_a_disallowed_origin_cannot_read_the_site_either(tmp_repo, rendered_site):
+    config = ServeConfig(allow_origins=("https://docs.example",))
+    with _running(tmp_repo, config) as port:
+        assert _request(port, "GET", "/", origin="https://evil.example")[0] == 403
+
+
+def test_the_site_needs_no_token_even_when_the_api_does(tmp_repo, rendered_site):
+    """A page can't attach a header to its own `<link>`/`<script>` loads, so token-gating static
+    files would make the served viewer unopenable."""
+    with _running(tmp_repo, ServeConfig(token="s3cret")) as port:
+        assert _request(port, "GET", "/assets/site.css")[0] == 200

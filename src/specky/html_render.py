@@ -568,6 +568,16 @@ if (currentLink) {
 """
 
 CHAT_JS = """
+// Where the companion server is, from wherever this page was opened:
+//  - served by `specky serve` itself (same port) -> '' , i.e. same-origin /chat, no CORS at all
+//  - served by some other web server -> same host, chat's port (cross-origin, needs [serve] to allow it)
+//  - double-clicked file:// page -> loopback, chat's port (the original, offline case)
+const SPECKY_API = location.protocol.startsWith('http')
+  ? (location.port === String(SPECKY_CHAT_PORT)
+      ? ''
+      : `${location.protocol}//${location.hostname}:${SPECKY_CHAT_PORT}`)
+  : `http://127.0.0.1:${SPECKY_CHAT_PORT}`;
+
 const chatToggle = document.getElementById('chat-toggle');
 const chatPanel = document.getElementById('chat-panel');
 const chatLog = document.getElementById('chat-log');
@@ -623,7 +633,7 @@ chatForm?.addEventListener('submit', async (event) => {
   chatInput.value = '';
   chatStatus.textContent = 'Thinking…';
   try {
-    const res = await fetch(`http://127.0.0.1:${SPECKY_CHAT_PORT}/chat`, {
+    const res = await fetch(`${SPECKY_API}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question }),

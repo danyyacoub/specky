@@ -24,7 +24,9 @@ uv run specky sync --dry-run     # ...or list what it would document first, call
 uv run specky index              # rebuild .specky/index.db (FTS5) from specs/ + git log
 uv run specky search "<query>"   # keyword search over the index
 uv run specky render-html        # write static site to .specky/site/index.html
-uv run specky serve [--port N]   # local chat companion for HTML viewer's "Ask" widget
+uv run specky serve [--port N] [--host ADDR]  # serve .specky/site/ *and* the "Ask" widget's
+                                 # chat endpoint from one port; access policy is `[serve]` in
+                                 # specky.toml (open by default — see specs/chat/serve-access-control.md)
 uv run specky-mcp                # run MCP server directly over stdio, for local testing
 ```
 

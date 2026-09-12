@@ -118,7 +118,10 @@ def test_reading_the_site_needs_no_server(site):
 
     app_js = (site / "assets" / "app.js").read_text()
     assert not re.search(r"^\s*(?:import|export)\s", app_js, re.MULTILINE)
-    assert re.findall(r"fetch\(([^,]*)", app_js) == ["`http://127.0.0.1:${SPECKY_CHAT_PORT}/chat`"]
+    assert re.findall(r"fetch\(([^,]*)", app_js) == ["`${SPECKY_API}/chat`"]
+    # ...and on file:// that endpoint resolves to the companion server's own port, since a
+    # file:// page has no origin for a relative URL to hang off.
+    assert "`http://127.0.0.1:${SPECKY_CHAT_PORT}`" in app_js
 
 
 def test_the_unread_search_index_json_is_gone(site):

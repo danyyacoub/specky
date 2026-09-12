@@ -1,23 +1,47 @@
-"""Local RAG-over-FTS5 chat companion for the static HTML viewer.
+"""Local RAG-over-FTS5 chat companion for the static HTML viewer, and the viewer's own
+optional HTTP server.
 
 The generated site is a plain file:// page — it can't safely hold an API key or query
 SQLite directly. `specky serve` runs a small local HTTP server instead: the chat widget
 POSTs a question to it, it pulls grounding context out of the same FTS5 index `specky
 search` uses, and calls the AI provider configured by `specky init`. Browsing and static
 search keep working with the server off; the widget just reports that chat is offline.
+
+The same process also serves `.specky/site/`, so `http://<host>:<port>/` is a working
+viewer whose chat calls are same-origin. That's the path a deployed site takes; a
+double-clicked `file://` page still works and reaches `/chat` cross-origin.
+
+Access control lives in `[serve]` in specky.toml and defaults to open
+(`allow_origins = ["*"]`, no token) so a site served from another port or host keeps
+working without configuration. Open means what it says: any page in a reader's browser can
+POST to this port and read answers derived from the repo's docs, and a non-loopback `host`
+extends that to anyone who can reach the port. `allow_origins` and `token` are how you
+narrow it; `serve()` warns when the bind address isn't loopback.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import mimetypes
 import re
+import secrets
+import tomllib
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from specky.ai_provider import load_provider_from_toml
 from specky.db import connect, fts_match_query
 
 DEFAULT_PORT = 8420
+DEFAULT_HOST = "127.0.0.1"
+
+# Header the chat widget sends when `[serve] token` is configured. Not `Authorization`:
+# that header triggers a CORS preflight the widget would have to survive anyway, and this
+# is a local shared secret, not a bearer credential for a third party.
+TOKEN_HEADER = "X-Specky-Token"
 
 _SYSTEM_PROMPT = (
     "You are a documentation assistant for this codebase. Answer the user's question "
@@ -113,27 +137,126 @@ def answer_question(repo_root: Path, question: str) -> dict:
     return result
 
 
-def _make_handler(repo_root: Path) -> type[BaseHTTPRequestHandler]:
+@dataclass(frozen=True)
+class ServeConfig:
+    """`[serve]` from specky.toml, with CLI flags taking precedence.
+
+    Defaults reproduce the behaviour this server has always had — loopback bind, every
+    origin allowed, no token — so an existing repo needs no config change. See the module
+    docstring for what "every origin allowed" costs.
+    """
+
+    host: str = DEFAULT_HOST
+    port: int = DEFAULT_PORT
+    allow_origins: tuple[str, ...] = ("*",)
+    token: str = ""
+
+    @classmethod
+    def load(cls, repo_root: Path, host: str | None = None, port: int | None = None) -> ServeConfig:
+        table: dict = {}
+        config_path = repo_root / "specky.toml"
+        if config_path.exists():
+            with config_path.open("rb") as f:
+                table = tomllib.load(f).get("serve") or {}
+        origins = table.get("allow_origins", ["*"])
+        return cls(
+            host=host or str(table.get("host", DEFAULT_HOST)),
+            port=port or int(table.get("port", DEFAULT_PORT)),
+            # A single string is what someone writes first (`allow_origins = "null"`); take it.
+            allow_origins=tuple([origins] if isinstance(origins, str) else origins),
+            token=str(table.get("token", "")),
+        )
+
+    @property
+    def open_to_everyone(self) -> bool:
+        return "*" in self.allow_origins
+
+    def origin_allowed(self, origin: str | None) -> bool:
+        """A missing `Origin` is allowed: browsers send it on every cross-origin fetch and on
+        `file://` pages (as `null`), so no-header means a non-browser caller (curl, a health
+        check) that this allowlist was never protecting against."""
+        return self.open_to_everyone or origin is None or origin in self.allow_origins
+
+    def acao_for(self, origin: str | None) -> str | None:
+        """The `Access-Control-Allow-Origin` value to echo, or None when the request needs no
+        CORS header at all. `*` is only ever sent when the allowlist is literally `*` — echoing
+        a specific origin is what keeps a narrowed allowlist meaningful."""
+        if self.open_to_everyone:
+            return "*"
+        return origin
+
+    def token_ok(self, supplied: str | None) -> bool:
+        if not self.token:
+            return True
+        return supplied is not None and secrets.compare_digest(supplied, self.token)
+
+
+def _is_loopback(host: str) -> bool:
+    if host in ("localhost", ""):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestHandler]:
+    site_dir = (repo_root / ".specky" / "site").resolve()
+
     class Handler(BaseHTTPRequestHandler):
         def _cors(self) -> None:
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            """CORS headers for an already-allowed request. A rejected origin gets none, so a
+            disallowed caller can't read the 403 body either."""
+            origin = self.headers.get("Origin")
+            if not config.origin_allowed(origin):
+                return
+            acao = config.acao_for(origin)
+            if acao:
+                self.send_header("Access-Control-Allow-Origin", acao)
+            # The response varies by request Origin even when it's currently `*`, so caches
+            # (and the browser's own) must not reuse one origin's response for another.
+            self.send_header("Vary", "Origin")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", f"Content-Type, {TOKEN_HEADER}")
 
         def _json(self, status: int, payload: dict) -> None:
+            body = json.dumps(payload).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self._cors()
             self.end_headers()
-            self.wfile.write(json.dumps(payload).encode())
+            self.wfile.write(body)
 
-        def do_OPTIONS(self) -> None:  # preflight for the widget's cross-origin fetch()
+        def _origin_ok(self) -> bool:
+            origin = self.headers.get("Origin")
+            if config.origin_allowed(origin):
+                return True
+            self._json(403, {"error": f"origin {origin} is not in [serve] allow_origins"})
+            return False
+
+        def _api_allowed(self) -> bool:
+            """Origin *and* token. The token guards the API only, never static files — a page
+            can't send a header for its own `<link>`/`<script>` loads, so requiring one there
+            would make the served viewer unopenable."""
+            if not self._origin_ok():
+                return False
+            if not config.token_ok(self.headers.get(TOKEN_HEADER)):
+                self._json(403, {"error": f"missing or invalid {TOKEN_HEADER} header"})
+                return False
+            return True
+
+        def do_OPTIONS(self) -> None:  # preflight for the file:// widget's cross-origin fetch()
+            if not self._origin_ok():
+                return
             self.send_response(204)
             self._cors()
             self.end_headers()
 
         def do_POST(self) -> None:
-            if self.path != "/chat":
+            if not self._api_allowed():
+                return
+            if urlparse(self.path).path != "/chat":
                 self._json(404, {"error": "not found"})
                 return
             length = int(self.headers.get("Content-Length", 0))
@@ -146,15 +269,56 @@ def _make_handler(repo_root: Path) -> type[BaseHTTPRequestHandler]:
             except Exception as exc:
                 self._json(400, {"error": str(exc)})
 
+        def do_GET(self) -> None:
+            """Serve `.specky/site/`, so the viewer and its chat share an origin."""
+            if not self._origin_ok():
+                return
+            rel = unquote(urlparse(self.path).path).lstrip("/") or "index.html"
+            if rel.endswith("/"):
+                rel += "index.html"
+            target = (site_dir / rel).resolve()
+            # resolve() then containment check: catches `..`, symlinks out of the tree, and
+            # absolute paths smuggled in through the URL in one test.
+            if not target.is_relative_to(site_dir) or not target.is_file():
+                hint = (
+                    "no rendered site here yet — run `specky render-html`"
+                    if not site_dir.is_dir()
+                    else "not found"
+                )
+                self._json(404, {"error": hint})
+                return
+            body = target.read_bytes()
+            self.send_response(200)
+            self.send_header(
+                "Content-Type", mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+            )
+            self.send_header("Content-Length", str(len(body)))
+            self._cors()
+            self.end_headers()
+            self.wfile.write(body)
+
         def log_message(self, format: str, *args) -> None:  # quiet by default
             pass
 
     return Handler
 
 
-def serve(repo_root: Path, port: int = DEFAULT_PORT) -> None:
-    server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(repo_root))
-    print(f"specky serve: chat companion listening on http://127.0.0.1:{port} (Ctrl+C to stop)")
+def serve(repo_root: Path, port: int | None = None, host: str | None = None) -> None:
+    config = ServeConfig.load(repo_root, host=host, port=port)
+    server = ThreadingHTTPServer((config.host, config.port), _make_handler(repo_root, config))
+    url = f"http://{config.host}:{config.port}"
+    # flush: stdout is block-buffered when it isn't a terminal, and these two lines have to be
+    # visible *before* the server starts blocking in serve_forever — especially the warning.
+    print(
+        f"specky serve: viewer on {url}/ , chat endpoint on {url}/chat (Ctrl+C to stop)", flush=True
+    )
+    if not _is_loopback(config.host):
+        print(
+            f"specky serve: WARNING — bound to {config.host}, which is not loopback. Every doc in "
+            "this repo, and AI answers drawn from them, are readable by anyone who can reach this "
+            "port. Restrict it with [serve] allow_origins and [serve] token in specky.toml.",
+            flush=True,
+        )
     try:
         server.serve_forever()
     except KeyboardInterrupt:

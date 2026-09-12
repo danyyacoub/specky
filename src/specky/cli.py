@@ -58,10 +58,11 @@ def _render_html(args: argparse.Namespace) -> None:
 
 
 def _serve(args: argparse.Namespace) -> None:
-    from specky.chat_server import DEFAULT_PORT, serve as run_serve
+    from specky.chat_server import serve as run_serve
     from specky.db import repo_root
 
-    run_serve(repo_root(), port=args.port or DEFAULT_PORT)
+    # None, not a default: serve() falls back to `[serve]` in specky.toml before its own defaults.
+    run_serve(repo_root(), port=args.port, host=args.host)
 
 
 def _commit_doc(args: argparse.Namespace) -> None:
@@ -157,8 +158,13 @@ def build_parser() -> argparse.ArgumentParser:
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")
     command("render-html", "Render the static HTML doc site", _render_html)
-    command("serve", "Run the local AI chat companion for the HTML viewer", _serve).add_argument(
-        "--port", type=int, default=None
+    serve_cmd = command("serve", "Serve the HTML viewer and its AI chat companion", _serve)
+    serve_cmd.add_argument("--port", type=int, default=None)
+    serve_cmd.add_argument(
+        "--host",
+        default=None,
+        help="Bind address (default 127.0.0.1, or [serve] host). Anything but loopback exposes "
+        "this repo's docs to whoever can reach the port",
     )
     command(
         "commit-doc",
