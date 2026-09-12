@@ -42,6 +42,7 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | [chat/local-rag-server.md](chat/local-rag-server.md) | Local HTTP server that answers documentation questions by retrieving context from FTS5 index |
 | [chat/ask-widget-scoping.md](chat/ask-widget-scoping.md) | Chat input autocompletes domain/feature references to narrow AI retrieval and enable HTML responses |
 | [chat/serve-access-control.md](chat/serve-access-control.md) | Serve the viewer and chat from one port, with a configurable origin allowlist and optional token |
+| [chat/ask-widget-conversation.md](chat/ask-widget-conversation.md) | Ask widget maintains session-based conversation history for follow-up questions |
 
 ## Search
 
