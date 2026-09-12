@@ -2,15 +2,15 @@
 
 No AI provider is ever called and no history is walked, so this is free and fast enough to run
 on every pull request. It answers from two things that already exist: the diff for the range,
-and the `doc_files` table `specky index` derives from `commit_links` (see
-indexer.index_doc_files). A violation is a code file whose covering doc no commit in the range
-updated.
+and the `doc_files` table `specky index` derives from git log (see indexer.index_doc_files). A
+violation is a code file whose covering doc no commit in the range updated.
 
 Fails by default — a doc gate that only warns is a doc gate nobody notices — with `--advisory`
 to print the identical report and exit 0, which is how a repo adopts this before it's clean.
-Everything else it reports (commits with no history doc, changed files with no doc at all, the
-coverage figure) is advice and never affects the exit code: those are states a repo grows into,
-not regressions a contributor introduced.
+Everything else it reports (commits with no history doc, changed files with no doc at all, docs
+that had already fallen behind their code per staleness.py, the coverage figure) is advice and
+never affects the exit code: those are states a repo grows into, not regressions a contributor
+introduced.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from pathlib import Path
 
 from specky.commit_doc import _AUTO_COMMIT_MARKER, _is_revision, history_doc_for
 from specky.db import connect
+from specky.staleness import days_behind
 
 # git's hash of the empty tree: diffing against it yields the whole worktree, which is what a
 # repo with a single commit (or `--since` covering all of history) has to compare against.
@@ -63,10 +64,22 @@ def _read_table(path: Path, keys: tuple[str, ...]) -> dict:
     return table
 
 
+# How far a doc may lag the code it covers before staleness.py calls it stale. Two weeks, because
+# specky's own hook documents a commit within seconds of it landing: a doc that's a fortnight
+# behind wasn't written by the hook and wasn't updated by hand either.
+STALE_AFTER_DAYS = 14
+
+# How many stale docs the text report lists before summarising the rest. A 300-file pull request
+# can pull in hundreds of covering docs, and a wall of advice buries the violations above it. The
+# JSON output carries all of them.
+STALE_LIST_LIMIT = 10
+
+
 @dataclass(frozen=True)
 class CheckConfig:
     ignore: tuple[str, ...] = DEFAULT_IGNORE
     min_link_commits: int = MIN_LINK_COMMITS
+    stale_after_days: int = STALE_AFTER_DAYS
 
     @classmethod
     def load(cls, repo_root: Path) -> CheckConfig:
@@ -89,6 +102,7 @@ class CheckConfig:
                 else tuple([ignore] if isinstance(ignore, str) else ignore)
             ),
             min_link_commits=max(1, int(table.get("min_link_commits", MIN_LINK_COMMITS))),
+            stale_after_days=max(0, int(table.get("stale_after_days", STALE_AFTER_DAYS))),
         )
 
     def ignores(self, path: str) -> bool:
@@ -108,6 +122,15 @@ class Violation:
 
 
 @dataclass(frozen=True)
+class StaleDoc:
+    doc_path: str
+    days: int
+
+    def as_dict(self) -> dict:
+        return {"doc_path": self.doc_path, "days": self.days}
+
+
+@dataclass(frozen=True)
 class Report:
     base: str
     code_files: tuple[str, ...]
@@ -118,6 +141,12 @@ class Report:
     # Stale file→doc pairs that didn't recur across enough commits to fail the build. Counted,
     # not listed: on a repo where specky was just installed this is most of them.
     weak_links: int = 0
+    # Docs covering this range's files that had already fallen behind their code before this
+    # change (staleness.py's verdict, stored at index time). Advice, never a failure.
+    stale: tuple[StaleDoc, ...] = ()
+    # Stale docs elsewhere in the repo. A count, because listing every one of them would bury the
+    # part of the report that's about the range in front of you.
+    stale_elsewhere: int = 0
 
     @property
     def covered(self) -> int:
@@ -140,6 +169,8 @@ class Report:
                 {"sha": sha, "subject": s} for sha, s in self.undocumented_commits
             ],
             "weak_links": self.weak_links,
+            "stale": [s.as_dict() for s in self.stale],
+            "stale_elsewhere": self.stale_elsewhere,
             "coverage": {
                 "covered": self.covered,
                 "changed": len(self.code_files),
@@ -247,6 +278,23 @@ def _covering_docs(repo_root: Path, paths: list[str]) -> dict[str, list[tuple[st
     return covering
 
 
+def _stale_docs(repo_root: Path) -> dict[str, int]:
+    """`{doc path: days its code ran ahead of it}` for every doc staleness.py flagged.
+
+    Read from the index rather than recomputed, so this costs one query and agrees with the badge
+    the HTML viewer shows. An index built before staleness existed has no rows here, which reads
+    as "nothing is stale" — the honest answer, since nothing was measured.
+    """
+    conn = connect(repo_root)
+    try:
+        rows = conn.execute(
+            "SELECT path, stale_since, last_code_change FROM documents WHERE stale_since != ''"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {path: days_behind(since, code) for path, since, code in rows}
+
+
 def run_check(repo_root: Path, base: str | None = None, since: str | None = None) -> Report:
     config = CheckConfig.load(repo_root)
     resolved = resolve_base(repo_root, base=base, since=since)
@@ -256,22 +304,35 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
     code_files = sorted(f for f in changed if not f.startswith("specs/") and not config.ignores(f))
 
     covering = _covering_docs(repo_root, code_files)
-    stale_docs = [
+    undocumented = [
         (path, doc_path, commits)
         for path in code_files
         if (pairs := covering.get(path)) and not _documented(pairs, touched_docs)
         for doc_path, commits in pairs
     ]
+
+    # Staleness is about this range only in as much as it covers the same files: a doc that was
+    # already 40 days behind is worth saying while someone is looking at that code, and the rest of
+    # the repo's stale docs are a number rather than a list. A doc this range updated isn't
+    # reported, whatever the index still says — the update is the fix.
+    stale = _stale_docs(repo_root)
+    in_range = {doc for path in code_files for doc, _ in covering.get(path, ())}
+    covers_range = [d for d in stale if d in in_range]
+    relevant = sorted(
+        (d for d in covers_range if d not in touched_docs), key=lambda d: (-stale[d], d)
+    )
     return Report(
         base=resolved,
         code_files=tuple(code_files),
         touched_docs=tuple(touched_docs),
         violations=tuple(
             Violation(path, doc_path)
-            for path, doc_path, commits in stale_docs
+            for path, doc_path, commits in undocumented
             if commits >= config.min_link_commits
         ),
-        weak_links=sum(1 for _, _, commits in stale_docs if commits < config.min_link_commits),
+        weak_links=sum(1 for _, _, commits in undocumented if commits < config.min_link_commits),
+        stale=tuple(StaleDoc(doc, stale[doc]) for doc in relevant),
+        stale_elsewhere=len(stale) - len(covers_range),
         uncovered=tuple(f for f in code_files if f not in covering),
         undocumented_commits=tuple(_undocumented_commits(repo_root, resolved)),
     )
@@ -298,6 +359,22 @@ def report_lines(report: Report) -> list[str]:
         lines.append("")
         lines.append(f"Warning: {len(report.uncovered)} changed file(s) have no doc at all:")
         lines += [f"  {path}" for path in report.uncovered]
+    if report.stale:
+        lines.append("")
+        lines.append(
+            f"Warning: {len(report.stale)} doc(s) covering this range's code had already fallen "
+            "behind it:"
+        )
+        shown = report.stale[:STALE_LIST_LIMIT]
+        lines += [f"  {s.doc_path} — {s.days} days behind" for s in shown]
+        if len(report.stale) > STALE_LIST_LIMIT:
+            lines.append(f"  … and {len(report.stale) - STALE_LIST_LIMIT} more")
+    if report.stale_elsewhere:
+        lines.append("")
+        lines.append(
+            f"Note: {report.stale_elsewhere} doc(s) elsewhere in specs/ are behind their code too "
+            "— the viewer's Stale filter lists them"
+        )
     if report.weak_links:
         lines.append("")
         lines.append(

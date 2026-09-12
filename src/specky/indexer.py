@@ -6,14 +6,15 @@ a full rebuild can't drift from reality the way incremental updates could.
 
 from __future__ import annotations
 
-import subprocess
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from specky import frontmatter
+from specky import frontmatter, gitlog
+from specky.check import CheckConfig
 from specky.commit_doc import _AUTO_COMMIT_MARKER
 from specky.db import connect, fts_match_query
+from specky.staleness import index_staleness
 
 
 def _domain_for(md_path: Path, specs_root: Path) -> str:
@@ -31,7 +32,8 @@ def _title_for(content: str, fallback: str) -> str:
 def _reset_tables(conn) -> None:
     # micro_docs and commit_links are written incrementally by commit_doc.py and aren't
     # derived from a rescan, so they're deliberately left out of this wipe. doc_files *is*
-    # derived (from commit_links plus git), so it gets rebuilt with everything else.
+    # derived (from git log), so it gets rebuilt with everything else; the staleness columns live
+    # on `documents` and are rewritten with the rows themselves.
     conn.execute("DELETE FROM documents")
     conn.execute("DELETE FROM documents_fts")
     conn.execute("DELETE FROM commits")
@@ -70,13 +72,7 @@ def index_documents(repo_root: Path, conn) -> int:
 
 
 def index_commits(repo_root: Path, conn) -> int:
-    log = subprocess.run(
-        ["git", "log", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%s", "--reverse"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
+    log = gitlog.run(repo_root, ["log", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%s", "--reverse"])
 
     count = 0
     for line in log.splitlines():
@@ -125,29 +121,17 @@ _NOT_COVERABLE = ("specs/", ".specky/")
 HISTORY_PREFIX = "specs/history/"
 
 
-def _git(repo_root: Path, args: list[str], stdin: str | None = None) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=repo_root, input=stdin, capture_output=True, text=True, check=True
-    ).stdout
-
-
-def _split_log(log: str) -> list[list[str]]:
-    """`--format=%x01…` blocks as line lists. \x01 delimits commits because a filename can
-    contain anything a newline can't."""
-    return [lines for block in log.split("\x01") if (lines := block.splitlines())]
-
-
 def doc_commits(repo_root: Path) -> list[tuple[str, list[str], str, list[str]]]:
     """`(sha, parents, subject, doc paths)` for every commit that touched `specs/`.
 
     Path-limited, so both the walk and the file lists stay proportional to the number of
     doc-producing commits rather than to the length of history.
     """
-    log = _git(
+    log = gitlog.run(
         repo_root, ["log", "--format=%x01%H%x1f%P%x1f%s", "--name-only", "--", "specs/"]
     )
     commits = []
-    for lines in _split_log(log):
+    for lines in gitlog.blocks(log):
         sha, parents, subject = lines[0].split("\x1f", 2)
         commits.append((sha, parents.split(), subject, [f for f in lines[1:] if f]))
     return commits
@@ -177,7 +161,7 @@ def _resolve_revs(repo_root: Path, revs: list[str]) -> dict[str, str]:
     """
     if not revs:
         return {}
-    out = _git(repo_root, ["cat-file", "--batch-check"], stdin="\n".join(revs))
+    out = gitlog.run(repo_root, ["cat-file", "--batch-check"], stdin="\n".join(revs))
     resolved = {}
     for rev, line in zip(revs, out.splitlines()):
         oid, _, kind = line.partition(" ")
@@ -190,14 +174,14 @@ def _code_files(repo_root: Path, shas: list[str]) -> dict[str, list[str]]:
     """`{sha: code files it touched}` for the given commits, in one git process."""
     if not shas:
         return {}
-    log = _git(
+    log = gitlog.run(
         repo_root,
         ["log", "--no-walk", "--stdin", "--format=%x01%H", "--name-only"],
         stdin="\n".join(shas),
     )
     return {
         lines[0]: [f for f in lines[1:] if f and not f.startswith(_NOT_COVERABLE)]
-        for lines in _split_log(log)
+        for lines in gitlog.blocks(log)
     }
 
 
@@ -259,6 +243,9 @@ def run_index(repo_root: Path) -> tuple[int, int]:
         doc_count = index_documents(repo_root, conn)
         commit_count = index_commits(repo_root, conn)
         index_doc_files(repo_root, conn)
+        # Last: staleness reads the doc_files rows the step above just wrote. The threshold lives
+        # in `[check]` because `specky check` reports the same verdict this stores.
+        index_staleness(repo_root, conn, CheckConfig.load(repo_root).stale_after_days)
         conn.commit()
         return doc_count, commit_count
     finally:

@@ -233,10 +233,15 @@ second for anything CI should honour, since `specky.toml` is gitignored:
 [tool.specky.check]
 ignore = [".github/", "*.lock"]   # replaces the default ignore list wholesale
 min_link_commits = 2              # commits a file/doc pair must recur in before it can fail a build
+stale_after_days = 14             # how far a doc may lag its code before it's flagged as stale
 ```
 
 The default ignore list is `.github/`, `.specky/`, markdown outside `specs/`, lockfiles, `*.txt`,
 `*.cfg` and `*.ini`.
+
+`stale_after_days` is read by `specky index`, not only by `check`: the same threshold decides the
+"N days behind code" badge and the **Stale** filter in the HTML viewer, so the page and the gate
+never disagree. Staleness is always advice — it's reported, and it never fails a build.
 
 ## Development
 

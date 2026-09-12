@@ -2,7 +2,7 @@
 
 One database per repo, at .specky/index.db. Tables: documents/commits mirror what's on
 disk and in git log; micro_docs and commit_links are written incrementally by
-commit_doc.py; doc_files is derived from commit_links by indexer.py. FTS5 virtual tables are
+commit_doc.py; doc_files is derived from git log by indexer.py. FTS5 virtual tables are
 kept in sync by indexer.py's full-rebuild pass, not by triggers, since a `specky index` run is
 cheap enough to just redo from scratch each time.
 """
@@ -23,7 +23,11 @@ CREATE TABLE IF NOT EXISTS documents (
     doc_type TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '',
     related TEXT NOT NULL DEFAULT '',
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    -- staleness.py's verdict, both empty unless this doc fell behind the code it covers:
+    -- when the doc last changed, and when its code last changed.
+    stale_since TEXT NOT NULL DEFAULT '',
+    last_code_change TEXT NOT NULL DEFAULT ''
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
@@ -53,9 +57,11 @@ CREATE TABLE IF NOT EXISTS commit_links (
     PRIMARY KEY (sha, path)
 );
 
--- Which code files a doc covers, derived by indexer.py from commit_links + the file lists of
--- those commits. Denormalized on purpose: `specky check` is then one indexed lookup per file in
--- a diff, instead of a `git log -- <file>` process per file over the repo's whole history.
+-- Which code files a doc covers, derived by indexer.py from git log alone (see
+-- indexer.index_doc_files — it can't read this database's own commit_links, because .specky/ is
+-- gitignored and so absent in the CI run where `specky check` needs the map). Denormalized:
+-- `specky check` is then one indexed lookup per file in a diff, instead of a `git log -- <file>`
+-- process per file over the repo's whole history.
 -- `commits` is how many linked commits paired the two, which is how check.py tells a real link
 -- from two files that happened to ride in one commit.
 CREATE TABLE IF NOT EXISTS doc_files (
@@ -76,12 +82,14 @@ _ADDED_COLUMNS = {
         ("doc_type", "TEXT NOT NULL DEFAULT ''"),
         ("tags", "TEXT NOT NULL DEFAULT ''"),
         ("related", "TEXT NOT NULL DEFAULT ''"),
+        ("stale_since", "TEXT NOT NULL DEFAULT ''"),
+        ("last_code_change", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 
 # Tables whose whole content is rebuilt by the next `specky index` run: the FTS5 virtual tables
 # (which can't gain columns via ALTER TABLE at all) and doc_files, which indexer.py derives from
-# commit_links. For these, a stale column set is fixed by dropping and recreating rather than by
+# git log. For these, a stale column set is fixed by dropping and recreating rather than by
 # an ALTER — there's no data to preserve, so there's no migration to get wrong.
 _REBUILT_TABLES = {
     "documents_fts": (

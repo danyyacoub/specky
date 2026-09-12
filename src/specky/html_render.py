@@ -57,6 +57,7 @@ from jinja2 import Environment
 from specky import mermaid_tool
 from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
+from specky.staleness import days_behind
 
 _env = Environment(autoescape=True)
 
@@ -94,10 +95,10 @@ _RAIL_TEMPLATE = _env.from_string(
     # No "active" class here: the rail is rendered once for the whole site, so NAV_JS marks
     # the current page from location.pathname instead.
     '<li><a href="{{ doc.html_name }}" data-tags="{{ doc.data_tags }}" '
-    'data-type="{{ doc.doc_type }}">{{ doc.title }}</a></li>'
+    'data-type="{{ doc.doc_type }}" data-stale="{{ doc.stale }}">{{ doc.title }}</a></li>'
     "{% endfor %}</ul></details>"
     "{% endfor %}"
-    "{% if has_features or has_workflows or all_tags %}"
+    "{% if has_features or has_workflows or has_stale or all_tags %}"
     '<div class="tag-filter"><div class="filter-title"><span>Filter</span>'
     '<button id="clear-filter" class="clear-filter" type="button" hidden>Clear</button></div>'
     '<div class="chip-row">'
@@ -107,6 +108,9 @@ _RAIL_TEMPLATE = _env.from_string(
     '{% if has_workflows %}<button class="chip type-workflow" type="button" data-facet="type" '
     'data-type="workflow" data-active="false"><svg class="icon" aria-hidden="true">'
     '<use href="#icon-cycle"></use></svg>Workflow</button>{% endif %}'
+    '{% if has_stale %}<button class="chip stale" type="button" data-facet="stale" '
+    'data-active="false"><svg class="icon" aria-hidden="true">'
+    '<use href="#icon-clock"></use></svg>Stale</button>{% endif %}'
     "{% for t in all_tags %}"
     '<button class="chip {{ t.cls }}" type="button" data-facet="tag" data-tag="{{ t.name }}" '
     'data-active="false">{{ t.name }}</button>'
@@ -177,6 +181,8 @@ CSS = """
   --feature-bg: #eef1ff;
   --workflow: #b45309;
   --workflow-bg: #fff7ed;
+  --stale: #9f1239;
+  --stale-bg: #fdf2f6;
   --tag-0: #0d9488; --tag-0-bg: #e6fbf7;
   --tag-1: #7c3aed; --tag-1-bg: #f2ecff;
   --tag-2: #c2410c; --tag-2-bg: #fef0e7;
@@ -214,6 +220,8 @@ CSS = """
     --feature-bg: #1e2040;
     --workflow: #f0ac5c;
     --workflow-bg: #382a13;
+    --stale: #fb7185;
+    --stale-bg: #3a1a24;
     --tag-0: #2dd4bf; --tag-0-bg: #0f2b28;
     --tag-1: #a78bfa; --tag-1-bg: #241c3d;
     --tag-2: #fb923c; --tag-2-bg: #3a2413;
@@ -339,6 +347,7 @@ a { color: inherit; }
 .chip.tag-7 { background: var(--tag-7-bg); color: var(--tag-7); }
 .chip.type-feature { background: var(--feature-bg); color: var(--feature); }
 .chip.type-workflow { background: var(--workflow-bg); color: var(--workflow); }
+.chip.stale { background: var(--stale-bg); color: var(--stale); }
 
 .content-pane {
   flex: 1; height: 100vh; overflow-y: auto; display: flex; justify-content: center; background: var(--surface);
@@ -528,10 +537,10 @@ const SEARCH_CONTEXT_CHARS = 60;
 const SEARCH_HIT_LIMIT = 15;
 let searchSeq = 0;
 
-function docMatchesFilters(tags, docType) {
+function docMatchesFilters(tags, docType, stale) {
   const tagOk = activeTags.size === 0 || tags.some((t) => activeTags.has(t));
   const typeOk = !activeType || docType === activeType;
-  return tagOk && typeOk;
+  return tagOk && typeOk && (!activeStale || !!stale);
 }
 
 function escapeHtml(text) {
@@ -572,7 +581,7 @@ function showHits(hits) {
 function localHits(q) {
   const hits = [];
   for (const d of SPECKY_INDEX) {
-    if (!docMatchesFilters(d.tags, d.doc_type)) continue;
+    if (!docMatchesFilters(d.tags, d.doc_type, d.stale)) continue;
     const inBody = d.body ? d.body.includes(q) : false;
     if (!inBody && !d.title.toLowerCase().includes(q) && !d.domain.toLowerCase().includes(q)
         && !d.excerpt.toLowerCase().includes(q)) continue;
@@ -591,7 +600,7 @@ async function servedHits(q) {
   const hits = [];
   for (const row of data.results || []) {
     const doc = docsByPath.get(row.path);
-    if (!doc || !docMatchesFilters(doc.tags, doc.doc_type)) continue;
+    if (!doc || !docMatchesFilters(doc.tags, doc.doc_type, doc.stale)) continue;
     hits.push({ doc, context: markSnippet(row.snippet || '') });
   }
   return hits;
@@ -622,16 +631,19 @@ searchInput?.addEventListener('input', () => {
 FILTER_JS = """
 const activeTags = new Set();
 let activeType = null;
+// Boolean rather than a value facet: "stale" is a property of a doc, not one option among many.
+let activeStale = false;
 const filterChips = document.querySelectorAll('.chip[data-facet]');
 const navLinks = document.querySelectorAll('.sidebar .domain-group a');
 const clearFilterBtn = document.getElementById('clear-filter');
 
 function applyFilters() {
-  const anyActive = activeTags.size > 0 || activeType;
+  const anyActive = activeTags.size > 0 || activeType || activeStale;
   navLinks.forEach((a) => {
     const tags = (a.dataset.tags || '').split(',').filter(Boolean);
     const docType = a.dataset.type || '';
-    a.closest('li').style.display = docMatchesFilters(tags, docType) ? '' : 'none';
+    const stale = a.dataset.stale === 'true';
+    a.closest('li').style.display = docMatchesFilters(tags, docType, stale) ? '' : 'none';
   });
   document.querySelectorAll('.domain-group').forEach((group) => {
     const anyVisible = [...group.querySelectorAll('li')].some((li) => li.style.display !== 'none');
@@ -639,9 +651,10 @@ function applyFilters() {
     if (anyActive && anyVisible) group.open = true;
   });
   filterChips.forEach((chip) => {
-    const isActive = chip.dataset.facet === 'tag'
-      ? activeTags.has(chip.dataset.tag)
-      : chip.dataset.type === activeType;
+    let isActive;
+    if (chip.dataset.facet === 'tag') isActive = activeTags.has(chip.dataset.tag);
+    else if (chip.dataset.facet === 'stale') isActive = activeStale;
+    else isActive = chip.dataset.type === activeType;
     chip.dataset.active = isActive ? 'true' : 'false';
   });
   if (clearFilterBtn) clearFilterBtn.hidden = !anyActive;
@@ -653,6 +666,8 @@ filterChips.forEach((chip) => {
     if (chip.dataset.facet === 'tag') {
       const t = chip.dataset.tag;
       activeTags.has(t) ? activeTags.delete(t) : activeTags.add(t);
+    } else if (chip.dataset.facet === 'stale') {
+      activeStale = !activeStale;
     } else {
       activeType = activeType === chip.dataset.type ? null : chip.dataset.type;
     }
@@ -663,6 +678,7 @@ filterChips.forEach((chip) => {
 clearFilterBtn?.addEventListener('click', () => {
   activeTags.clear();
   activeType = null;
+  activeStale = false;
   applyFilters();
 });
 """
@@ -1193,6 +1209,15 @@ def _doc_header(doc: dict) -> str:
             f'data-type="{doc["doc_type"]}" data-active="false">'
             f'<svg class="icon" aria-hidden="true"><use href="#icon-{type_icon}"></use></svg>{label}</button>'
         )
+    # First chip after the type badge, because "how far behind is this?" changes how the reader
+    # should treat everything under it. Clicking it filters, like every other chip.
+    if doc["stale_days"]:
+        chips.append(
+            '<button class="chip stale" type="button" data-facet="stale" data-active="false" '
+            f'title="The code this doc covers changed {doc["stale_days"]} days after the doc did">'
+            '<svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>'
+            f'{doc["stale_days"]} days behind code</button>'
+        )
     for tag in doc["tags"]:
         safe_tag = html.escape(tag, quote=True)
         chips.append(
@@ -1258,6 +1283,7 @@ def _render_rail(
     tag_chips: list[dict],
     has_features: bool,
     has_workflows: bool,
+    has_stale: bool,
 ) -> str:
     """The sidebar, rendered once for the whole site — nothing in it varies per page (see
     NAV_JS for the active-link state, which does)."""
@@ -1278,6 +1304,7 @@ def _render_rail(
         all_tags=tag_chips,
         has_features=has_features,
         has_workflows=has_workflows,
+        has_stale=has_stale,
     )
 
 
@@ -1310,8 +1337,8 @@ def render_site(repo_root: Path) -> Path:
     conn = connect(repo_root)
     try:
         rows = conn.execute(
-            "SELECT path, domain, title, content, doc_type, tags, related FROM documents "
-            "ORDER BY domain, title"
+            "SELECT path, domain, title, content, doc_type, tags, related, stale_since, "
+            "last_code_change FROM documents ORDER BY domain, title"
         ).fetchall()
     finally:
         conn.close()
@@ -1334,11 +1361,14 @@ def render_site(repo_root: Path) -> Path:
     docs = []
     path_lookup: dict[str, dict] = {}
     all_tags: set[str] = set()
-    for path, domain, title, content, doc_type, tags_raw, related_raw in rows:
+    for path, domain, title, content, doc_type, tags_raw, related_raw, stale_since, last_code in rows:
         html_name = f"{_slug(path)}.html"
         tags = [t for t in tags_raw.split(",") if t]
         related = [r for r in related_raw.split(",") if r]
         all_tags.update(tags)
+        # 0 for a doc staleness.py didn't flag, so every consumer can treat this as "days behind"
+        # and stay uninterested in which of the two columns was empty.
+        stale_days = days_behind(stale_since, last_code) if stale_since and last_code else 0
         doc = {
             "html_name": html_name,
             "domain": domain,
@@ -1347,6 +1377,7 @@ def render_site(repo_root: Path) -> Path:
             "doc_type": doc_type,
             "tags": tags,
             "related": related,
+            "stale_days": stale_days,
         }
         domains.setdefault(domain, []).append(
             {
@@ -1354,6 +1385,7 @@ def render_site(repo_root: Path) -> Path:
                 "html_name": html_name,
                 "data_tags": ",".join(tags),
                 "doc_type": doc_type,
+                "stale": "true" if stale_days else "false",
             }
         )
         docs.append(doc)
@@ -1370,6 +1402,8 @@ def render_site(repo_root: Path) -> Path:
             "doc_type": doc_type,
             "slug": Path(path).stem,
         }
+        if stale_days:
+            entry["stale"] = 1  # absent, not false, when fresh — this ships on every page load
         if body_cap is not None:
             entry["body"] = _search_body(content, body_cap)
         search_entries.append(entry)
@@ -1385,7 +1419,10 @@ def render_site(repo_root: Path) -> Path:
             "viewer's own search box matches titles and excerpts only. Run `specky serve` and "
             "browse over http:// for full-text search against the index.",
         )
-    rail_html = _render_rail(domains, tag_chips, feature_count > 0, workflow_count > 0)
+    stale_count = sum(1 for d in docs if d["stale_days"])
+    rail_html = _render_rail(
+        domains, tag_chips, feature_count > 0, workflow_count > 0, stale_count > 0
+    )
 
     any_mermaid_source = False
     any_mermaid_rendered = False
