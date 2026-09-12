@@ -103,7 +103,28 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def connect(repo_root: Path) -> sqlite3.Connection:
+    """Open (creating if needed) this repo's index, with the schema migrated forward.
+
+    Every writer and reader in specky goes through here, and they genuinely overlap: the
+    post-commit hook writes `micro_docs`/`commit_links` while a `specky serve` process is
+    answering questions out of the same file, and `specky index` rewrites both FTS tables
+    wholesale. Under the default rollback journal a reader blocks the writer and the loser gets
+    `database is locked` immediately, which surfaces as a failed hook or a 500 from the chat
+    server for no reason a user can act on. Hence:
+
+    - WAL, so readers never block the writer and vice versa. Set per-database and persistent, so
+      this is a one-time switch; on a filesystem that can't support it (some network mounts, no
+      shared memory) SQLite just reports back the mode it kept, which is why the result is
+      ignored rather than checked.
+    - `busy_timeout`, so two *writers* — a hook firing mid-`specky index` — wait their turn
+      instead of failing at once.
+    - `synchronous=NORMAL`, safe under WAL: a crash can lose the last transactions but can't
+      corrupt the file, and every table here is derived data that `specky index` rebuilds.
+    """
     conn = sqlite3.connect(index_db_path(repo_root))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA_SQL)
     _migrate(conn)
     return conn

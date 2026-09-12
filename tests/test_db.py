@@ -61,6 +61,42 @@ def test_connect_is_idempotent_and_creates_expected_tables(tmp_repo):
     assert {"documents", "documents_fts", "commits", "commits_fts", "micro_docs", "commit_links"} <= names
 
 
+def test_the_index_is_opened_in_wal_with_a_busy_timeout(tmp_repo):
+    conn = db.connect(tmp_repo)
+    try:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    finally:
+        conn.close()
+
+
+def test_a_reader_and_a_writer_can_hold_the_index_at_the_same_time(tmp_repo):
+    """The post-commit hook writes micro_docs into the same file a running `specky serve` is
+    reading, and `specky index` rewrites both FTS tables wholesale. Under the default rollback
+    journal, an open read transaction blocks the writer — it waits out `busy_timeout` and then
+    fails with `database is locked`, which is a broken hook or a 500 from the chat server for no
+    reason the user can act on. WAL is what makes both sides succeed."""
+    reader = db.connect(tmp_repo)
+    writer = db.connect(tmp_repo)
+    try:
+        writer.execute("INSERT INTO micro_docs (sha, summary, created_at) VALUES ('a','one','t')")
+        writer.commit()
+
+        reader.execute("BEGIN")  # deferred; the SELECT below is what takes the read lock
+        assert reader.execute("SELECT COUNT(*) FROM micro_docs").fetchone()[0] == 1
+
+        writer.execute("INSERT INTO micro_docs (sha, summary, created_at) VALUES ('b','two','t')")
+        writer.commit()
+
+        # The reader keeps its snapshot until it ends its transaction, then sees the new row.
+        assert reader.execute("SELECT COUNT(*) FROM micro_docs").fetchone()[0] == 1
+        reader.rollback()
+        assert reader.execute("SELECT COUNT(*) FROM micro_docs").fetchone()[0] == 2
+    finally:
+        reader.close()
+        writer.close()
+
+
 def test_migrate_recreates_an_fts_table_with_a_stale_column_set(tmp_repo):
     """FTS5 tables can't be ALTERed, so `_migrate` drops and recreates one whose columns
     drifted — the next `specky index` refills it."""
