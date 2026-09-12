@@ -34,3 +34,30 @@ jobs:
       # are all offline.
       - name: smoke test
         run: scripts/smoke-test.sh
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # specky check resolves a base revision and reads commit_links, neither of which
+          # survives a shallow clone.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-groups
+
+      # Dogfooding the gate this repo ships: fail if a change edits code that a doc describes
+      # without updating that doc. No AI provider involved — index and check are both offline.
+      - name: doc coverage
+        run: |
+          uv run specky index
+          uv run specky check --base "$BASE"
+        env:
+          # On a pull request the range is the whole branch; on a push to main it's that push,
+          # which is what makes the gate cover a direct push too. HEAD~1 covers the very first
+          # push to a branch, where there's no `before`.
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}

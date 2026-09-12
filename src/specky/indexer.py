@@ -7,10 +7,12 @@ a full rebuild can't drift from reality the way incremental updates could.
 from __future__ import annotations
 
 import subprocess
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
 from specky import frontmatter
+from specky.commit_doc import _AUTO_COMMIT_MARKER
 from specky.db import connect, fts_match_query
 
 
@@ -28,11 +30,13 @@ def _title_for(content: str, fallback: str) -> str:
 
 def _reset_tables(conn) -> None:
     # micro_docs and commit_links are written incrementally by commit_doc.py and aren't
-    # derived from a rescan, so they're deliberately left out of this wipe.
+    # derived from a rescan, so they're deliberately left out of this wipe. doc_files *is*
+    # derived (from commit_links plus git), so it gets rebuilt with everything else.
     conn.execute("DELETE FROM documents")
     conn.execute("DELETE FROM documents_fts")
     conn.execute("DELETE FROM commits")
     conn.execute("DELETE FROM commits_fts")
+    conn.execute("DELETE FROM doc_files")
 
 
 def index_documents(repo_root: Path, conn) -> int:
@@ -100,12 +104,161 @@ def index_commits(repo_root: Path, conn) -> int:
     return count
 
 
+# A commit that touched more files than this contributes none of them to doc_files. A bulk
+# rename, a vendored-dependency drop or an initial import can name thousands of files, and a doc
+# linked to such a commit is not evidence that the doc describes each of them — it would just
+# make `specky check` demand that one doc be updated for edits all over the repo.
+DOC_FILES_MAX_PER_COMMIT = 50
+
+# The same bound from the other side: a commit that rewrote more covering docs than this is a
+# batch regeneration or a bulk doc import, not one change being documented. Pairing every file it
+# touched with every doc it rewrote is what makes `specky check` demand an unrelated doc — on
+# specky's own repo, three such commits produced 12 of 13 reported violations.
+DOC_FILES_MAX_DOCS_PER_COMMIT = 3
+
+# specky's own outputs, which no doc "describes": the docs themselves, and the index/site under
+# .specky/ in a repo that forgot to gitignore it (check.py ignores these too, but a pair recorded
+# here would still be reported as coverage the repo doesn't have).
+_NOT_COVERABLE = ("specs/", ".specky/")
+
+
+HISTORY_PREFIX = "specs/history/"
+
+
+def _git(repo_root: Path, args: list[str], stdin: str | None = None) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=repo_root, input=stdin, capture_output=True, text=True, check=True
+    ).stdout
+
+
+def _split_log(log: str) -> list[list[str]]:
+    """`--format=%x01…` blocks as line lists. \x01 delimits commits because a filename can
+    contain anything a newline can't."""
+    return [lines for block in log.split("\x01") if (lines := block.splitlines())]
+
+
+def doc_commits(repo_root: Path) -> list[tuple[str, list[str], str, list[str]]]:
+    """`(sha, parents, subject, doc paths)` for every commit that touched `specs/`.
+
+    Path-limited, so both the walk and the file lists stay proportional to the number of
+    doc-producing commits rather than to the length of history.
+    """
+    log = _git(
+        repo_root, ["log", "--format=%x01%H%x1f%P%x1f%s", "--name-only", "--", "specs/"]
+    )
+    commits = []
+    for lines in _split_log(log):
+        sha, parents, subject = lines[0].split("\x1f", 2)
+        commits.append((sha, parents.split(), subject, [f for f in lines[1:] if f]))
+    return commits
+
+
+def _documented_revs(sha: str, parents: list[str], subject: str, docs: list[str]) -> list[str]:
+    """Which commits' code the docs in this commit describe.
+
+    specky's own flow splits the two: the code lands in one commit and the hook's follow-up
+    commits the docs, so a doc-sync commit's docs describe *other* commits. The history docs in
+    it say which — `specs/history/<sha>.md` is named for the commit it documents, and one
+    `specky sync` backfill can carry hundreds of them. Failing that, an auto-commit's docs
+    belong to the commit it followed. Any other commit (a hand-written doc, an agent that
+    committed code and docs together) describes itself.
+    """
+    if stems := [Path(d).stem for d in docs if d.startswith(HISTORY_PREFIX)]:
+        return stems
+    return parents[:1] if subject.startswith(_AUTO_COMMIT_MARKER) else [sha]
+
+
+def _resolve_revs(repo_root: Path, revs: list[str]) -> dict[str, str]:
+    """`{rev as written: full sha}`, dropping anything that isn't a commit in this repo.
+
+    History docs are named for an *abbreviated* sha, and one can be missing (a rebased or
+    dropped commit) or ambiguous. `cat-file --batch-check` resolves the whole batch in one
+    process and answers per input line, so neither case needs a git call of its own.
+    """
+    if not revs:
+        return {}
+    out = _git(repo_root, ["cat-file", "--batch-check"], stdin="\n".join(revs))
+    resolved = {}
+    for rev, line in zip(revs, out.splitlines()):
+        oid, _, kind = line.partition(" ")
+        if kind.startswith("commit"):
+            resolved[rev] = oid
+    return resolved
+
+
+def _code_files(repo_root: Path, shas: list[str]) -> dict[str, list[str]]:
+    """`{sha: code files it touched}` for the given commits, in one git process."""
+    if not shas:
+        return {}
+    log = _git(
+        repo_root,
+        ["log", "--no-walk", "--stdin", "--format=%x01%H", "--name-only"],
+        stdin="\n".join(shas),
+    )
+    return {
+        lines[0]: [f for f in lines[1:] if f and not f.startswith(_NOT_COVERABLE)]
+        for lines in _split_log(log)
+    }
+
+
+def index_doc_files(repo_root: Path, conn) -> int:
+    """Map code files to the feature/workflow docs that cover them, from git alone.
+
+    Derived from committed history on purpose: `.specky/` is gitignored, so anything read out of
+    this database instead — `commit_links`, which the post-commit hook writes — is empty on a
+    fresh clone, and `specky check` in CI would then have nothing to enforce. Everything here
+    comes from `git log`, so a CI run and a developer's checkout compute the same map.
+
+    Three git processes, none of them proportional to the length of history: the `specs/`-limited
+    walk, one `cat-file --batch-check` to resolve the history docs' abbreviated shas, and one
+    `git log --stdin` for the file lists of the commits they name.
+
+    Each pair carries how many separate commits produced it, because one commit pairing a file
+    with a doc is weak evidence — every file in that commit gets paired with it, including the
+    incidental ones. check.py is what decides how much recurrence a gate failure needs.
+    """
+    commits = doc_commits(repo_root)
+    if not commits:
+        return 0
+
+    # A history doc is a per-commit narrative and the root docs (MODULES, GLOSSARY, PRODUCT) are
+    # indexes; neither "covers" a code file. What's left is specs/<domain>/<topic>.md.
+    covering = {
+        sha: docs
+        for sha, _, _, all_docs in commits
+        if 0 < len(docs := [d for d in all_docs if d.count("/") >= 2 and not d.startswith(HISTORY_PREFIX)])
+        <= DOC_FILES_MAX_DOCS_PER_COMMIT
+    }
+    targets = {
+        sha: _documented_revs(sha, parents, subject, docs)
+        for sha, parents, subject, docs in commits
+        if sha in covering
+    }
+    resolved = _resolve_revs(repo_root, sorted({r for revs in targets.values() for r in revs}))
+    files_by_sha = _code_files(repo_root, sorted(set(resolved.values())))
+
+    pairs: Counter[tuple[str, str]] = Counter()
+    for sha, revs in targets.items():
+        for rev in revs:
+            files = files_by_sha.get(resolved.get(rev, ""), ())
+            if not files or len(files) > DOC_FILES_MAX_PER_COMMIT:
+                continue
+            pairs.update((f, doc_path) for doc_path in covering[sha] for f in files)
+
+    conn.executemany(
+        "INSERT OR REPLACE INTO doc_files (path, doc_path, commits) VALUES (?, ?, ?)",
+        [(path, doc_path, commits) for (path, doc_path), commits in pairs.items()],
+    )
+    return len(pairs)
+
+
 def run_index(repo_root: Path) -> tuple[int, int]:
     conn = connect(repo_root)
     try:
         _reset_tables(conn)
         doc_count = index_documents(repo_root, conn)
         commit_count = index_commits(repo_root, conn)
+        index_doc_files(repo_root, conn)
         conn.commit()
         return doc_count, commit_count
     finally:

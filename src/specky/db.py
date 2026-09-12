@@ -2,8 +2,9 @@
 
 One database per repo, at .specky/index.db. Tables: documents/commits mirror what's on
 disk and in git log; micro_docs and commit_links are written incrementally by
-commit_doc.py. FTS5 virtual tables are kept in sync by indexer.py's full-rebuild pass, not
-by triggers, since a `specky index` run is cheap enough to just redo from scratch each time.
+commit_doc.py; doc_files is derived from commit_links by indexer.py. FTS5 virtual tables are
+kept in sync by indexer.py's full-rebuild pass, not by triggers, since a `specky index` run is
+cheap enough to just redo from scratch each time.
 """
 
 from __future__ import annotations
@@ -51,6 +52,20 @@ CREATE TABLE IF NOT EXISTS commit_links (
     path TEXT NOT NULL,
     PRIMARY KEY (sha, path)
 );
+
+-- Which code files a doc covers, derived by indexer.py from commit_links + the file lists of
+-- those commits. Denormalized on purpose: `specky check` is then one indexed lookup per file in
+-- a diff, instead of a `git log -- <file>` process per file over the repo's whole history.
+-- `commits` is how many linked commits paired the two, which is how check.py tells a real link
+-- from two files that happened to ride in one commit.
+CREATE TABLE IF NOT EXISTS doc_files (
+    path TEXT NOT NULL,
+    doc_path TEXT NOT NULL,
+    commits INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (path, doc_path)
+);
+
+CREATE INDEX IF NOT EXISTS doc_files_by_doc ON doc_files (doc_path);
 """
 
 # Columns added to `documents`/`commits` after their initial release. connect() adds any
@@ -64,12 +79,29 @@ _ADDED_COLUMNS = {
     ],
 }
 
-# FTS5 virtual tables can't gain columns via ALTER TABLE. Their content is always fully
-# rebuilt by the next `specky index` run (see indexer.py), so it's safe to drop and
-# recreate one whose column set is stale.
-_FTS_TABLES = {
-    "documents_fts": "path, domain, title, content, tags",
-    "commits_fts": "sha, message, summary, tags",
+# Tables whose whole content is rebuilt by the next `specky index` run: the FTS5 virtual tables
+# (which can't gain columns via ALTER TABLE at all) and doc_files, which indexer.py derives from
+# commit_links. For these, a stale column set is fixed by dropping and recreating rather than by
+# an ALTER — there's no data to preserve, so there's no migration to get wrong.
+_REBUILT_TABLES = {
+    "documents_fts": (
+        ("path", "domain", "title", "content", "tags"),
+        "CREATE VIRTUAL TABLE documents_fts USING fts5(path, domain, title, content, tags);",
+    ),
+    "commits_fts": (
+        ("sha", "message", "summary", "tags"),
+        "CREATE VIRTUAL TABLE commits_fts USING fts5(sha, message, summary, tags);",
+    ),
+    "doc_files": (
+        ("path", "doc_path", "commits"),
+        "CREATE TABLE doc_files ("
+        "    path TEXT NOT NULL,"
+        "    doc_path TEXT NOT NULL,"
+        "    commits INTEGER NOT NULL DEFAULT 1,"
+        "    PRIMARY KEY (path, doc_path)"
+        ");"
+        "CREATE INDEX doc_files_by_doc ON doc_files (doc_path);",
+    ),
 }
 
 
@@ -93,13 +125,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if name not in existing:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
-    for table, columns in _FTS_TABLES.items():
-        info = conn.execute(f"PRAGMA table_info({table})").fetchall()
-        current = [row[1] for row in info]
-        expected = [c.strip() for c in columns.split(",")]
+    for table, (expected, create_sql) in _REBUILT_TABLES.items():
+        current = tuple(row[1] for row in conn.execute(f"PRAGMA table_info({table})"))
         if current and current != expected:
             conn.execute(f"DROP TABLE {table}")
-            conn.execute(f"CREATE VIRTUAL TABLE {table} USING fts5({columns})")
+            conn.executescript(create_sql)
 
 
 def connect(repo_root: Path) -> sqlite3.Connection:

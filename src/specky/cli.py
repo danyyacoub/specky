@@ -72,6 +72,18 @@ def _doctor(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _check(args: argparse.Namespace) -> None:
+    import json
+
+    from specky.check import report_lines, run_check
+    from specky.db import repo_root
+
+    report = run_check(repo_root(), base=args.base, since=args.since)
+    print(json.dumps(report.as_dict(), indent=2) if args.json else "\n".join(report_lines(report)))
+    if report.violations and not args.advisory:
+        sys.exit(1)
+
+
 def _setup_diagrams(args: argparse.Namespace) -> None:
     from specky.mermaid_tool import setup
 
@@ -188,6 +200,21 @@ def build_parser() -> argparse.ArgumentParser:
         "Check this repo's specky setup — toolchain, config, hook, index, site",
         _doctor,
     ).add_argument("--json", action="store_true", help="Machine-readable output")
+    check_cmd = command(
+        "check",
+        "Fail if changed code has a doc describing it that this range didn't update",
+        _check,
+    )
+    check_cmd.add_argument(
+        "--base",
+        metavar="REV",
+        help="Compare against REV (default: origin/HEAD if it resolves, else HEAD~1)",
+    )
+    check_cmd.add_argument("--since", metavar="REV|DATE", help='e.g. v1.2.0 or "2 weeks ago"')
+    check_cmd.add_argument(
+        "--advisory", action="store_true", help="Print the same report but always exit 0"
+    )
+    check_cmd.add_argument("--json", action="store_true", help="Machine-readable output")
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")
     command("render-html", "Render the static HTML doc site", _render_html)

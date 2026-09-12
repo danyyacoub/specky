@@ -25,6 +25,10 @@ uv run specky sync --dry-run     # ...or list what it would document first, call
                                  # (--since REV|DATE, --limit N narrow it; --all-branches widens
                                  #  it past HEAD; --yes skips the confirmation a >25-commit
                                  #  backfill stops for)
+uv run specky check              # CI gate: exit 1 if changed code has a doc describing it that
+                                 # this range didn't update. No AI, no history walk. --base REV /
+                                 # --since REV|DATE pick the range, --advisory reports and exits 0,
+                                 # --json for annotations. Needs `specky index` first
 uv run specky index              # rebuild .specky/index.db (FTS5) from specs/ + git log
 uv run specky search "<query>"   # keyword search over the index
 uv run specky render-html        # write static site to .specky/site/index.html
