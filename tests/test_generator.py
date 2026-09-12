@@ -206,6 +206,24 @@ def test_sync_feature_doc_writes_doc_frontmatter_and_index(tmp_repo):
     assert "billing/refund-flow.md" in (tmp_repo / "specs" / "MODULES.md").read_text()
 
 
+def test_a_frontmatter_block_the_model_echoed_back_is_not_written_twice(tmp_repo):
+    """Regression: a commit that touches a doc under specs/ carries that doc's own frontmatter in
+    its diff, so the model copies a `---` block into its answer — and `render()` then prepended a
+    second one, leaving a doc whose first block is what every reader and the indexer sees."""
+    provider = FakeProvider(
+        [
+            '{"skip": false, "domain": "billing", "topic": "refund-flow", '
+            '"purpose": "p", "type": "workflow", "tags": ["refunds"]}',
+            "---\ntype: feature\ntags: [copied, from, the, diff]\n---\n\n# Billing — Refund Flow\n",
+        ]
+    )
+    text = sync_feature_doc(tmp_repo, _commit(), provider).read_text()
+
+    assert text.count("---\n") == 2  # one block: its opening and closing fence
+    assert text.startswith("---\ntype: workflow\ntags: [refunds]\n---\n")  # classification wins
+    assert "copied" not in text
+
+
 def test_sync_feature_doc_returns_none_when_skipped(tmp_repo):
     assert sync_feature_doc(tmp_repo, _commit(), FakeProvider('{"skip": true}')) is None
 

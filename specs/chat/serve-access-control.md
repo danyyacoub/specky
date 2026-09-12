@@ -4,12 +4,6 @@ tags: [chat, security, configuration]
 related: [chat/local-rag-server]
 ---
 
----
-type: feature
-tags: [chat, security, configuration]
-related: [chat/local-rag-server]
----
-
 # Chat — Serve Access Control
 
 ## What It Does

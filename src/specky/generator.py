@@ -221,7 +221,12 @@ def generate_feature_doc(
         + "\nOutput ONLY the final markdown content of the doc file, nothing else "
         "(no commentary, no code fences around it)."
     )
-    return _strip_code_fence(provider.generate(prompt)) + "\n"
+    # Strip any frontmatter block the model produced: `sync_feature_doc` renders the real one
+    # from this run's classification, and a second block would land on top of it. It happens for
+    # a concrete reason — a commit that adds or edits a doc under specs/ carries that doc's own
+    # frontmatter in its diff, and the model copies what it sees there into its output.
+    _, body = frontmatter.parse(_strip_code_fence(provider.generate(prompt)))
+    return body + "\n"
 
 
 def update_modules_index(repo_root: Path, domain: str, doc_rel_path: str, purpose: str) -> None:
