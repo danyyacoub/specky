@@ -42,9 +42,9 @@ def run_init(
         elif kind == "openai-compatible":
             config = {
                 "provider": "openai-compatible",
-                "base_url": input_fn("Base URL: ").strip(),
-                "model": input_fn("Model: ").strip(),
-                "api_key_env": input_fn("Env var holding the API key: ").strip(),
+                "base_url": input_fn("Base URL (e.g. https://api.deepseek.com): ").strip(),
+                "model": input_fn("Model (e.g. deepseek-chat): ").strip(),
+                "api_key_env": input_fn("Env var holding the API key (e.g. DEEPSEEK_API_KEY): ").strip(),
             }
         elif kind == "command":
             config = {

@@ -11,7 +11,7 @@ Every commit you make automatically gets a one-paragraph AI-generated summary de
 
 ## How It Works
 
-1. **Configure AI provider** — Run `specky init` and choose your AI backend (Anthropic, OpenAI-compatible, or a local command). Specky validates the choice with a test call before saving it to specky.toml.
+1. **Configure AI provider** — Run `specky init` and choose your AI backend (Anthropic, OpenAI-compatible — e.g. DeepSeek — or a local command). Specky validates the choice with a test call before saving it to specky.toml.
 
 2. **Install git hook** — Run `specky install-git-hook` to register a post-commit hook that fires automatically after every commit, regardless of which agent (or none) created it.
 
