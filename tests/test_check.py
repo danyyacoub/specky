@@ -229,6 +229,24 @@ def test_documenting_the_change_in_the_same_domain_satisfies_the_gate(covered):
     assert run_check(covered, base=base).violations == ()
 
 
+def test_updating_one_of_several_covering_docs_is_enough(tmp_repo):
+    """A file described by several docs gets changed for one reason at a time. Demanding an edit to
+    every doc that mentions it is how a gate teaches people to write filler."""
+    other = "specs/shipping/labels.md"
+    for i in range(2):
+        sha = _commit(tmp_repo, f"work {i}", {"src/app.py": f"v{i}\n"})
+        _document(tmp_repo, sha, docs={DOC: f"{DOC_BODY}{i}\n", other: f"# Labels\n{i}\n"})
+    run_index(tmp_repo)
+    base = git(tmp_repo, "rev-parse", "HEAD").strip()
+    _commit(
+        tmp_repo, "change the code, update one doc", {"src/app.py": "v9\n", other: "# Labels\n9\n"}
+    )
+
+    report = run_check(tmp_repo, base=base)
+    assert set(_map(tmp_repo)) == {("src/app.py", DOC), ("src/app.py", other)}
+    assert report.violations == ()
+
+
 def test_a_doc_in_another_domain_does_not_satisfy_the_gate(covered):
     base = git(covered, "rev-parse", "HEAD").strip()
     _commit(

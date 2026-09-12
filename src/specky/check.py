@@ -154,6 +154,23 @@ def _domain(doc_path: str) -> str:
     return parts[1] if len(parts) > 2 else doc_path
 
 
+def _documented(pairs: list[tuple[str, int]], touched_docs: list[str]) -> bool:
+    """Did this range document a file's change anywhere that covers that file?
+
+    Two deliberate relaxations, both aimed at the same thing — a gate that asks for one honest doc
+    update rather than a checklist:
+
+    - *Any* covering doc counts, not all of them. A file described by several docs gets changed for
+      one reason at a time; demanding an edit to every doc that mentions it is how a gate teaches
+      people to write filler.
+    - A sibling doc in the same **domain** counts too. A domain is specky's unit of functional
+      grouping, and a change most often documents itself by adding a *new* doc, which can't be in
+      `doc_files` yet because nothing has linked it to a commit.
+    """
+    domains = {_domain(d) for d in touched_docs}
+    return any(doc in touched_docs or _domain(doc) in domains for doc, _ in pairs)
+
+
 def _git(repo_root: Path, *args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=repo_root, capture_output=True, text=True, check=True
@@ -239,16 +256,11 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
     code_files = sorted(f for f in changed if not f.startswith("specs/") and not config.ignores(f))
 
     covering = _covering_docs(repo_root, code_files)
-    # Satisfied by any doc in the covering doc's *domain*, not only that exact file. A domain is
-    # specky's unit of functional grouping, and a change that documents itself in the right one has
-    # done what this gate asks — most often by adding a new sibling doc, which can't yet be in
-    # `doc_files` because nothing has linked it to a commit.
-    touched_domains = {_domain(d) for d in touched_docs}
     stale_docs = [
         (path, doc_path, commits)
         for path in code_files
-        for doc_path, commits in covering.get(path, ())
-        if doc_path not in touched_docs and _domain(doc_path) not in touched_domains
+        if (pairs := covering.get(path)) and not _documented(pairs, touched_docs)
+        for doc_path, commits in pairs
     ]
     return Report(
         base=resolved,
