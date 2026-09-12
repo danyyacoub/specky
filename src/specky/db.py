@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS documents (
     doc_type TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '',
     related TEXT NOT NULL DEFAULT '',
+    -- `owner:` frontmatter verbatim: a name, team or handle a reader can go and ask. Never
+    -- generated, only ever hand-written, and preserved across regenerations by generator.py.
+    owner TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL,
     -- staleness.py's verdict, both empty unless this doc fell behind the code it covers:
     -- when the doc last changed, and when its code last changed.
@@ -106,6 +109,7 @@ _ADDED_COLUMNS = {
         ("doc_type", "TEXT NOT NULL DEFAULT ''"),
         ("tags", "TEXT NOT NULL DEFAULT ''"),
         ("related", "TEXT NOT NULL DEFAULT ''"),
+        ("owner", "TEXT NOT NULL DEFAULT ''"),
         ("stale_since", "TEXT NOT NULL DEFAULT ''"),
         ("last_code_change", "TEXT NOT NULL DEFAULT ''"),
     ],

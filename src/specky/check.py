@@ -8,9 +8,9 @@ violation is a code file whose covering doc no commit in the range updated.
 Fails by default — a doc gate that only warns is a doc gate nobody notices — with `--advisory`
 to print the identical report and exit 0, which is how a repo adopts this before it's clean.
 Everything else it reports (commits with no history doc, changed files with no doc at all, docs
-that had already fallen behind their code per staleness.py, the coverage figure) is advice and
-never affects the exit code: those are states a repo grows into, not regressions a contributor
-introduced.
+that had already fallen behind their code per staleness.py, docs with no `owner:` to ask, the
+coverage figure) is advice and never affects the exit code: those are states a repo grows into,
+not regressions a contributor introduced.
 """
 
 from __future__ import annotations
@@ -69,9 +69,9 @@ def _read_table(path: Path, keys: tuple[str, ...]) -> dict:
 # behind wasn't written by the hook and wasn't updated by hand either.
 STALE_AFTER_DAYS = 14
 
-# How many stale docs the text report lists before summarising the rest. A 300-file pull request
-# can pull in hundreds of covering docs, and a wall of advice buries the violations above it. The
-# JSON output carries all of them.
+# How many docs each advice section (stale, unowned) lists before summarising the rest. A 300-file
+# pull request can pull in hundreds of covering docs, and a wall of advice buries the violations
+# above it. The JSON output carries all of them.
 STALE_LIST_LIMIT = 10
 
 
@@ -147,6 +147,10 @@ class Report:
     # Stale docs elsewhere in the repo. A count, because listing every one of them would bury the
     # part of the report that's about the range in front of you.
     stale_elsewhere: int = 0
+    # Classified docs in play for this range that carry no `owner:`, so a reader who lands on them
+    # has nobody to ask. Advice, never a failure — an owner is a fact about the team, and no diff
+    # can be said to have broken it.
+    unowned: tuple[str, ...] = ()
 
     @property
     def covered(self) -> int:
@@ -171,6 +175,7 @@ class Report:
             "weak_links": self.weak_links,
             "stale": [s.as_dict() for s in self.stale],
             "stale_elsewhere": self.stale_elsewhere,
+            "unowned": list(self.unowned),
             "coverage": {
                 "covered": self.covered,
                 "changed": len(self.code_files),
@@ -295,6 +300,23 @@ def _stale_docs(repo_root: Path) -> dict[str, int]:
     return {path: days_behind(since, code) for path, since, code in rows}
 
 
+def _unowned_docs(repo_root: Path) -> set[str]:
+    """Classified docs with an empty `owner:`.
+
+    Only classified ones (`doc_type != ''`): `specs/history/` holds one doc per commit, whose owner
+    is the commit's author and which nobody is meant to hand-edit, so asking those to name an owner
+    would be thousands of lines of advice about docs that don't want it.
+    """
+    conn = connect(repo_root)
+    try:
+        rows = conn.execute(
+            "SELECT path FROM documents WHERE doc_type != '' AND owner = ''"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {path for (path,) in rows}
+
+
 def run_check(repo_root: Path, base: str | None = None, since: str | None = None) -> Report:
     config = CheckConfig.load(repo_root)
     resolved = resolve_base(repo_root, base=base, since=since)
@@ -321,6 +343,10 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
     relevant = sorted(
         (d for d in covers_range if d not in touched_docs), key=lambda d: (-stale[d], d)
     )
+    # Scoped the same way, plus the docs this range edited: someone with the doc already open is
+    # exactly who can add the missing line, and the rest of the repo's unowned docs aren't this
+    # pull request's business.
+    unowned = _unowned_docs(repo_root)
     return Report(
         base=resolved,
         code_files=tuple(code_files),
@@ -333,6 +359,7 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
         weak_links=sum(1 for _, _, commits in undocumented if commits < config.min_link_commits),
         stale=tuple(StaleDoc(doc, stale[doc]) for doc in relevant),
         stale_elsewhere=len(stale) - len(covers_range),
+        unowned=tuple(sorted(unowned & (in_range | set(touched_docs)))),
         uncovered=tuple(f for f in code_files if f not in covering),
         undocumented_commits=tuple(_undocumented_commits(repo_root, resolved)),
     )
@@ -369,6 +396,15 @@ def report_lines(report: Report) -> list[str]:
         lines += [f"  {s.doc_path} — {s.days} days behind" for s in shown]
         if len(report.stale) > STALE_LIST_LIMIT:
             lines.append(f"  … and {len(report.stale) - STALE_LIST_LIMIT} more")
+    if report.unowned:
+        lines.append("")
+        lines.append(
+            f"Note: {len(report.unowned)} doc(s) in this range have no `owner:` — add one to the "
+            "frontmatter and the viewer shows a 'Who to ask' line:"
+        )
+        lines += [f"  {path}" for path in report.unowned[:STALE_LIST_LIMIT]]
+        if len(report.unowned) > STALE_LIST_LIMIT:
+            lines.append(f"  … and {len(report.unowned) - STALE_LIST_LIMIT} more")
     if report.stale_elsewhere:
         lines.append("")
         lines.append(

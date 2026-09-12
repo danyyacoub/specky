@@ -81,6 +81,7 @@ ICON_SPRITE = """
 <symbol id="icon-sparkle" viewBox="0 0 20 20"><polygon points="10,3 12,8 17,10 12,12 10,17 8,12 3,10 8,8"/></symbol>
 <symbol id="icon-cycle" viewBox="0 0 20 20"><path d="M4 10 A6 6 0 0 1 10 4 H13"/><polyline points="11,2 13,4 11,6"/><path d="M16 10 A6 6 0 0 1 10 16 H7"/><polyline points="9,18 7,16 9,14"/></symbol>
 <symbol id="icon-link" viewBox="0 0 20 20"><line x1="7" y1="13" x2="13" y2="7"/><polyline points="9,7 13,7 13,11"/></symbol>
+<symbol id="icon-person" viewBox="0 0 20 20"><circle cx="10" cy="7" r="3.2"/><path d="M4 17 A6 6 0 0 1 16 17"/></symbol>
 <symbol id="icon-send" viewBox="0 0 20 20"><polygon points="3,10 17,4 12,17 9,11"/><line x1="9" y1="11" x2="17" y2="4"/></symbol>
 </svg>
 """
@@ -359,6 +360,12 @@ a { color: inherit; }
 }
 .breadcrumb .icon { color: var(--text-tertiary); }
 .doc-tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 20px; }
+.doc-owner {
+  display: flex; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--text-secondary);
+  margin: -8px 0 20px;
+}
+.doc-owner .icon { color: var(--text-tertiary); }
+.doc-owner strong { color: var(--text-primary); font-weight: 500; }
 .doc h1 { font-family: var(--font-display); font-size: 1.625rem; letter-spacing: -0.03em; margin-top: 0; }
 .doc h2 {
   font-size: 1.125rem; letter-spacing: -0.01em; margin-top: 32px; border-top: 1px solid var(--border);
@@ -1226,6 +1233,14 @@ def _doc_header(doc: dict) -> str:
         )
     if chips:
         parts.append(f'<div class="doc-tags">{"".join(chips)}</div>')
+    # Plain text, not a mailto: or an @-link — `owner:` is free-form (a name, a team, a Slack
+    # channel, a handle), and guessing which of those it is would produce broken links.
+    if doc["owner"]:
+        parts.append(
+            '<div class="doc-owner"><svg class="icon" aria-hidden="true">'
+            '<use href="#icon-person"></use></svg>Who to ask: '
+            f"<strong>{html.escape(doc['owner'])}</strong></div>"
+        )
     return "".join(parts)
 
 
@@ -1337,8 +1352,8 @@ def render_site(repo_root: Path) -> Path:
     conn = connect(repo_root)
     try:
         rows = conn.execute(
-            "SELECT path, domain, title, content, doc_type, tags, related, stale_since, "
-            "last_code_change FROM documents ORDER BY domain, title"
+            "SELECT path, domain, title, content, doc_type, tags, related, owner, "
+            "stale_since, last_code_change FROM documents ORDER BY domain, title"
         ).fetchall()
     finally:
         conn.close()
@@ -1361,7 +1376,9 @@ def render_site(repo_root: Path) -> Path:
     docs = []
     path_lookup: dict[str, dict] = {}
     all_tags: set[str] = set()
-    for path, domain, title, content, doc_type, tags_raw, related_raw, stale_since, last_code in rows:
+    for row in rows:
+        path, domain, title, content, doc_type, tags_raw, related_raw, owner = row[:8]
+        stale_since, last_code = row[8:]
         html_name = f"{_slug(path)}.html"
         tags = [t for t in tags_raw.split(",") if t]
         related = [r for r in related_raw.split(",") if r]
@@ -1377,6 +1394,7 @@ def render_site(repo_root: Path) -> Path:
             "doc_type": doc_type,
             "tags": tags,
             "related": related,
+            "owner": owner,
             "stale_days": stale_days,
         }
         domains.setdefault(domain, []).append(

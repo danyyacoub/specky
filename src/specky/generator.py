@@ -306,11 +306,14 @@ def sync_feature_doc(
 
     body = generate_feature_doc(existing_body, commit, classification.domain, classification.topic, provider)
 
-    # type/tags come from this run's classification; a hand-authored `related` list is
-    # preserved across regenerations since the AI is never asked to produce one.
+    # type/tags come from this run's classification; hand-authored `related` and `owner` values are
+    # preserved across regenerations since the AI is never asked to produce either. Losing an
+    # `owner:` to an automatic doc update would be worse than never having supported it — the hook
+    # runs on every commit, so it would silently strip the line within a day of someone adding it.
     meta: dict[str, str | list[str]] = {"type": classification.doc_type, "tags": classification.tags}
-    if existing_meta.get("related"):
-        meta["related"] = existing_meta["related"]
+    for key in ("related", "owner"):
+        if existing_meta.get(key):
+            meta[key] = existing_meta[key]
     content = frontmatter.render(meta, body)
 
     doc_path.parent.mkdir(parents=True, exist_ok=True)

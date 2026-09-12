@@ -16,7 +16,7 @@ def _classified_docs(repo_root: Path) -> list[dict]:
     conn = connect(repo_root)
     try:
         rows = conn.execute(
-            "SELECT path, domain, title, doc_type, tags, related FROM documents "
+            "SELECT path, domain, title, doc_type, tags, related, owner FROM documents "
             "WHERE doc_type != '' ORDER BY domain, title"
         ).fetchall()
         commit_counts = dict(conn.execute("SELECT path, COUNT(*) FROM commit_links GROUP BY path"))
@@ -30,9 +30,10 @@ def _classified_docs(repo_root: Path) -> list[dict]:
             "type": doc_type,
             "tags": [t for t in tags.split(",") if t],
             "related": [r for r in related.split(",") if r],
+            "owner": owner,
             "commits": commit_counts.get(path, 0),
         }
-        for path, domain, title, doc_type, tags, related in rows
+        for path, domain, title, doc_type, tags, related, owner in rows
     ]
 
 

@@ -58,11 +58,16 @@ def index_documents(repo_root: Path, conn) -> int:
         doc_type = meta.get("type", "") if isinstance(meta.get("type", ""), str) else ""
         tags = ",".join(meta.get("tags", []))
         related = ",".join(meta.get("related", []))
+        # A list-valued `owner: [a, b]` joins back to a string: everything downstream displays the
+        # owner rather than matching on it, so one field of free text is all it has to be.
+        owner = meta.get("owner", "")
+        owner = ", ".join(owner) if isinstance(owner, list) else str(owner)
 
         conn.execute(
-            "INSERT INTO documents (path, domain, title, content, doc_type, tags, related, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (rel_path, domain, title, content, doc_type, tags, related, updated_at),
+            "INSERT INTO documents "
+            "(path, domain, title, content, doc_type, tags, related, owner, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (rel_path, domain, title, content, doc_type, tags, related, owner, updated_at),
         )
         conn.execute(
             "INSERT INTO documents_fts (path, domain, title, content, tags) VALUES (?, ?, ?, ?, ?)",

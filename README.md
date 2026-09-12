@@ -63,6 +63,19 @@ specky sync --since v1.2.0 --limit 20
 specky sync --all-branches     # commits reachable from any ref, not just HEAD
 ```
 
+Add a line to any generated doc's frontmatter to say who to ask about it:
+
+```yaml
+---
+type: feature
+owner: Payments team          # a name, a team, a Slack channel — whatever a reader can go and ask
+---
+```
+
+The viewer shows it as a "Who to ask" line, `specky features` prints it, and `specky check` notes
+docs in a change that don't have one (advice — it never fails a build). Regeneration preserves it:
+nothing generates an owner, so the hook can't overwrite the one you wrote.
+
 For a whole area at once, ask your agent to run the bundled
 [`document-domain`](skills/document-domain/SKILL.md) skill (`/document-domain billing`): it reads
 the code, then writes the domain's docs directly, which produces better structure than

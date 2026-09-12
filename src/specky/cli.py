@@ -163,7 +163,8 @@ def _list_docs(args: argparse.Namespace) -> None:
         print(f"specky {args.command}: none yet — run `specky tag` to classify existing docs")
     for doc in docs:
         tags = f" [{', '.join(doc['tags'])}]" if doc["tags"] else ""
-        print(f"{doc['path']}  —  {doc['title']}{tags}  ({doc['commits']} commits)")
+        owner = f"  ask: {doc['owner']}" if doc["owner"] else ""
+        print(f"{doc['path']}  —  {doc['title']}{tags}  ({doc['commits']} commits){owner}")
 
 
 def _tags(args: argparse.Namespace) -> None:
