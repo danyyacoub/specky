@@ -1,6 +1,6 @@
 ---
-type: workflow
-tags: [documentation, cli]
+type: feature
+tags: [cli, documentation]
 ---
 
 # Documentation — Acceptance Test Scaffolding
