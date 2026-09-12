@@ -1,5 +1,5 @@
 ---
-type: feature
+type: workflow
 tags: [rendering]
 ---
 
@@ -7,7 +7,7 @@ tags: [rendering]
 
 ## What It Does
 
-Static diagram rendering at build time using Mermaid (SVG output via Node), auto-linking of glossary terms to hover tooltips, and styled markdown tables. Diagrams degrade to plain-text source if Node dependencies aren't set up; glossary linking and table styling always work.
+Static diagram rendering at build time using Mermaid (SVG output via Node), auto-linking of glossary terms to hover tooltips, and styled markdown tables. Diagrams degrade to plain-text source if dependencies aren't installed; glossary linking and table styling always work.
 
 ## How It Works
 
