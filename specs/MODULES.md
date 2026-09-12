@@ -2,17 +2,10 @@
 
 Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 
-## Core engine (`src/specky/`)
-
-| Doc | Purpose |
-|---|---|
-| _(none yet)_ | Indexing, AI provider, and rendering behavior will be documented here as each phase lands. |
-
-## Skills (`skills/`)
-
-| Doc | Purpose |
-|---|---|
-| _(none yet)_ | The `document-domain` skill itself is documented in [skills/document-domain/SKILL.md](../skills/document-domain/SKILL.md). |
+The engine's own behavior is documented per feature, in the sections below — Documentation,
+Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. The
+`document-domain` skill is documented in place, in
+[skills/document-domain/SKILL.md](../skills/document-domain/SKILL.md).
 
 ## Documentation
 

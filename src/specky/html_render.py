@@ -1,10 +1,20 @@
 """Static HTML doc site: a searchable, file://-browsable view of the specs/ tree for
 non-technical readers. No build step for the *reader* (fonts/JS fall back to system
-stacks) — every page is self-contained, so the whole site is just files you can open
-directly or zip up and send someone. Search is fully static (the index is inlined, not
-fetched). One thing reaches outside a page itself: the optional chat widget, which POSTs
-to a local `specky serve` companion on 127.0.0.1 (see chat_server.py) — browsing and
-search work identically whether or not that server is running.
+stacks) — the whole site is just files you can open directly or zip up and send someone.
+
+The `file://` promise is what shapes the asset layout. What a `file://` page can't do is
+`fetch()`/`XMLHttpRequest` (every local file is its own opaque origin), so the search index
+can't be loaded as JSON at runtime; what it *can* do is load a relative `<link href>` and
+`<script src>`. So the CSS, the JS, the search index and the glossary hover map all live in
+`assets/` — written once, shared by every page, no server and no build involved. Inlining
+them into every page instead cost ~45 KB of byte-identical duplication per page (a 2.0 MB
+site for 37 docs, against ~600 KB now). What stays inline per page is what actually differs:
+the doc body and the icon sprite, the latter because a cross-file `<use href="icons.svg#id">`
+*is* blocked on `file://`.
+
+One thing reaches outside a page itself: the optional chat widget, which POSTs to a local
+`specky serve` companion on 127.0.0.1 (see chat_server.py) — browsing and search work
+identically whether or not that server is running.
 
 A ```mermaid``` fence in a doc is rendered to a plain static `<svg>` at `render-html`
 time (via `vendor/mermaid-render/`, a Node tool wrapping `beautiful-mermaid` — see that
@@ -80,9 +90,10 @@ _RAIL_TEMPLATE = _env.from_string(
     '<summary><svg class="icon" aria-hidden="true">'
     '<use href="#icon-{{ d.icon }}"></use></svg>{{ d.name }}</summary><ul>'
     "{% for doc in d.docs %}"
-    '<li><a class="{{ "active" if doc.html_name == active else "" }}" '
-    'href="{{ doc.html_name }}" data-tags="{{ doc.data_tags }}" data-type="{{ doc.doc_type }}">'
-    "{{ doc.title }}</a></li>"
+    # No "active" class here: the rail is rendered once for the whole site, so NAV_JS marks
+    # the current page from location.pathname instead.
+    '<li><a href="{{ doc.html_name }}" data-tags="{{ doc.data_tags }}" '
+    'data-type="{{ doc.doc_type }}">{{ doc.title }}</a></li>'
     "{% endfor %}</ul></details>"
     "{% endfor %}"
     "{% if has_features or has_workflows or all_tags %}"
@@ -123,7 +134,8 @@ _CHAT_WIDGET = (
 _PAGE_TEMPLATE = _env.from_string(
     '<!doctype html><html><head><meta charset="utf-8">'
     '<meta name="color-scheme" content="light dark">'
-    "<title>{{ title }}</title><style>{{ css | safe }}</style></head>"
+    "<title>{{ title }}</title>"
+    '<link rel="stylesheet" href="assets/site.css"></head>'
     "<body>" + ICON_SPRITE + '<div class="shell">'
     '<div class="titlebar">'
     '<a class="brand" href="index.html">'
@@ -136,12 +148,12 @@ _PAGE_TEMPLATE = _env.from_string(
     "</div></div>"
     '<div class="body-row">{{ rail | safe }}'
     '<div class="content-pane"><div class="doc">{{ body | safe }}</div></div>'
-    "</div></div>" + _CHAT_WIDGET + "{{ glossary_island | safe }}"
-    "<script>const SPECKY_INDEX = {{ search_json | safe }};\n"
-    "const SPECKY_CHAT_PORT = {{ chat_port }};\n"
-    "{{ search_js | safe }}\n{{ filter_js | safe }}\n{{ chat_js | safe }}\n"
-    "{{ mention_js | safe }}\n{{ glossary_js | safe }}"
-    "</script></body></html>"
+    "</div></div>" + _CHAT_WIDGET
+    # site-data before app: app.js reads SPECKY_INDEX at load. Plain (non-module, non-defer)
+    # scripts run in document order, on file:// as well as over http.
+    + '<script src="assets/site-data.js"></script>'
+    '<script src="assets/app.js"></script>'
+    "</body></html>"
 )
 
 CSS = """
@@ -542,6 +554,19 @@ clearFilterBtn?.addEventListener('click', () => {
 });
 """
 
+# The sidebar is byte-identical on every page, so it's rendered once and the "you are here"
+# state is derived here instead of being baked into each page's HTML. Compares href values
+# rather than building a selector out of the filename — no escaping question to get wrong.
+NAV_JS = """
+const currentPage = decodeURIComponent(location.pathname.split('/').pop()) || 'index.html';
+const currentLink = [...document.querySelectorAll('.sidebar .domain-group a')]
+  .find((a) => a.getAttribute('href') === currentPage);
+if (currentLink) {
+  currentLink.classList.add('active');
+  currentLink.closest('details')?.setAttribute('open', '');
+}
+"""
+
 CHAT_JS = """
 const chatToggle = document.getElementById('chat-toggle');
 const chatPanel = document.getElementById('chat-panel');
@@ -708,8 +733,6 @@ chatInput?.addEventListener('keydown', (event) => {
 # host-messaging half glia needs for its sandboxed-iframe pages, which a plain page here
 # doesn't. One tooltip element reused for every hover, not one per term.
 GLOSSARY_JS = """
-const glDataEl = document.getElementById('gl-data');
-const GLOSSARY = glDataEl ? JSON.parse(glDataEl.textContent) : {};
 const tip = document.createElement('div');
 tip.className = 'tip';
 tip.setAttribute('role', 'tooltip');
@@ -718,7 +741,7 @@ document.body.appendChild(tip);
 
 function showGlossaryTip(target) {
   const key = (target.dataset.term || '').toLowerCase();
-  const entry = GLOSSARY[key];
+  const entry = SPECKY_GLOSSARY[key];
   if (!entry) return;
   tip.textContent = entry;
   tip.hidden = false;
@@ -736,6 +759,12 @@ for (const el of document.querySelectorAll('[data-term]')) {
   el.addEventListener('blur', hideGlossaryTip);
 }
 """
+
+# One file, in this order, deliberately: SEARCH_JS calls docMatchesFilters() over
+# `activeTags`/`activeType`, which FILTER_JS declares — same script scope, so the top-level
+# `const`s resolve by the time an event handler runs. Splitting these into separate <script>
+# tags would break that.
+APP_JS_BLOCKS = (SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, MENTION_JS, GLOSSARY_JS)
 
 _DOMAIN_ORDER_FIRST = "root"
 _DOMAIN_ORDER_LAST = "history"
@@ -777,8 +806,19 @@ def _domain_sort_key(domain: str) -> tuple[int, str]:
     return (1, domain)
 
 
-def _slug(domain: str, stem: str) -> str:
-    return f"{domain}-{stem}"
+def _slug(doc_path: str) -> str:
+    """A doc's repo-relative path flattened into one page name.
+
+    Uses the *whole* path under specs/, not just `<domain>-<stem>`: a domain is only the first
+    path component (see `indexer._domain_for`), so `specs/a/b/x.md` and `specs/a/c/x.md` share
+    a domain and a stem, and keying on those two alone made the second page overwrite the first
+    and silently vanish from the site. Root-level docs keep the `root-` prefix their domain
+    already gives them, which also keeps `specs/index.md` from colliding with the home page.
+    """
+    parts = Path(doc_path).relative_to("specs").with_suffix("").parts
+    if len(parts) == 1:
+        parts = ("root",) + parts
+    return "-".join(re.sub(r"[^A-Za-z0-9]+", "-", p).strip("-") for p in parts)
 
 
 def _excerpt(content: str, length: int = 160) -> str:
@@ -875,14 +915,6 @@ def link_glossary(fragment: str, glossary: dict[str, str]) -> str:
             continue
         out.append(pattern.sub(wrap, token))
     return "".join(out)
-
-
-def _glossary_island(hover: dict[str, str]) -> str:
-    """The lowercase-keyed hover map, as JSON the page's tooltip script reads."""
-    if not hover:
-        return ""
-    payload = json.dumps(hover, ensure_ascii=False).replace("</", "<\\/")
-    return f'<script type="application/json" id="gl-data">{payload}</script>'
 
 
 # --- diagrams: fenced ```mermaid``` -> static <svg> via vendor/mermaid-render ----------
@@ -1065,49 +1097,54 @@ def _home_body(
 
 def _render_rail(
     domains: dict[str, list[dict]],
-    active_html_name: str | None,
     tag_chips: list[dict],
     has_features: bool,
     has_workflows: bool,
 ) -> str:
+    """The sidebar, rendered once for the whole site — nothing in it varies per page (see
+    NAV_JS for the active-link state, which does)."""
     ordered = [
         {
             "name": domain,
             "icon": _icon_for_domain(domain),
             "docs": sorted(domains[domain], key=lambda d: d["title"]),
             # "history" entries are commit shas, not meaningful titles — collapsed by
-            # default so they don't crowd out the rest of the nav, unless the page
-            # you're on is one of them.
-            "open": domain != _DOMAIN_ORDER_LAST
-            or any(doc["html_name"] == active_html_name for doc in domains[domain]),
+            # default so they don't crowd out the rest of the nav. NAV_JS re-opens the
+            # group when the page you're on is one of them.
+            "open": domain != _DOMAIN_ORDER_LAST,
         }
         for domain in sorted(domains, key=_domain_sort_key)
     ]
     return _RAIL_TEMPLATE.render(
         domains=ordered,
-        active=active_html_name,
         all_tags=tag_chips,
         has_features=has_features,
         has_workflows=has_workflows,
     )
 
 
-def _page(
-    title: str, rail_html: str, body_html: str, search_json: str, glossary_island: str = ""
-) -> str:
-    return _PAGE_TEMPLATE.render(
-        title=title,
-        css=CSS,
-        rail=rail_html,
-        body=body_html,
-        search_js=SEARCH_JS,
-        filter_js=FILTER_JS,
-        search_json=search_json,
-        chat_js=CHAT_JS,
-        chat_port=CHAT_PORT,
-        mention_js=MENTION_JS,
-        glossary_js=GLOSSARY_JS,
-        glossary_island=glossary_island,
+def _page(title: str, rail_html: str, body_html: str) -> str:
+    return _PAGE_TEMPLATE.render(title=title, rail=rail_html, body=body_html)
+
+
+def _write_assets(site_dir: Path, search_entries: list[dict], hover: dict[str, str]) -> None:
+    """The three files every page links to. Written once per render; see the module
+    docstring for why they're separate files rather than inlined.
+
+    Everything here is site-wide, so nothing in it needs the "</" escaping an inline
+    <script> would: the JSON never lands inside HTML.
+    """
+    assets = site_dir / "assets"
+    assets.mkdir(parents=True, exist_ok=True)
+    (assets / "site.css").write_text(CSS)
+    (assets / "app.js").write_text("\n".join(APP_JS_BLOCKS))
+    # ASCII-escaped on purpose: a <script src> carries no encoding of its own, so an em dash
+    # in a doc title travels as \\uXXXX rather than relying on the page's charset reaching
+    # the asset.
+    (assets / "site-data.js").write_text(
+        f"const SPECKY_INDEX = {json.dumps(search_entries)};\n"
+        f"const SPECKY_GLOSSARY = {json.dumps(hover)};\n"
+        f"const SPECKY_CHAT_PORT = {CHAT_PORT};\n"
     )
 
 
@@ -1131,7 +1168,6 @@ def render_site(repo_root: Path) -> Path:
 
     glossary = load_glossary(repo_root)
     hover_map = {term.lower(): definition for term, definition in glossary.items()}
-    glossary_island = _glossary_island(hover_map)
 
     domains: dict[str, list[dict]] = {}
     search_entries = []
@@ -1139,7 +1175,7 @@ def render_site(repo_root: Path) -> Path:
     path_lookup: dict[str, dict] = {}
     all_tags: set[str] = set()
     for path, domain, title, content, doc_type, tags_raw, related_raw in rows:
-        html_name = f"{_slug(domain, Path(path).stem)}.html"
+        html_name = f"{_slug(path)}.html"
         tags = [t for t in tags_raw.split(",") if t]
         related = [r for r in related_raw.split(",") if r]
         all_tags.update(tags)
@@ -1174,13 +1210,12 @@ def render_site(repo_root: Path) -> Path:
             }
         )
 
-    # Escape "</" so a doc excerpt containing a literal "</script>" (e.g. a commit diff
-    # touching frontend code) can't break out of the inline <script> block it's embedded in.
-    search_json = json.dumps(search_entries).replace("</", "<\\/")
-
     feature_count = sum(1 for d in docs if d["doc_type"] == "feature")
     workflow_count = sum(1 for d in docs if d["doc_type"] == "workflow")
     tag_chips = [{"name": t, "cls": _tag_class(t)} for t in sorted(all_tags)]
+
+    _write_assets(site_dir, search_entries, hover_map)
+    rail_html = _render_rail(domains, tag_chips, feature_count > 0, workflow_count > 0)
 
     any_mermaid_source = False
     any_mermaid_rendered = False
@@ -1192,8 +1227,7 @@ def render_site(repo_root: Path) -> Path:
         any_mermaid_source = any_mermaid_source or has_source
         any_mermaid_rendered = any_mermaid_rendered or has_rendered
         body = _doc_header(doc) + body_html + _related_section(doc, path_lookup)
-        rail_html = _render_rail(domains, doc["html_name"], tag_chips, feature_count > 0, workflow_count > 0)
-        page = _page(doc["title"], rail_html, body, search_json, glossary_island)
+        page = _page(doc["title"], rail_html, body)
         (site_dir / doc["html_name"]).write_text(page)
 
     if any_mermaid_source and not any_mermaid_rendered:
@@ -1205,9 +1239,7 @@ def render_site(repo_root: Path) -> Path:
         )
 
     home_body = _home_body(len(docs), len(domains), feature_count, workflow_count, tag_chips)
-    home_rail = _render_rail(domains, None, tag_chips, feature_count > 0, workflow_count > 0)
-    home_page = _page("specky docs", home_rail, home_body, search_json, glossary_island)
+    home_page = _page("specky docs", rail_html, home_body)
     (site_dir / "index.html").write_text(home_page)
-    (site_dir / "search_index.json").write_text(json.dumps(search_entries, indent=2))
 
     return site_dir / "index.html"

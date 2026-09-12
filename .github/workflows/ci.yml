@@ -1,0 +1,36 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # smoke-test.sh indexes this repo's own git log, so the shallow default clone
+          # would leave it with a single commit to index.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - run: uv sync --all-groups
+
+      - name: pytest
+        run: uv run pytest
+
+      # Exercises the real CLI against this repo's own specs/ tree — the one thing the
+      # tmpdir-based tests can't cover. No AI provider needed: index/search/render-html
+      # are all offline.
+      - name: smoke test
+        run: scripts/smoke-test.sh

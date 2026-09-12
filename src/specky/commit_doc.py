@@ -19,12 +19,18 @@ firing doesn't recurse.
 from __future__ import annotations
 
 import subprocess
+import sys
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from specky.ai_provider import ConfigError, Provider, load_provider_from_toml
 from specky.db import connect, repo_root as _repo_root
+
+if TYPE_CHECKING:  # generator imports from this module, so it can only be imported lazily here
+    from specky.generator import ExistingDocs
 
 POST_COMMIT_HOOK = """#!/bin/sh
 # Installed by `specky install-git-hook`. Records a short AI micro-doc for this commit.
@@ -41,6 +47,12 @@ _AUTO_COMMIT_MARKER = "docs: sync specky docs [skip specky]"
 # Diffs are truncated to this many characters before going into a prompt — long enough for
 # context, short enough to keep prompt cost/latency predictable regardless of commit size.
 DIFF_TRUNCATE_CHARS = 8000
+
+# How many commits' micro-doc summaries `sync()` asks for at once, and the commit count above
+# which it stops to confirm first. Adopting specky on an existing repo means one `specky sync`
+# over its whole history — hundreds of billable calls — so that has to be a deliberate yes.
+SYNC_CONCURRENCY = 4
+SYNC_CONFIRM_THRESHOLD = 25
 
 
 @dataclass
@@ -110,49 +122,187 @@ def record_commit_link(repo_root: Path, sha: str, doc_rel_path: str) -> None:
         conn.close()
 
 
-def missing_shas(repo_root: Path) -> list[str]:
-    """Every commit sha in HEAD's history that doesn't yet have a specs/history/<sha8>.md."""
+def _is_revision(repo_root: Path, value: str) -> bool:
+    return (
+        subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", f"{value}^{{commit}}"],
+            cwd=repo_root,
+            capture_output=True,
+        ).returncode
+        == 0
+    )
+
+
+def pending_commits(
+    repo_root: Path, since: str | None = None, limit: int | None = None
+) -> list[tuple[str, str]]:
+    """(sha, subject) for every commit still needing a doc, oldest first.
+
+    Skipped: commits that already have a specs/history/<sha8>.md, and specky's own doc-sync
+    commits — `main()` refuses to document those when the hook fires, and a backfill has no
+    business paying to document them either.
+
+    `since` accepts either form a user is likely to reach for: a revision (`v1.2.0`, `HEAD~50`,
+    a sha) becomes `<since>..HEAD`, and anything else is handed to git as `--since=<date>`
+    ("2 weeks ago", "2026-01-01"). `limit` caps the result *after* filtering, so `--limit 5`
+    means five commits actually processed, not five inspected.
+    """
     history_dir = repo_root / "specs" / "history"
     done = {p.stem for p in history_dir.glob("*.md")} if history_dir.exists() else set()
-    all_shas = subprocess.run(
-        ["git", "rev-list", "--reverse", "HEAD"], capture_output=True, text=True, check=True
-    ).stdout.split()
-    return [sha for sha in all_shas if sha[:8] not in done]
+
+    # `git log` rather than `rev-list` for the subject line, which the progress and --dry-run
+    # output both want; the revision walking is identical.
+    args = ["git", "log", "--reverse", "--format=%H%x1f%s"]
+    if since and _is_revision(repo_root, since):
+        args.append(f"{since}..HEAD")
+    elif since:
+        args += [f"--since={since}", "HEAD"]
+    else:
+        args.append("HEAD")
+
+    log = subprocess.run(args, cwd=repo_root, capture_output=True, text=True, check=True).stdout
+    pending = []
+    for line in log.splitlines():
+        sha, _, subject = line.partition("\x1f")
+        if sha[:8] in done or subject.startswith(_AUTO_COMMIT_MARKER):
+            continue
+        pending.append((sha, subject))
+    return pending[:limit] if limit else pending
 
 
-def _sync_one(repo_root: Path, commit: Commit, provider: Provider) -> list[Path]:
+def _sync_one(
+    repo_root: Path,
+    commit: Commit,
+    provider: Provider,
+    existing: ExistingDocs | None = None,
+    label: str = "specky commit-doc",
+    summary: str | None = None,
+) -> list[Path]:
     """History log entry (changelog trail) + feature/workflow reference doc, if this commit
     affects one. The specs/<domain>/<topic>.md docs are the reference; specs/history/ is just
-    the supplementary per-commit trail alongside them."""
+    the supplementary per-commit trail alongside them.
+
+    `existing` lets a multi-commit caller (`sync()`) reuse one walk of specs/ across every
+    commit; the single-commit hook path leaves it out. `label` prefixes this commit's output —
+    `sync()` passes a `[12/431] abc1234` progress marker. `summary` is the micro-doc when the
+    caller already fetched it (see `_prefetch_summaries`)."""
     from specky.generator import sync_feature_doc
 
-    summary = generate_micro_doc(commit, provider)
+    if summary is None:
+        summary = generate_micro_doc(commit, provider)
     history_path = write_history_file(repo_root, commit, summary)
     record_micro_doc(repo_root, commit, summary)
-    print(f"specky commit-doc: wrote {history_path}")
+    print(f"{label}: wrote {history_path}")
     written = [history_path]
 
-    feature_doc_path = sync_feature_doc(repo_root, commit, provider)
+    feature_doc_path = sync_feature_doc(repo_root, commit, provider, existing)
     if feature_doc_path:
-        print(f"specky commit-doc: updated {feature_doc_path}")
+        print(f"{label}: updated {feature_doc_path}")
         written.append(feature_doc_path)
         record_commit_link(repo_root, commit.sha, str(feature_doc_path.relative_to(repo_root)))
     return written
 
 
-def sync() -> list[Path]:
+def _prefetch_summaries(
+    commits: list[Commit], provider: Provider
+) -> dict[str, Future[str]]:
+    """Ask for a batch of commits' micro-doc summaries concurrently.
+
+    Only this call is parallelised, and deliberately so. A commit's micro-doc depends on nothing
+    but that commit, whereas classification is fed the running `ExistingDocs` snapshot — run
+    those concurrently and every commit in a batch is told the same (stale) list of documented
+    features, which is exactly how a backfill ends up with three docs about one subject. So:
+    summaries fan out, classification and every write stay serial and in commit order.
+
+    Returns unresolved futures on purpose. The pool has already finished by the time this
+    returns, so `.result()` is instant — but calling it inside the caller's per-commit
+    try/except is what keeps one provider error from taking down the whole batch.
+    """
+    with ThreadPoolExecutor(max_workers=SYNC_CONCURRENCY) as pool:
+        return {c.sha: pool.submit(generate_micro_doc, c, provider) for c in commits}
+
+
+def _call_estimate(commits: int) -> str:
+    """Two provider calls per commit (micro-doc + classification), plus a third for each commit
+    that turns out to affect a documented feature — hence a range, not a number."""
+    return f"~{2 * commits}-{3 * commits} AI calls"
+
+
+def _confirm(count: int, assume_yes: bool) -> None:
+    if assume_yes or count < SYNC_CONFIRM_THRESHOLD:
+        return
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            f"{count} commits ({_call_estimate(count)}) is over the {SYNC_CONFIRM_THRESHOLD}-commit "
+            "confirmation threshold and stdin isn't a terminal — re-run with --yes, or narrow it "
+            "with --since/--limit"
+        )
+    answer = input(f"specky sync: {count} commits, {_call_estimate(count)}. Continue? [y/N] ")
+    if answer.strip().lower() not in ("y", "yes"):
+        raise RuntimeError("cancelled")
+
+
+def sync(
+    since: str | None = None,
+    limit: int | None = None,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+) -> list[Path]:
     """Generate a micro-doc + feature/workflow doc update for every commit that doesn't have a
     history entry yet. Idempotent for the history log — safe to re-run any time (e.g. after
     installing specky on a repo with existing history, or after a commit the post-commit hook
     missed because `specky` wasn't on PATH yet). Feature docs may be updated again on a re-sync
     if a later run reclassifies the same commit differently; the history log is what gates which
-    commits get (re-)processed at all."""
+    commits get (re-)processed at all.
+
+    A commit whose generation fails is reported and skipped, not fatal — one bad diff (or one
+    transient provider error) shouldn't abandon a backfill of several hundred commits that's
+    already half done.
+
+    `since`/`limit` narrow the range (see `missing_shas`), `dry_run` lists what would be
+    processed without contacting the provider at all, and `assume_yes` skips the confirmation
+    that a large backfill otherwise stops for.
+    """
+    from specky.generator import ExistingDocs
+
     repo_root = _repo_root()
+    pending = pending_commits(repo_root, since=since, limit=limit)
+    total = len(pending)
+    if not pending:
+        print("specky sync: already up to date")
+        return []
+
+    if dry_run:
+        print(f"specky sync: {total} commits to document, {_call_estimate(total)}")
+        for i, (sha, subject) in enumerate(pending, 1):
+            print(f"  [{i}/{total}] {sha[:8]} {subject}")
+        return []
+
+    _confirm(total, assume_yes)
     provider = load_provider_from_toml(repo_root / "specky.toml")  # let ConfigError surface
 
-    written = []
-    for sha in missing_shas(repo_root):
-        written += _sync_one(repo_root, _commit_info(sha), provider)
+    # One walk of specs/ for the whole backfill; sync_feature_doc folds each doc it writes back
+    # into it, so commit 400 is told about the doc commit 3 created.
+    existing = ExistingDocs.load(repo_root)
+
+    written: list[Path] = []
+    for start in range(0, total, SYNC_CONCURRENCY):
+        batch = [_commit_info(sha) for sha, _ in pending[start : start + SYNC_CONCURRENCY]]
+        summaries = _prefetch_summaries(batch, provider)
+        for offset, commit in enumerate(batch):
+            label = f"[{start + offset + 1}/{total}] {commit.sha[:8]}"
+            try:
+                written += _sync_one(
+                    repo_root,
+                    commit,
+                    provider,
+                    existing,
+                    label=label,
+                    summary=summaries[commit.sha].result(),
+                )
+            except Exception as exc:
+                print(f"{label}: skipped ({exc})")
+    print(f"specky sync: wrote {len(written)} files across {total} commits")
     return written
 
 
@@ -174,20 +324,26 @@ def _commit_doc_updates(repo_root: Path) -> None:
 
 
 def main() -> None:
-    repo_root = _repo_root()
-    commit = _commit_info("HEAD")
-    if commit.message.startswith(_AUTO_COMMIT_MARKER):
-        return  # this commit *is* our own doc-sync commit from below — don't recurse
-
-    config_path = repo_root / "specky.toml"
+    """post-commit hook entry point. Never raises: the commit it's documenting has already
+    landed, so every failure mode here — bad config, provider down, unparseable response — is
+    a printed line and a clean exit. The installed hook's `|| true` is a second belt; this is
+    the actual guarantee (see the module docstring)."""
     try:
-        provider = load_provider_from_toml(config_path)
-    except ConfigError as exc:
-        print(f"specky commit-doc: skipping ({exc})")
-        return
+        repo_root = _repo_root()
+        commit = _commit_info("HEAD")
+        if commit.message.startswith(_AUTO_COMMIT_MARKER):
+            return  # this commit *is* our own doc-sync commit from below — don't recurse
 
-    _sync_one(repo_root, commit, provider)
-    _commit_doc_updates(repo_root)
+        try:
+            provider = load_provider_from_toml(repo_root / "specky.toml")
+        except ConfigError as exc:
+            print(f"specky commit-doc: skipping ({exc})")
+            return
+
+        _sync_one(repo_root, commit, provider)
+        _commit_doc_updates(repo_root)
+    except Exception as exc:
+        print(f"specky commit-doc: failed, commit is unaffected ({type(exc).__name__}: {exc})")
 
 
 def install_git_hook() -> Path:

@@ -12,6 +12,14 @@ dependencies = [
     "markdown>=3.6",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [project.scripts]
 specky = "specky.cli:main"
 specky-mcp = "specky.mcp_server:main"

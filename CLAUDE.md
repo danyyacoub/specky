@@ -11,12 +11,16 @@ searchable HTML viewer w/ optional local AI chat companion. This repo dogfoods i
 
 ## Commands
 
-No build/lint/test suite yet. Dev loop: edit `src/specky/`, run CLI directly.
+No build or lint step. Dev loop: edit `src/specky/`, run CLI directly; `scripts/test.sh` for
+the pytest suite in `tests/`.
 
 ```bash
 uv run specky init               # configure AI provider, writes specky.toml (gitignored)
 uv run specky install-git-hook   # install real .git/hooks/post-commit hook
 uv run specky sync               # backfill history/feature docs for existing commits
+uv run specky sync --dry-run     # ...or list what it would document first, calling no provider
+                                 # (--since REV|DATE, --limit N narrow it; --yes skips the
+                                 #  confirmation a >25-commit backfill stops for)
 uv run specky index              # rebuild .specky/index.db (FTS5) from specs/ + git log
 uv run specky search "<query>"   # keyword search over the index
 uv run specky render-html        # write static site to .specky/site/index.html
@@ -28,10 +32,11 @@ uv run specky-mcp                # run MCP server directly over stdio, for local
 
 ## Scripts
 
-No test suite exists yet — these wrap the CLI for the checks/dev-loops that would
+`scripts/test.sh` is the test suite; the rest wrap the CLI for checks/dev-loops that would
 otherwise mean guessing which `specky` subcommands to chain. Run from repo root.
 
 ```bash
+scripts/test.sh [pytest args] # unit + integration tests against throwaway git repos in tmpdirs
 scripts/doctor.sh          # env/config snapshot: uv, specky.toml, git hook, index — run first when something's off
 scripts/smoke-test.sh      # end-to-end: index -> search -> render-html; run before committing engine changes
 scripts/launch.sh          # render-html, open the site, run `specky serve` in the foreground (Ctrl+C to stop)

@@ -24,6 +24,9 @@ from specky.commit_doc import DIFF_TRUNCATE_CHARS, Commit
 # changelog trail aren't feature/workflow reference docs.
 _UNTAGGED_DOMAINS = {"root", "history"}
 
+# A MODULES.md table row: `| [billing/refund-flow.md](billing/refund-flow.md) | Issue refunds |`.
+_MODULES_ROW = re.compile(r"^\|\s*\[[^\]]*\]\(([^)]+)\)\s*\|([^|]*)\|")
+
 TAG_GUIDANCE = """- "type": "feature" (a bounded capability) or "workflow" (a multi-step process).
 - "tags": 1-3 kebab-case tags describing the business/domain concept (e.g. "billing", "refunds",
   "onboarding") — not implementation details (not "sqlite", "regex", "fts5"). Prefer reusing one of
@@ -43,6 +46,12 @@ Respond with ONLY a JSON object, no other text, matching exactly one of these sh
 - "domain": the module/area this belongs to (e.g. "billing", "auth", "search").
 - "topic": a short kebab-case slug for the specific feature/workflow (e.g. "refund-flow", "rate-limits").
 - "purpose": one short sentence describing what that feature/workflow does, for an index table.
+- If one of the docs listed below already covers what this commit changed, answer with that doc's
+  exact "domain" and "topic" so it gets updated in place. Only invent a new domain/topic pair when
+  none of them is about this feature/workflow — a second doc on the same subject is a defect.
+
+Docs that already exist (domain/topic — what it covers):
+{existing_docs}
 """ + TAG_GUIDANCE + """
 
 Commit message:
@@ -90,22 +99,68 @@ def _strip_code_fence(text: str) -> str:
     return match.group(1) if match else text.strip()
 
 
-def _existing_tags(repo_root: Path) -> list[str]:
-    """Tags already in use across feature/workflow docs on disk, so classification prompts
-    can be steered toward reusing them instead of inventing near-duplicates."""
-    specs_root = repo_root / "specs"
-    if not specs_root.exists():
-        return []
+def _doc_title(body: str, fallback: str) -> str:
+    return next((line.lstrip("#").strip() for line in body.splitlines() if line.startswith("#")), fallback)
 
-    tags: set[str] = set()
-    for md_path in specs_root.rglob("*.md"):
-        rel = md_path.relative_to(specs_root)
-        domain = rel.parts[0] if len(rel.parts) > 1 else "root"
-        if domain in _UNTAGGED_DOMAINS:
-            continue
-        meta, _ = frontmatter.parse(md_path.read_text())
-        tags.update(meta.get("tags", []))
-    return sorted(tags)
+
+def _modules_purposes(modules_path: Path) -> dict[str, str]:
+    """`{"billing/refund-flow.md": "Issue refunds"}` from MODULES.md's tables — the one place a
+    doc's one-line purpose is already written down."""
+    if not modules_path.exists():
+        return {}
+    rows = (_MODULES_ROW.match(line) for line in modules_path.read_text().splitlines())
+    return {m.group(1).strip(): m.group(2).strip() for m in rows if m}
+
+
+@dataclass
+class ExistingDocs:
+    """What's already documented, read off disk once per run.
+
+    Both prompts steer the model toward reusing what exists — an existing tag over a
+    near-duplicate, an existing domain/topic over a sibling doc on the same subject — so both
+    need this. It's a snapshot passed in rather than a lookup per prompt because the walk it
+    replaces ran once per doc inside backfill_tags' loop, re-reading every doc O(n^2) times.
+
+    Read from `specs/` rather than the `documents` table on purpose: the post-commit hook runs
+    before any re-index, so the index is routinely a commit behind what's on disk.
+    """
+
+    tags: set[str] = field(default_factory=set)
+    purposes: dict[str, str] = field(default_factory=dict)  # "domain/topic" -> one-liner
+
+    @classmethod
+    def load(cls, repo_root: Path) -> ExistingDocs:
+        snapshot = cls()
+        specs_root = repo_root / "specs"
+        if not specs_root.exists():
+            return snapshot
+
+        purposes = _modules_purposes(specs_root / "MODULES.md")
+        for md_path in sorted(specs_root.rglob("*.md")):
+            rel = md_path.relative_to(specs_root)
+            domain = rel.parts[0] if len(rel.parts) > 1 else "root"
+            if domain in _UNTAGGED_DOMAINS:
+                continue
+            meta, body = frontmatter.parse(md_path.read_text())
+            name = rel.with_suffix("").as_posix()
+            tags = meta.get("tags")
+            snapshot.tags.update(tags if isinstance(tags, list) else [])
+            # MODULES.md is the source of the purpose when it has a row; otherwise the doc's own
+            # H1 is the best one-liner available without asking the model about it.
+            snapshot.purposes[name] = purposes.get(f"{name}.md") or _doc_title(body, md_path.stem)
+        return snapshot
+
+    def record(self, name: str, purpose: str, tags: list[str]) -> None:
+        """Fold in a doc written during this run, so a later commit in the same `specky sync`
+        sees it as existing rather than inventing a second doc for the same feature."""
+        self.tags.update(tags)
+        self.purposes[name] = purpose or self.purposes.get(name, "")
+
+    def tags_line(self) -> str:
+        return ", ".join(sorted(self.tags)) or "(none yet)"
+
+    def docs_block(self) -> str:
+        return "\n".join(f"- {name} — {purpose}" for name, purpose in sorted(self.purposes.items())) or "(none yet)"
 
 
 def _parse_type_and_tags(data: dict) -> tuple[str, list[str]]:
@@ -114,10 +169,15 @@ def _parse_type_and_tags(data: dict) -> tuple[str, list[str]]:
     return doc_type, tags
 
 
-def classify_change(repo_root: Path, commit: Commit, provider: Provider) -> Classification:
-    existing_tags = ", ".join(_existing_tags(repo_root)) or "(none yet)"
+def classify_change(
+    repo_root: Path, commit: Commit, provider: Provider, existing: ExistingDocs | None = None
+) -> Classification:
+    existing = existing if existing is not None else ExistingDocs.load(repo_root)
     prompt = CLASSIFY_PROMPT.format(
-        message=commit.message, diff=commit.diff[:DIFF_TRUNCATE_CHARS], existing_tags=existing_tags
+        message=commit.message,
+        diff=commit.diff[:DIFF_TRUNCATE_CHARS],
+        existing_tags=existing.tags_line(),
+        existing_docs=existing.docs_block(),
     )
     raw = _strip_code_fence(provider.generate(prompt))
     try:
@@ -220,10 +280,16 @@ def update_modules_index(repo_root: Path, domain: str, doc_rel_path: str, purpos
     modules_path.write_text("\n".join(lines) + "\n")
 
 
-def sync_feature_doc(repo_root: Path, commit: Commit, provider: Provider) -> Path | None:
+def sync_feature_doc(
+    repo_root: Path, commit: Commit, provider: Provider, existing: ExistingDocs | None = None
+) -> Path | None:
     """Classify a commit and, if it affects a feature/workflow, generate or update its reference
-    doc under specs/<domain>/<topic>.md. Returns the doc path written, or None if skipped."""
-    classification = classify_change(repo_root, commit, provider)
+    doc under specs/<domain>/<topic>.md. Returns the doc path written, or None if skipped.
+
+    `existing` is the shared snapshot when a caller is walking many commits (see `sync()`);
+    left out, it's loaded for this one commit."""
+    existing = existing if existing is not None else ExistingDocs.load(repo_root)
+    classification = classify_change(repo_root, commit, provider, existing)
     if classification.skip:
         return None
 
@@ -247,6 +313,9 @@ def sync_feature_doc(repo_root: Path, commit: Commit, provider: Provider) -> Pat
 
     doc_rel_path = f"{classification.domain}/{classification.topic}.md"
     update_modules_index(repo_root, classification.domain, doc_rel_path, classification.purpose)
+    existing.record(
+        f"{classification.domain}/{classification.topic}", classification.purpose, classification.tags
+    )
     return doc_path
 
 
@@ -272,6 +341,10 @@ def backfill_tags(repo_root: Path, provider: Provider) -> list[Path]:
     if not specs_root.exists():
         return []
 
+    # One walk for the whole run; each doc we tag folds its own tags back in via record(), so a
+    # doc tagged early still steers the docs tagged after it toward the same vocabulary.
+    existing = ExistingDocs.load(repo_root)
+
     updated: list[Path] = []
     for md_path in sorted(specs_root.rglob("*.md")):
         rel = md_path.relative_to(specs_root)
@@ -283,11 +356,10 @@ def backfill_tags(repo_root: Path, provider: Provider) -> list[Path]:
         if meta.get("type"):
             continue
 
-        title = next(
-            (line.lstrip("#").strip() for line in body.splitlines() if line.startswith("#")), md_path.stem
+        title = _doc_title(body, md_path.stem)
+        prompt = TAG_PROMPT.format(
+            title=title, content=body[:DIFF_TRUNCATE_CHARS], existing_tags=existing.tags_line()
         )
-        existing_tags = ", ".join(_existing_tags(repo_root)) or "(none yet)"
-        prompt = TAG_PROMPT.format(title=title, content=body[:DIFF_TRUNCATE_CHARS], existing_tags=existing_tags)
         raw = _strip_code_fence(provider.generate(prompt))
         try:
             data = json.loads(raw)
@@ -297,5 +369,6 @@ def backfill_tags(repo_root: Path, provider: Provider) -> list[Path]:
         doc_type, tags = _parse_type_and_tags(data)
         meta.update({"type": doc_type, "tags": tags})
         md_path.write_text(frontmatter.render(meta, body))
+        existing.record(rel.with_suffix("").as_posix(), title, tags)
         updated.append(md_path)
     return updated
