@@ -17,9 +17,9 @@ One thing reaches outside a page itself: the optional chat widget, which POSTs t
 identically whether or not that server is running.
 
 A ```mermaid``` fence in a doc is rendered to a plain static `<svg>` at `render-html`
-time (via `vendor/mermaid-render/`, a Node tool wrapping `beautiful-mermaid` — see that
-directory's README) rather than shipping a diagram-rendering library to every reader.
-If Node or that tool's dependencies aren't set up, the fenced source is left as
+time (via the mermaid-render Node tool wrapping `beautiful-mermaid` — see mermaid_tool.py
+for which copy of it gets used) rather than shipping a diagram-rendering library to every
+reader. If Node or that tool's dependencies aren't set up, the fenced source is left as
 plain-text fallback rather than failing the whole render — same as any doc with no
 diagrams at all.
 
@@ -54,6 +54,7 @@ from pathlib import Path
 import markdown as md
 from jinja2 import Environment
 
+from specky import mermaid_tool
 from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
 
@@ -927,10 +928,10 @@ def link_glossary(fragment: str, glossary: dict[str, str]) -> str:
     return "".join(out)
 
 
-# --- diagrams: fenced ```mermaid``` -> static <svg> via vendor/mermaid-render ----------
+# --- diagrams: fenced ```mermaid``` -> static <svg> via the mermaid-render Node tool ----
+# Which copy of that tool gets used is `mermaid_tool`'s problem, not this module's: an installed
+# specky runs it out of ~/.cache/specky, a checkout out of vendor/. See that module's docstring.
 
-_VENDOR_DIR = Path(__file__).parent / "vendor"
-_MERMAID_TOOL_DIR = _VENDOR_DIR / "mermaid-render"
 _MERMAID_BLOCK = re.compile(r'<pre><code class="language-mermaid">(.*?)</code></pre>', re.DOTALL)
 _SVG_ROOT_WIDTH = re.compile(r'<svg[^>]*\swidth="([\d.]+)"')
 _SVG_IMPORT = re.compile(r"@import[^;]*;")
@@ -978,12 +979,13 @@ def _scrub_svg(svg: str) -> str:
 def render_mermaid_svg(source: str) -> str | None:
     """One mermaid source string rendered to a scrubbed `<svg>`, or `None`.
 
-    `None` covers every reason this can't happen — Node missing, `npm install` not run
-    in `vendor/mermaid-render/`, or the source itself failing to parse — and the caller's
+    `None` covers every reason this can't happen — Node missing, the tool's dependencies never
+    installed (`specky setup-diagrams`), or the source itself failing to parse — and the caller's
     response to all of them is the same: leave the fenced source as readable text rather
-    than failing the render. See that directory's README for the one-time setup step.
+    than failing the render.
     """
-    if not (_MERMAID_TOOL_DIR / "node_modules").exists():
+    tool_dir = mermaid_tool.tool_dir()
+    if tool_dir is None:
         return None
     payload = json.dumps({"source": source, "options": MERMAID_THEME})
     try:
@@ -992,7 +994,7 @@ def render_mermaid_svg(source: str) -> str | None:
             input=payload,
             capture_output=True,
             text=True,
-            cwd=_MERMAID_TOOL_DIR,
+            cwd=tool_dir,
             timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -1243,9 +1245,8 @@ def render_site(repo_root: Path) -> Path:
     if any_mermaid_source and not any_mermaid_rendered:
         print(
             "specky render-html: docs contain ```mermaid``` diagrams but none could be "
-            "rendered (fenced source left as-is). Run "
-            "`npm install --prefix src/specky/vendor/mermaid-render` (from the specky "
-            "checkout) once, then re-render.",
+            "rendered (fenced source left as-is). Run `specky setup-diagrams` once, then "
+            "re-render.",
         )
 
     home_body = _home_body(len(docs), len(domains), feature_count, workflow_count, tag_chips)

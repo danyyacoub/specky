@@ -57,6 +57,13 @@ def _render_html(args: argparse.Namespace) -> None:
     print(f"specky render-html: wrote {render_site(repo_root())}")
 
 
+def _setup_diagrams(args: argparse.Namespace) -> None:
+    from specky.mermaid_tool import setup
+
+    for line in setup(force=args.force):
+        print(line)
+
+
 def _serve(args: argparse.Namespace) -> None:
     from specky.chat_server import serve as run_serve
     from specky.db import repo_root
@@ -164,6 +171,13 @@ def build_parser() -> argparse.ArgumentParser:
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")
     command("render-html", "Render the static HTML doc site", _render_html)
+    command(
+        "setup-diagrams",
+        "Install the Node tool that renders ```mermaid``` diagrams (one-time, needs Node)",
+        _setup_diagrams,
+    ).add_argument(
+        "--force", action="store_true", help="Re-run npm install even if it looks up to date"
+    )
     serve_cmd = command("serve", "Serve the HTML viewer and its AI chat companion", _serve)
     serve_cmd.add_argument("--port", type=int, default=None)
     serve_cmd.add_argument(

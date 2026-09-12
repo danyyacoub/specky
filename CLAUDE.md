@@ -25,6 +25,8 @@ uv run specky sync --dry-run     # ...or list what it would document first, call
 uv run specky index              # rebuild .specky/index.db (FTS5) from specs/ + git log
 uv run specky search "<query>"   # keyword search over the index
 uv run specky render-html        # write static site to .specky/site/index.html
+uv run specky setup-diagrams     # one-time: npm install the mermaid renderer into ~/.cache/specky
+                                 # (--force redoes it); needed once per machine, not per repo
 uv run specky serve [--port N] [--host ADDR]  # serve .specky/site/ *and* the "Ask" widget's
                                  # chat endpoint from one port; access policy is `[serve]` in
                                  # specky.toml (open by default — see specs/chat/serve-access-control.md)
@@ -74,8 +76,11 @@ Key entry points:
   - ` ```mermaid ` fences render to a static `<svg>` at `render-html` *time* (server-side, via
     [`vendor/mermaid-render/`](src/specky/vendor/mermaid-render/), a Node tool wrapping
     `beautiful-mermaid`) — zero client JS shipped for diagrams. Needs a one-time
-    `npm install --prefix src/specky/vendor/mermaid-render`; without it, fenced source is left
-    as plain text rather than failing the render (`scripts/doctor.sh` checks this).
+    `specky setup-diagrams`; without it, fenced source is left as plain text rather than
+    failing the render (`scripts/doctor.sh` checks this). Which copy of the tool runs is
+    [`mermaid_tool.py`](src/specky/mermaid_tool.py)'s job — `$SPECKY_MERMAID_DIR`, then
+    `~/.cache/specky/mermaid-render`, then the in-package `vendor/` copy a checkout's own
+    `npm install` populates.
   - `specs/GLOSSARY.md` terms are auto-linked to a hover tooltip on first mention per page
     (`link_glossary()`), pure Python + a small vanilla-JS tooltip script — no new dependency.
   - Markdown tables are wrapped in a scrollable, zebra-striped `figure.tw` (`_wrap_tables()`).

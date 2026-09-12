@@ -8,15 +8,19 @@ dependencies — runs in plain Node, no jsdom/browser needed). Called by
 
 Not shipped to readers of the generated site — the output is a plain `<svg>` embedded
 in the page, no client-side JS. `node_modules/` here is gitignored, same as any other
-Node project's.
+Node project's — which is also why it isn't in the built wheel, and why *this* directory
+is only one of the places the tool may live. [`mermaid_tool.py`](../../mermaid_tool.py)
+owns that resolution: `$SPECKY_MERMAID_DIR`, then `~/.cache/specky/mermaid-render`, then
+this copy.
 
 One-time setup (needs Node — this is the only place in specky that does):
 
 ```bash
-npm install --prefix src/specky/vendor/mermaid-render
+specky setup-diagrams                             # any install; populates ~/.cache/specky
+npm install --prefix src/specky/vendor/mermaid-render   # or, in a checkout, straight into here
 ```
 
-If this hasn't been run, `render_mermaid_svg()` returns `None` and `html_render.py`
+If neither has been run, `render_mermaid_svg()` returns `None` and `html_render.py`
 leaves the fenced source as plain text instead of failing the render — same behavior as
 a doc with no diagrams. `specky render-html` prints a one-time hint if it detects this.
 

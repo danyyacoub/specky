@@ -24,10 +24,13 @@ else
 fi
 
 echo "== mermaid diagram rendering =="
-if [ -d src/specky/vendor/mermaid-render/node_modules ]; then
-  ok "vendor/mermaid-render dependencies installed"
+# Ask specky where it resolved the tool to rather than guessing a path: an installed specky uses
+# ~/.cache/specky, a checkout uses vendor/ (see src/specky/mermaid_tool.py).
+TOOL_DIR="$(uv run python -c 'from specky.mermaid_tool import tool_dir; print(tool_dir() or "")' 2>/dev/null || true)"
+if [ -n "$TOOL_DIR" ]; then
+  ok "mermaid renderer installed at $TOOL_DIR"
 else
-  warn "not set up (diagrams fall back to plain text) — run: npm install --prefix src/specky/vendor/mermaid-render"
+  warn "not set up (diagrams fall back to plain text) — run: uv run specky setup-diagrams"
 fi
 
 echo "== config =="

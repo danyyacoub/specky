@@ -78,8 +78,8 @@ its own `<link>`/`<script>` loads); the origin allowlist covers them.
 - Python 3.11+
 - [`uv`](https://docs.astral.sh/uv/)
 - Node (optional) — only for rendering ```mermaid``` diagrams in the HTML viewer. Run
-  `npm install --prefix src/specky/vendor/mermaid-render` once; without it, diagrams
-  fall back to plain-text source and everything else works as usual.
+  `specky setup-diagrams` once; without it, diagrams fall back to plain-text source and
+  everything else works as usual.
 
 ## Local install (Claude Code)
 

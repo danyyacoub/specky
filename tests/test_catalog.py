@@ -117,10 +117,11 @@ def test_a_bracket_in_a_title_no_longer_truncates_its_own_label(tmp_repo, write_
     """The whole point, and only the renderer proves it: `Billing [v2] (draft)` used to come out
     as a node reading `"Billing [v2` — everything from the `]` on lost, plus a stray quote, with
     no error to notice."""
-    from specky.html_render import _MERMAID_TOOL_DIR, render_mermaid_svg
+    from specky.html_render import render_mermaid_svg
+    from specky.mermaid_tool import tool_dir
 
-    if not (_MERMAID_TOOL_DIR / "node_modules").exists():
-        pytest.skip("mermaid tool dependencies not installed")
+    if tool_dir() is None:
+        pytest.skip("mermaid tool not installed — run `specky setup-diagrams`")
 
     write_doc(
         "billing/hostile.md",
