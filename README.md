@@ -110,6 +110,10 @@ specky serve   # viewer + chat on http://127.0.0.1:8420 — Ctrl+C to stop
 
 It serves `.specky/site/` too, so `http://127.0.0.1:8420/` is the same viewer with the widget
 talking to it same-origin — which is also how you'd share it over a port instead of a file path.
+Follow-ups work: the widget keeps one conversation per browser tab, so "why?" and "what about the
+other one?" resolve against what was already asked, even after clicking through to another doc.
+**New** starts over. The last few turns live in the server's memory and are dropped when it stops —
+nothing about a conversation is written to disk.
 Served pages get exact full-text search straight from the FTS5 index; the `file://` site falls back
 to its in-page index, and the widget tells the reader to start the server rather than failing
 silently. See [`[serve]`](#serve--the-chat-server) for who is allowed to talk to it.

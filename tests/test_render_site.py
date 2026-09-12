@@ -292,6 +292,25 @@ def test_the_api_base_starts_same_origin_on_a_served_page(site):
     assert "SPECKY_NOT_THE_API = new Set([404, 405, 501])" in app_js
 
 
+def test_the_chat_widget_carries_a_session_that_outlives_the_page(site):
+    """The viewer is many pages and the reader navigates mid-conversation, so the session id and
+    the transcript both live in sessionStorage — otherwise every follow-up starts cold."""
+    app_js = (site / "assets" / "app.js").read_text()
+    assert "body: JSON.stringify({ question, session: chatSession })" in app_js
+    assert "specky-chat-session" in app_js and "specky-chat-log" in app_js
+    # A file:// page (or a sandboxed frame) can refuse storage outright, and http:// on a real
+    # hostname isn't a secure context, so neither call may be made unguarded.
+    assert "window.sessionStorage.getItem" in app_js
+    assert "crypto?.randomUUID" in app_js
+
+
+def test_the_chat_panel_can_be_reset(site):
+    page = (site / "index.html").read_text()
+    app_js = (site / "assets" / "app.js").read_text()
+    assert 'id="chat-reset"' in page
+    assert "speckyFetch('/chat/reset'" in app_js
+
+
 def test_a_matched_body_shows_its_surrounding_context_in_the_result_row(site):
     app_js = (site / "assets" / "app.js").read_text()
     assert "SEARCH_CONTEXT_CHARS = 60" in app_js

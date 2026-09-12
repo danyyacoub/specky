@@ -16,6 +16,11 @@ the page can only ship a bounded slice of each doc (see `search_body_cap` in
 html_render.py), and that bound tightens as a repo grows — a served page gets exact
 whole-body search instead, with nothing downloaded up front.
 
+A `session` on a `/chat` request buys follow-up questions: the last few turns of that
+session are replayed to the provider so "why?" and "what about the other one?" mean
+something. The transcript lives in this process's memory and in nothing else — see
+`ConversationStore`.
+
 Access control lives in `[serve]` in specky.toml and defaults to open
 (`allow_origins = ["*"]`, no token) so a site served from another port or host keeps
 working without configuration. Open means what it says: any page in a reader's browser can
@@ -31,7 +36,10 @@ import json
 import mimetypes
 import re
 import secrets
+import threading
 import tomllib
+from collections import OrderedDict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -52,6 +60,19 @@ TOKEN_HEADER = "X-Specky-Token"
 # would be asking this process to serialize the whole index in one response.
 SEARCH_LIMIT_MAX = 100
 
+# Turns of a conversation replayed to the provider. Enough for a chain of follow-ups, short
+# enough that the reader isn't paying for their whole afternoon on every question.
+HISTORY_TURNS = 6
+# Characters kept per question and per answer. Every stored turn is re-sent on every later
+# question in that conversation, so this bounds prompt cost as much as it bounds memory.
+HISTORY_CHARS = 800
+# Conversations held at once, least recently used dropped first. A session id is whatever the
+# caller made up, so without a cap this dict grows for as long as the process runs.
+MAX_SESSIONS = 64
+# Longer than any id the widget generates (a UUID is 36 characters). Past this, treat the id as
+# junk and answer statelessly rather than storing a key of arbitrary size.
+SESSION_ID_MAX = 64
+
 _SYSTEM_PROMPT = (
     "You are a documentation assistant for this codebase. Answer the user's question "
     "using ONLY the context below — doc excerpts and commit summaries pulled from the "
@@ -67,6 +88,69 @@ _SYSTEM_PROMPT = (
 # autocomplete (see MENTION_JS in html_render.py), stripped before retrieval/prompting.
 _MENTION_RE = re.compile(r"#(module|feature):([\w-]+)")
 _HTML_SNIPPET_RE = re.compile(r"```html\s*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Turn:
+    question: str
+    answer: str
+
+
+def _clip(text: str) -> str:
+    return text if len(text) <= HISTORY_CHARS else text[:HISTORY_CHARS].rstrip() + "…"
+
+
+class ConversationStore:
+    """The recent turns of each chat session, in this process's memory and nowhere else.
+
+    Deliberately not persisted. A conversation is worth remembering while the reader has the panel
+    open; writing it to `.specky/` would turn every question anyone asks into a file on disk that
+    nothing ever cleans up, in a directory that's meant to be disposable.
+
+    Every dimension a caller controls is capped: turns per session, characters per turn, and
+    sessions in total. The session id comes from the client, so none of them can be left open.
+    """
+
+    def __init__(self, max_turns: int = HISTORY_TURNS, max_sessions: int = MAX_SESSIONS) -> None:
+        self._turns: OrderedDict[str, list[Turn]] = OrderedDict()
+        self._max_turns = max_turns
+        self._max_sessions = max_sessions
+        # ThreadingHTTPServer answers each request on its own thread.
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def usable(session_id: str | None) -> bool:
+        """Whether an id is one worth keeping history under. Anything else — absent, not a string,
+        implausibly long — means this request is answered statelessly, as it was before sessions."""
+        return isinstance(session_id, str) and 0 < len(session_id) <= SESSION_ID_MAX
+
+    def history(self, session_id: str | None) -> tuple[Turn, ...]:
+        if not self.usable(session_id):
+            return ()
+        with self._lock:
+            turns = self._turns.get(session_id)
+            if turns is None:
+                return ()
+            self._turns.move_to_end(session_id)
+            return tuple(turns)
+
+    def record(self, session_id: str | None, question: str, answer: str) -> None:
+        if not self.usable(session_id):
+            return
+        with self._lock:
+            turns = self._turns.setdefault(session_id, [])
+            turns.append(Turn(_clip(question), _clip(answer)))
+            del turns[: -self._max_turns]
+            self._turns.move_to_end(session_id)
+            while len(self._turns) > self._max_sessions:
+                self._turns.popitem(last=False)
+
+    def forget(self, session_id: str | None) -> None:
+        """Drop a conversation. The widget's "New" button, so a reader isn't stuck talking to a
+        transcript that survived into a question about something else."""
+        if self.usable(session_id):
+            with self._lock:
+                self._turns.pop(session_id, None)
 
 
 def _parse_scope(question: str) -> tuple[str, dict | None]:
@@ -125,20 +209,34 @@ def retrieve_context(
     return context
 
 
-def _build_prompt(question: str, context: list[dict]) -> str:
+def _build_prompt(question: str, context: list[dict], history: Sequence[Turn] = ()) -> str:
     blocks = (
         "\n\n".join(f"[{c['source']}] {c['label']}\n{c['text']}" for c in context)
         if context
         else "(no matching docs or commits found in the index)"
     )
-    return f"{_SYSTEM_PROMPT}\n\nContext:\n{blocks}\n\nQuestion: {question}\nAnswer:"
+    # Above the context, and labelled for what it is: the transcript is there to resolve what "it"
+    # and "that one" refer to, while the answer still has to come out of the retrieved context. The
+    # system prompt says ONLY the context, so without that sentence a follow-up gets refused.
+    prior = ""
+    if history:
+        turns = "\n\n".join(f"Q: {t.question}\nA: {t.answer}" for t in history)
+        prior = (
+            "\nConversation so far — use it only to understand what the question refers to; the "
+            f"answer must still come from the context below:\n{turns}\n"
+        )
+    return f"{_SYSTEM_PROMPT}\n{prior}\nContext:\n{blocks}\n\nQuestion: {question}\nAnswer:"
 
 
-def answer_question(repo_root: Path, question: str) -> dict:
+def answer_question(repo_root: Path, question: str, history: Sequence[Turn] = ()) -> dict:
     question, scope = _parse_scope(question)
     context = retrieve_context(repo_root, question, scope=scope)
+    if not context and history:
+        # A follow-up is often too short to retrieve on at all ("why?", "and the other one?"). The
+        # previous question holds the words it left out, so ask the index again with those.
+        context = retrieve_context(repo_root, f"{history[-1].question} {question}", scope=scope)
     provider = load_provider_from_toml(repo_root / "specky.toml", "serve")
-    raw = provider.generate(_build_prompt(question, context))
+    raw = provider.generate(_build_prompt(question, context, history))
     answer, html_snippet = _extract_html_snippet(raw)
     result = {"answer": answer, "sources": sorted({c["source"] for c in context})}
     if html_snippet:
@@ -211,6 +309,9 @@ def _is_loopback(host: str) -> bool:
 
 def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestHandler]:
     site_dir = (repo_root / ".specky" / "site").resolve()
+    # One store per server, not per module: two servers in one process (a test, a second repo)
+    # shouldn't be able to see each other's conversations.
+    conversations = ConversationStore()
 
     class Handler(BaseHTTPRequestHandler):
         def _cors(self) -> None:
@@ -265,16 +366,27 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
         def do_POST(self) -> None:
             if not self._api_allowed():
                 return
-            if urlparse(self.path).path != "/chat":
+            path = urlparse(self.path).path
+            if path not in ("/chat", "/chat/reset"):
                 self._json(404, {"error": "not found"})
                 return
             length = int(self.headers.get("Content-Length", 0))
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
+                session = body.get("session")
+                session = session if isinstance(session, str) else None
+                if path == "/chat/reset":
+                    conversations.forget(session)
+                    self._json(200, {"reset": True})
+                    return
                 question = body.get("question", "").strip()
                 if not question:
                     raise ValueError("question is required")
-                self._json(200, answer_question(repo_root, question))
+                result = answer_question(
+                    repo_root, question, history=conversations.history(session)
+                )
+                conversations.record(session, question, result["answer"])
+                self._json(200, result)
             except Exception as exc:
                 self._json(400, {"error": str(exc)})
 

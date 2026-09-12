@@ -9,7 +9,9 @@ import pytest
 
 from specky import chat_server, db
 from specky.chat_server import (
+    ConversationStore,
     ServeConfig,
+    Turn,
     _build_prompt,
     _extract_html_snippet,
     _parse_scope,
@@ -165,6 +167,100 @@ def test_answer_question_returns_an_html_snippet_when_the_model_sends_one(indexe
     assert result["html_snippet"].startswith("<table>")
 
 
+# --- conversation memory ------------------------------------------------------------------
+
+
+def test_an_unknown_session_has_no_history():
+    assert ConversationStore().history("nobody") == ()
+
+
+def test_a_recorded_turn_comes_back_for_that_session():
+    store = ConversationStore()
+    store.record("s1", "how do refunds work?", "Like this.")
+    assert store.history("s1") == (Turn("how do refunds work?", "Like this."),)
+    assert store.history("s2") == ()  # conversations don't leak into each other
+
+
+def test_only_the_last_few_turns_are_kept():
+    """The cap is a cost bound, not a nicety: every kept turn is re-sent to the provider on every
+    later question in that conversation."""
+    store = ConversationStore(max_turns=2)
+    for n in range(4):
+        store.record("s1", f"q{n}", f"a{n}")
+    assert [t.question for t in store.history("s1")] == ["q2", "q3"]
+
+
+def test_a_long_turn_is_clipped_rather_than_stored_whole():
+    store = ConversationStore()
+    store.record("s1", "q" * 5000, "a" * 5000)
+    turn = store.history("s1")[0]
+    assert len(turn.question) == chat_server.HISTORY_CHARS + 1  # the ellipsis
+    assert turn.answer.endswith("…")
+
+
+def test_the_least_recently_used_conversation_is_dropped_first():
+    """A session id is whatever the caller sent, so the number of them has to be bounded — but
+    bounded in a way that drops the conversation nobody is still having."""
+    store = ConversationStore(max_sessions=2)
+    store.record("s1", "q1", "a1")
+    store.record("s2", "q2", "a2")
+    store.history("s1")  # s1 is the one still in use
+    store.record("s3", "q3", "a3")
+
+    assert store.history("s1") != ()
+    assert store.history("s2") == ()
+    assert store.history("s3") != ()
+
+
+@pytest.mark.parametrize("session", [None, "", "x" * (chat_server.SESSION_ID_MAX + 1), 17, {}])
+def test_an_unusable_session_id_is_answered_statelessly(session):
+    """No id, a junk id, or one long enough to be someone filling memory with keys: the request
+    still works, it just remembers nothing."""
+    store = ConversationStore()
+    store.record(session, "q", "a")
+    assert store.history(session) == ()
+
+
+def test_forget_drops_a_conversation():
+    store = ConversationStore()
+    store.record("s1", "q", "a")
+    store.forget("s1")
+    assert store.history("s1") == ()
+
+
+def test_a_prompt_without_history_is_unchanged():
+    """The stateless prompt is what every existing test and every cached response was built on."""
+    assert "Conversation so far" not in _build_prompt("q", [])
+
+
+def test_prior_turns_sit_above_the_context_and_are_labelled_as_reference_only():
+    prompt = _build_prompt(
+        "why?",
+        [{"source": "specs/a.md", "label": "A", "text": "body"}],
+        history=(Turn("how do refunds work?", "Like this."),),
+    )
+    assert "Q: how do refunds work?\nA: Like this." in prompt
+    assert prompt.index("Conversation so far") < prompt.index("Context:")
+    # The system prompt says to answer from the context ONLY, so a transcript above it has to say
+    # what it's for or the model refuses the follow-up.
+    assert "answer must still come from the context below" in prompt
+
+
+def test_a_follow_up_too_short_to_retrieve_on_reuses_the_previous_question(
+    indexed_repo, monkeypatch
+):
+    provider = FakeProvider("Because it does.")
+    monkeypatch.setattr(
+        chat_server, "load_provider_from_toml", lambda _path, _command="": provider
+    )
+
+    cold = answer_question(indexed_repo, "why?")
+    warm = answer_question(indexed_repo, "why?", history=(Turn("refund flow", "Like this."),))
+
+    assert cold["sources"] == []  # "why?" alone matches nothing in the index
+    assert "specs/billing/refund-flow.md" in warm["sources"]
+
+
 # --- [serve] configuration ---------------------------------------------------------------
 
 
@@ -276,14 +372,20 @@ def _request(port, method, path, *, origin=None, token=None, body=None):
 
 @pytest.fixture
 def answering(monkeypatch):
-    """Stub the whole retrieval+provider path: these tests are about access control."""
+    """Stub the whole retrieval+provider path: these tests are about access control and session
+    plumbing. Each entry is one `(question, history)` the handler passed down."""
     asked = []
-    monkeypatch.setattr(
-        chat_server,
-        "answer_question",
-        lambda _root, question: asked.append(question) or {"answer": "ok", "sources": []},
-    )
+
+    def fake(_root, question, history=()):
+        asked.append((question, tuple(history)))
+        return {"answer": f"answer to {question}", "sources": []}
+
+    monkeypatch.setattr(chat_server, "answer_question", fake)
     return asked
+
+
+def _questions(asked) -> list[str]:
+    return [question for question, _history in asked]
 
 
 def test_chat_answers_any_origin_under_the_default_config(tmp_repo, answering):
@@ -292,9 +394,9 @@ def test_chat_answers_any_origin_under_the_default_config(tmp_repo, answering):
             port, "POST", "/chat", origin="https://anywhere.example", body={"question": "refunds?"}
         )
     assert status == 200
-    assert json.loads(raw)["answer"] == "ok"
+    assert json.loads(raw)["answer"] == "answer to refunds?"
     assert headers["Access-Control-Allow-Origin"] == "*"
-    assert answering == ["refunds?"]
+    assert _questions(answering) == ["refunds?"]
 
 
 def test_a_disallowed_origin_gets_403_and_no_cors_headers(tmp_repo, answering):
@@ -339,12 +441,57 @@ def test_a_configured_token_is_required(tmp_repo, answering):
         right = _request(port, "POST", "/chat", token="s3cret", body={"question": "q"})
     assert (no_token[0], wrong[0], right[0]) == (403, 403, 200)
     assert chat_server.TOKEN_HEADER in json.loads(no_token[2])["error"]
-    assert answering == ["q"]  # only the authenticated call reached the provider
+    assert _questions(answering) == ["q"]  # only the authenticated call reached the provider
 
 
 def test_an_unknown_post_path_is_404_not_a_chat_call(tmp_repo, answering):
     with _running(tmp_repo) as port:
         assert _request(port, "POST", "/whatever", body={"question": "q"})[0] == 404
+    assert answering == []
+
+
+# --- sessions over HTTP -------------------------------------------------------------------
+
+
+def test_a_follow_up_on_the_same_session_carries_the_previous_turn(tmp_repo, answering):
+    with _running(tmp_repo) as port:
+        _request(port, "POST", "/chat", body={"question": "first", "session": "s1"})
+        _request(port, "POST", "/chat", body={"question": "second", "session": "s1"})
+    assert answering[0][1] == ()
+    assert answering[1][1] == (Turn("first", "answer to first"),)
+
+
+def test_two_sessions_do_not_see_each_other(tmp_repo, answering):
+    with _running(tmp_repo) as port:
+        _request(port, "POST", "/chat", body={"question": "mine", "session": "s1"})
+        _request(port, "POST", "/chat", body={"question": "theirs", "session": "s2"})
+    assert answering[1][1] == ()
+
+
+def test_a_request_with_no_session_stays_stateless(tmp_repo, answering):
+    """What a widget that couldn't get storage sends, and what curl sends. Still answered, just
+    with no memory."""
+    with _running(tmp_repo) as port:
+        _request(port, "POST", "/chat", body={"question": "first"})
+        _request(port, "POST", "/chat", body={"question": "second"})
+    assert [history for _q, history in answering] == [(), ()]
+
+
+def test_reset_clears_the_conversation(tmp_repo, answering):
+    with _running(tmp_repo) as port:
+        _request(port, "POST", "/chat", body={"question": "first", "session": "s1"})
+        status, _, raw = _request(port, "POST", "/chat/reset", body={"session": "s1"})
+        _request(port, "POST", "/chat", body={"question": "after", "session": "s1"})
+    assert (status, json.loads(raw)) == (200, {"reset": True})
+    assert answering[-1][1] == ()
+
+
+def test_reset_on_a_session_that_was_never_used_is_still_fine(tmp_repo, answering):
+    """The widget resets optimistically — it clears its own panel first and tells the server
+    after, so a reset can arrive for a conversation this process never saw."""
+    with _running(tmp_repo) as port:
+        assert _request(port, "POST", "/chat/reset", body={"session": "never-seen"})[0] == 200
+        assert _request(port, "POST", "/chat/reset", body={})[0] == 200
     assert answering == []
 
 

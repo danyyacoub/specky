@@ -124,7 +124,9 @@ _CHAT_WIDGET = (
     '<button id="chat-toggle" class="chat-toggle" type="button">'
     '<svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>Ask</button>'
     '<div id="chat-panel" class="chat-panel">'
-    '<div class="chat-header">Ask about these docs<span id="chat-status"></span></div>'
+    '<div class="chat-header">Ask about these docs'
+    '<span class="chat-header-right"><span id="chat-status"></span>'
+    '<button id="chat-reset" class="chat-reset" type="button">New</button></span></div>'
     '<div id="chat-log" class="chat-log"></div>'
     '<form id="chat-form" class="chat-form">'
     '<div class="chat-input-wrap">'
@@ -458,6 +460,13 @@ a { color: inherit; }
   display: flex; justify-content: space-between; align-items: center;
 }
 #chat-status { font-weight: 400; color: var(--text-secondary); font-size: 0.6875rem; }
+.chat-header-right { display: flex; align-items: center; gap: 8px; }
+.chat-reset {
+  border: 1px solid var(--border); background: none; color: var(--text-secondary);
+  font: inherit; font-weight: 400; font-size: 0.6875rem; padding: 2px 8px;
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.chat-reset:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
 .chat-log { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
 .chat-msg { font-size: 0.75rem; line-height: 1.5; padding: 6px 10px; border-radius: var(--radius-md); max-width: 90%; white-space: pre-wrap; }
 .chat-user { align-self: flex-end; background: var(--accent-soft); color: var(--text-primary); }
@@ -703,6 +712,10 @@ if (currentLink) {
 }
 """
 
+# The viewer is many pages, and the reader navigates between them mid-conversation, so both halves
+# of a conversation have to outlive the page: the session id the server keys its transcript on, and
+# the transcript the panel shows. sessionStorage holds both — the tab, not the browser, is the right
+# lifetime for "the conversation I'm having now", and it's the reader's own tab either way.
 CHAT_JS = """
 const chatToggle = document.getElementById('chat-toggle');
 const chatPanel = document.getElementById('chat-panel');
@@ -710,18 +723,54 @@ const chatLog = document.getElementById('chat-log');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatStatus = document.getElementById('chat-status');
+const chatReset = document.getElementById('chat-reset');
+const CHAT_LOG_MAX = 24;
+const CHAT_PERSISTED = new Set(['user', 'assistant', 'sources']);
+
+// A file:// page may refuse storage outright, and a sandboxed iframe always does. Failing that
+// probe costs the reader one thing: a follow-up asked after navigating starts a fresh conversation.
+const chatStore = (() => {
+  try {
+    window.sessionStorage.getItem('specky-chat-session');
+    return window.sessionStorage;
+  } catch (err) {
+    return null;
+  }
+})();
+
+function chatNewSessionId() {
+  // crypto.randomUUID() needs a secure context, which http:// on a real hostname isn't.
+  return crypto?.randomUUID ? crypto.randomUUID()
+    : `s-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+let chatSession = chatStore?.getItem('specky-chat-session') || chatNewSessionId();
+chatStore?.setItem('specky-chat-session', chatSession);
+
+function readChatLog() {
+  try {
+    return JSON.parse(chatStore?.getItem('specky-chat-log') || '[]');
+  } catch (err) {
+    return [];
+  }
+}
 
 chatToggle?.addEventListener('click', () => {
   chatPanel.classList.toggle('open');
   if (chatPanel.classList.contains('open')) chatInput.focus();
 });
 
-function addChatMessage(role, text) {
+function addChatMessage(role, text, persist = true) {
   const div = document.createElement('div');
   div.className = `chat-msg chat-${role}`;
   div.textContent = text;
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
+  if (persist && chatStore && CHAT_PERSISTED.has(role)) {
+    const log = readChatLog();
+    log.push({ role, text });
+    chatStore.setItem('specky-chat-log', JSON.stringify(log.slice(-CHAT_LOG_MAX)));
+  }
   return div;
 }
 
@@ -762,7 +811,7 @@ chatForm?.addEventListener('submit', async (event) => {
     const res = await speckyFetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, session: chatSession }),
     });
     const data = await res.json();
     chatStatus.textContent = '';
@@ -782,6 +831,37 @@ chatForm?.addEventListener('submit', async (event) => {
     addChatMessage('error', 'Chat server not reachable. Run `specky serve` in this repo, then try again.');
   }
 });
+
+chatReset?.addEventListener('click', async () => {
+  // Clear the panel and the id first: whether the server hears about it or not, the reader asked
+  // for a blank slate, and a new id means the old transcript can't be reached again anyway.
+  const previous = chatSession;
+  chatLog.innerHTML = '';
+  chatStore?.removeItem('specky-chat-log');
+  chatSession = chatNewSessionId();
+  chatStore?.setItem('specky-chat-session', chatSession);
+  chatInput.focus();
+  try {
+    await speckyFetch('/chat/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session: previous }),
+    });
+  } catch (err) { /* offline, or no server: the abandoned transcript expires on its own */ }
+});
+
+// Replay what this conversation said on the pages before this one. Text only: an HTML snippet is
+// the model's answer to a question already in the transcript, and re-serving stored markup on every
+// page load is more surface than a visual nicety is worth.
+if (chatLog) {
+  for (const msg of readChatLog()) {
+    // Storage is editable by anything running on this origin, so trust the shape as far as it
+    // checks out and drop the rest rather than rendering a `chat-undefined` bubble.
+    if (CHAT_PERSISTED.has(msg?.role) && typeof msg.text === 'string') {
+      addChatMessage(msg.role, msg.text, false);
+    }
+  }
+}
 """
 
 # '#' mention autocomplete for the chat input: candidates come straight from SPECKY_INDEX
