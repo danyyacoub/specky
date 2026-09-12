@@ -103,7 +103,7 @@ def _doc_title(body: str, fallback: str) -> str:
     return next((line.lstrip("#").strip() for line in body.splitlines() if line.startswith("#")), fallback)
 
 
-def _modules_purposes(modules_path: Path) -> dict[str, str]:
+def modules_purposes(modules_path: Path) -> dict[str, str]:
     """`{"billing/refund-flow.md": "Issue refunds"}` from MODULES.md's tables — the one place a
     doc's one-line purpose is already written down."""
     if not modules_path.exists():
@@ -135,7 +135,7 @@ class ExistingDocs:
         if not specs_root.exists():
             return snapshot
 
-        purposes = _modules_purposes(specs_root / "MODULES.md")
+        purposes = modules_purposes(specs_root / "MODULES.md")
         for md_path in sorted(specs_root.rglob("*.md")):
             rel = md_path.relative_to(specs_root)
             domain = rel.parts[0] if len(rel.parts) > 1 else "root"

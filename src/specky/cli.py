@@ -84,6 +84,18 @@ def _check(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _pr_comment(args: argparse.Namespace) -> None:
+    from specky.db import repo_root
+    from specky.prcomment import comment_markdown, run_pr_comment
+
+    # Bare markdown on stdout, no `specky pr-comment:` prefix and no extra lines: this is meant to
+    # be piped straight into `gh pr comment --body-file -`.
+    print(
+        comment_markdown(run_pr_comment(repo_root(), base=args.base, since=args.since)),
+        end="",
+    )
+
+
 def _cost(args: argparse.Namespace) -> None:
     import json
 
@@ -238,6 +250,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--advisory", action="store_true", help="Print the same report but always exit 0"
     )
     check_cmd.add_argument("--json", action="store_true", help="Machine-readable output")
+    pr_cmd = command(
+        "pr-comment",
+        "Print a markdown summary of a range's doc changes (pipe it to `gh pr comment`)",
+        _pr_comment,
+    )
+    pr_cmd.add_argument(
+        "--base",
+        metavar="REV",
+        help="Compare against REV (default: origin/HEAD if it resolves, else HEAD~1)",
+    )
+    pr_cmd.add_argument("--since", metavar="REV|DATE", help='e.g. v1.2.0 or "2 weeks ago"')
     cost_cmd = command(
         "cost", "Report provider calls, cache hit rate and character totals", _cost
     )

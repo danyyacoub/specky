@@ -29,6 +29,9 @@ uv run specky check              # CI gate: exit 1 if changed code has a doc des
                                  # this range didn't update. No AI, no history walk. --base REV /
                                  # --since REV|DATE pick the range, --advisory reports and exits 0,
                                  # --json for annotations. Needs `specky index` first
+uv run specky pr-comment         # markdown summary of a range's doc changes on stdout — never
+                                 # posts. `--base REV`/`--since REV|DATE`; pipe it:
+                                 # `specky pr-comment --base origin/main | gh pr comment --body-file -`
 uv run specky cost               # provider calls, cache hit rate, prompt/response chars per
                                  # command+model (--since DATE, --json). Every call is memoized in
                                  # the index unless `[ai] cache = false`; --clear-cache empties it

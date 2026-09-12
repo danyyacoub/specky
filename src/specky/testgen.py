@@ -66,7 +66,7 @@ class Emitted:
         return sum(self.counts[path] for path in self.written)
 
 
-def _section(content: str, title: str) -> list[str]:
+def section(content: str, title: str) -> list[str]:
     """The lines under a heading, up to the next heading at the same or a higher level."""
     lines = content.splitlines()
     for i, line in enumerate(lines):
@@ -141,7 +141,7 @@ def _clean(cell: str) -> str:
 def parse_scenarios(content: str) -> list[Scenario]:
     """Every usable row of every Given/When/Then table under `## Acceptance Tests`."""
     scenarios = []
-    for header, rows in _tables(_section(content, "acceptance tests")):
+    for header, rows in _tables(section(content, "acceptance tests")):
         columns = _columns(header)
         if columns is None:
             continue

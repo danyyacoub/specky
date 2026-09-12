@@ -181,6 +181,20 @@ assertion — specky knows what the behaviour is, not how to prove it in your co
 marker as you implement each one; existing files are never overwritten without `--force`, so the
 work you put in stays. Also offline, and `specs/history/` is left out.
 
+A reviewer can see from the file list that a doc changed. What the product now *does* differently
+takes opening it. `specky pr-comment` prints that as markdown — docs added, updated and removed,
+each with its one-line purpose from `MODULES.md`, plus the diff of an updated doc's
+`## What It Does` section:
+
+```bash
+specky pr-comment --base origin/main                                 # read it first
+specky pr-comment --base origin/main | gh pr comment --body-file -   # then post it yourself
+```
+
+specky never posts anything: the pipe is yours to run. The output is bounded so it always fits in
+one comment — per-commit docs under `specs/history/` are counted rather than listed, and a long
+range is cut off with a count of what didn't fit.
+
 ## Diagnose
 
 ```bash
