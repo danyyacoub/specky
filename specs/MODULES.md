@@ -41,6 +41,7 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 | Doc | Purpose |
 |---|---|
 | [chat/local-rag-server.md](chat/local-rag-server.md) | Local HTTP server that answers documentation questions by retrieving context from FTS5 index |
+| [chat/ask-widget-scoping.md](chat/ask-widget-scoping.md) | Chat input autocompletes domain/feature references to narrow AI retrieval and enable HTML responses |
 
 ## Search
 
