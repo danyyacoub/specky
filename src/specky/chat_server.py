@@ -10,6 +10,7 @@ search keep working with the server off; the widget just reports that chat is of
 from __future__ import annotations
 
 import json
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -23,11 +24,36 @@ _SYSTEM_PROMPT = (
     "using ONLY the context below — doc excerpts and commit summaries pulled from the "
     "project's specs/ tree and git history. Cite the doc path or commit sha each part "
     "of your answer is drawn from. If the context doesn't contain the answer, say you "
-    "couldn't find it in the docs — don't guess or use outside knowledge."
+    "couldn't find it in the docs — don't guess or use outside knowledge. If a table, "
+    "diagram, or code sample would make the answer clearer, you may add ONE fenced "
+    "```html block after your prose with a small, self-contained snippet (inline styles "
+    "only, no <script> tags, no external resources) — omit it when plain text is enough."
 )
 
+# "#module:<domain>" or "#feature:<slug>" — inserted by the chat widget's mention
+# autocomplete (see MENTION_JS in html_render.py), stripped before retrieval/prompting.
+_MENTION_RE = re.compile(r"#(module|feature):([\w-]+)")
+_HTML_SNIPPET_RE = re.compile(r"```html\s*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
 
-def retrieve_context(repo_root: Path, question: str, limit: int = 5) -> list[dict]:
+
+def _parse_scope(question: str) -> tuple[str, dict | None]:
+    match = _MENTION_RE.search(question)
+    scope = {"kind": match.group(1), "value": match.group(2)} if match else None
+    clean = _MENTION_RE.sub("", question)
+    return " ".join(clean.split()), scope
+
+
+def _extract_html_snippet(raw: str) -> tuple[str, str | None]:
+    match = _HTML_SNIPPET_RE.search(raw)
+    if not match:
+        return raw.strip(), None
+    prose = (raw[: match.start()] + raw[match.end() :]).strip()
+    return prose, match.group(1).strip()
+
+
+def retrieve_context(
+    repo_root: Path, question: str, scope: dict | None = None, limit: int = 5
+) -> list[dict]:
     match = fts_match_query(question)
     if match is None:
         return []
@@ -35,9 +61,9 @@ def retrieve_context(repo_root: Path, question: str, limit: int = 5) -> list[dic
     conn = connect(repo_root)
     try:
         doc_rows = conn.execute(
-            "SELECT path, title, snippet(documents_fts, 3, '', '', '…', 40) "
-            "FROM documents_fts WHERE documents_fts MATCH ? ORDER BY rank LIMIT ?",
-            (match, limit),
+            "SELECT path, domain, title, snippet(documents_fts, 3, '', '', '…', 40) "
+            "FROM documents_fts WHERE documents_fts MATCH ? ORDER BY rank LIMIT 50",
+            (match,),
         ).fetchall()
         commit_rows = conn.execute(
             "SELECT sha, message, snippet(commits_fts, 2, '', '', '…', 40) "
@@ -47,7 +73,17 @@ def retrieve_context(repo_root: Path, question: str, limit: int = 5) -> list[dic
     finally:
         conn.close()
 
-    context = [{"source": path, "label": title, "text": excerpt} for path, title, excerpt in doc_rows]
+    if scope is not None:
+        if scope["kind"] == "module":
+            scoped = [r for r in doc_rows if r[1] == scope["value"]]
+        else:
+            scoped = [r for r in doc_rows if Path(r[0]).stem == scope["value"]]
+        doc_rows = scoped or doc_rows
+
+    context = [
+        {"source": path, "label": title, "text": excerpt}
+        for path, _domain, title, excerpt in doc_rows[:limit]
+    ]
     context += [
         {"source": sha[:8], "label": message, "text": excerpt}
         for sha, message, excerpt in commit_rows
@@ -66,10 +102,15 @@ def _build_prompt(question: str, context: list[dict]) -> str:
 
 
 def answer_question(repo_root: Path, question: str) -> dict:
-    context = retrieve_context(repo_root, question)
+    question, scope = _parse_scope(question)
+    context = retrieve_context(repo_root, question, scope=scope)
     provider = load_provider_from_toml(repo_root / "specky.toml")
-    answer = provider.generate(_build_prompt(question, context))
-    return {"answer": answer, "sources": sorted({c["source"] for c in context})}
+    raw = provider.generate(_build_prompt(question, context))
+    answer, html_snippet = _extract_html_snippet(raw)
+    result = {"answer": answer, "sources": sorted({c["source"] for c in context})}
+    if html_snippet:
+        result["html_snippet"] = html_snippet
+    return result
 
 
 def _make_handler(repo_root: Path) -> type[BaseHTTPRequestHandler]:

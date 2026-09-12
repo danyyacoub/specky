@@ -110,7 +110,11 @@ _CHAT_WIDGET = (
     '<div class="chat-header">Ask about these docs<span id="chat-status"></span></div>'
     '<div id="chat-log" class="chat-log"></div>'
     '<form id="chat-form" class="chat-form">'
-    '<input id="chat-input" placeholder="Ask a question…" autocomplete="off">'
+    '<div class="chat-input-wrap">'
+    '<div id="mention-dropdown" class="mention-dropdown"></div>'
+    '<input id="chat-input" placeholder="Ask a question… (# to scope to a module or feature)" '
+    'autocomplete="off">'
+    "</div>"
     '<button type="submit" aria-label="Send">'
     '<svg class="icon" aria-hidden="true"><use href="#icon-send"></use></svg></button>'
     "</form></div>"
@@ -135,7 +139,8 @@ _PAGE_TEMPLATE = _env.from_string(
     "</div></div>" + _CHAT_WIDGET + "{{ glossary_island | safe }}"
     "<script>const SPECKY_INDEX = {{ search_json | safe }};\n"
     "const SPECKY_CHAT_PORT = {{ chat_port }};\n"
-    "{{ search_js | safe }}\n{{ filter_js | safe }}\n{{ chat_js | safe }}\n{{ glossary_js | safe }}"
+    "{{ search_js | safe }}\n{{ filter_js | safe }}\n{{ chat_js | safe }}\n"
+    "{{ mention_js | safe }}\n{{ glossary_js | safe }}"
     "</script></body></html>"
 )
 
@@ -423,14 +428,38 @@ a { color: inherit; }
 .chat-sources { align-self: flex-start; color: var(--text-secondary); font-size: 0.6875rem; }
 .chat-error { align-self: flex-start; color: var(--danger); background: var(--danger-bg); }
 .chat-form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.chat-input-wrap { position: relative; flex: 1; }
 .chat-form input {
-  flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
   font-family: var(--font-sans); font-size: 0.75rem; background: var(--surface); color: var(--text-primary);
+  box-sizing: border-box;
 }
 .chat-form button {
   background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--radius-md);
   padding: 8px 12px; display: inline-flex; align-items: center; cursor: pointer;
 }
+.mention-dropdown {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 25;
+  background: var(--glass-bg); backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-md); overflow: hidden;
+  max-height: 180px; overflow-y: auto;
+}
+.mention-dropdown:empty { display: none; border: none; box-shadow: none; }
+.mention-dropdown .mention-item {
+  display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 6px 10px; border: none; background: none; text-align: left; cursor: pointer;
+  font-family: var(--font-sans); font-size: 0.75rem; color: var(--text-primary);
+}
+.mention-dropdown .mention-item:hover, .mention-dropdown .mention-item:focus-visible {
+  background: var(--surface-tertiary);
+}
+.mention-dropdown .mention-item .kind { color: var(--text-tertiary); font-size: 0.6875rem; flex-shrink: 0; }
+.chat-html-wrap {
+  align-self: stretch; border: 1px solid var(--border); border-radius: var(--radius-md);
+  overflow: hidden; max-height: 420px;
+}
+.chat-html-frame { display: block; width: 100%; border: none; background: var(--surface); }
 """
 
 SEARCH_JS = """
@@ -532,12 +561,39 @@ function addChatMessage(role, text) {
   div.textContent = text;
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
+  return div;
+}
+
+// LLM-produced markup, rendered fully isolated: sandbox omits allow-scripts (so the
+// allow-same-origin needed for the parent to read scrollHeight can't be paired with
+// script execution), and the injected CSP meta blocks network-driven exfil attempts
+// (e.g. <img src>) that sandboxing alone doesn't stop.
+function addChatHtmlSnippet(rawHtml) {
+  const wrap = document.createElement('div');
+  wrap.className = 'chat-html-wrap';
+  const frame = document.createElement('iframe');
+  frame.className = 'chat-html-frame';
+  frame.setAttribute('sandbox', 'allow-same-origin');
+  frame.style.height = '80px';
+  frame.addEventListener('load', () => {
+    try {
+      const h = frame.contentWindow.document.documentElement.scrollHeight;
+      frame.style.height = `${Math.min(Math.max(h, 40), 420)}px`;
+    } catch (err) { /* leave default height */ }
+  });
+  const csp = '<meta http-equiv="Content-Security-Policy" '
+    + 'content="default-src \\'none\\'; style-src \\'unsafe-inline\\'; img-src data:;">';
+  frame.srcdoc = csp + rawHtml;
+  wrap.appendChild(frame);
+  chatLog.appendChild(wrap);
+  chatLog.scrollTop = chatLog.scrollHeight;
 }
 
 chatForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const question = chatInput.value.trim();
   if (!question) return;
+  mentionDropdown.innerHTML = '';
   addChatMessage('user', question);
   chatInput.value = '';
   chatStatus.textContent = 'Thinking…';
@@ -554,12 +610,96 @@ chatForm?.addEventListener('submit', async (event) => {
       return;
     }
     addChatMessage('assistant', data.answer);
+    if (data.html_snippet) {
+      addChatHtmlSnippet(data.html_snippet);
+    }
     if (data.sources && data.sources.length) {
       addChatMessage('sources', `Sources: ${data.sources.join(', ')}`);
     }
   } catch (err) {
     chatStatus.textContent = '';
     addChatMessage('error', 'Chat server not reachable. Run `specky serve` in this repo, then try again.');
+  }
+});
+"""
+
+# '#' mention autocomplete for the chat input: candidates come straight from SPECKY_INDEX
+# (already embedded for the sidebar search box), so this needs no server round-trip and no
+# new data island — one entry per domain ("module") plus one per feature/workflow doc.
+MENTION_JS = """
+const mentionDropdown = document.getElementById('mention-dropdown');
+
+const MENTION_CANDIDATES = (() => {
+  const seenModules = new Set();
+  const out = [];
+  for (const d of SPECKY_INDEX) {
+    if (!seenModules.has(d.domain)) {
+      seenModules.add(d.domain);
+      out.push({ kind: 'module', value: d.domain, label: d.domain });
+    }
+  }
+  for (const d of SPECKY_INDEX) {
+    if (d.doc_type === 'feature' || d.doc_type === 'workflow') {
+      out.push({ kind: 'feature', value: d.slug, label: d.title });
+    }
+  }
+  return out;
+})();
+
+let mentionMatchStart = -1;
+let mentionMatchEnd = -1;
+
+function currentMentionQuery() {
+  const caret = chatInput.selectionStart ?? chatInput.value.length;
+  const upToCaret = chatInput.value.slice(0, caret);
+  const match = /#([\\w-]*)$/.exec(upToCaret);
+  if (!match) return null;
+  return { query: match[1].toLowerCase(), start: match.index, end: caret };
+}
+
+function renderMentionDropdown(candidates) {
+  mentionDropdown.innerHTML = '';
+  for (const c of candidates.slice(0, 8)) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'mention-item';
+    btn.innerHTML = `<span>${c.label}</span><span class="kind">${c.kind}</span>`;
+    btn.addEventListener('click', () => selectMention(c));
+    mentionDropdown.appendChild(btn);
+  }
+}
+
+function selectMention(candidate) {
+  const token = `#${candidate.kind}:${candidate.value} `;
+  const value = chatInput.value;
+  chatInput.value = value.slice(0, mentionMatchStart) + token + value.slice(mentionMatchEnd);
+  mentionDropdown.innerHTML = '';
+  chatInput.focus();
+  const caret = mentionMatchStart + token.length;
+  chatInput.setSelectionRange(caret, caret);
+}
+
+chatInput?.addEventListener('input', () => {
+  const state = currentMentionQuery();
+  if (!state) {
+    mentionDropdown.innerHTML = '';
+    mentionMatchStart = -1;
+    mentionMatchEnd = -1;
+    return;
+  }
+  mentionMatchStart = state.start;
+  mentionMatchEnd = state.end;
+  const hits = MENTION_CANDIDATES.filter((c) => c.label.toLowerCase().includes(state.query) || c.value.toLowerCase().includes(state.query));
+  renderMentionDropdown(hits);
+});
+
+chatInput?.addEventListener('keydown', (event) => {
+  if (mentionDropdown.children.length === 0) return;
+  if (event.key === 'Escape') {
+    mentionDropdown.innerHTML = '';
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    mentionDropdown.firstElementChild?.click();
   }
 });
 """
@@ -965,6 +1105,7 @@ def _page(
         search_json=search_json,
         chat_js=CHAT_JS,
         chat_port=CHAT_PORT,
+        mention_js=MENTION_JS,
         glossary_js=GLOSSARY_JS,
         glossary_island=glossary_island,
     )
@@ -1029,6 +1170,7 @@ def render_site(repo_root: Path) -> Path:
                 "excerpt": _excerpt(content),
                 "tags": tags,
                 "doc_type": doc_type,
+                "slug": Path(path).stem,
             }
         )
 
