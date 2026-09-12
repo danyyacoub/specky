@@ -16,6 +16,9 @@ the pytest suite in `tests/`.
 
 ```bash
 uv run specky init               # configure AI provider, writes specky.toml (gitignored)
+uv run specky doctor [--json]    # is this repo's setup working? toolchain, config, hook, index,
+                                 # site, recent-commit backlog. Exit 1 only on `fail`
+
 uv run specky install-git-hook   # install real .git/hooks/post-commit hook
 uv run specky sync               # backfill history/feature docs for existing commits
 uv run specky sync --dry-run     # ...or list what it would document first, calling no provider
@@ -42,7 +45,7 @@ otherwise mean guessing which `specky` subcommands to chain. Run from repo root.
 
 ```bash
 scripts/test.sh [pytest args] # unit + integration tests against throwaway git repos in tmpdirs
-scripts/doctor.sh          # env/config snapshot: uv, specky.toml, git hook, index — run first when something's off
+scripts/doctor.sh          # wrapper for `uv run specky doctor` (checks live in src/specky/doctor.py)
 scripts/smoke-test.sh      # end-to-end: index -> search -> render-html; run before committing engine changes
 scripts/launch.sh          # render-html, open the site, run `specky serve` in the foreground (Ctrl+C to stop)
 scripts/reindex.sh [query] # rebuild the FTS5 index then search it — fast loop for indexer.py/db.py changes

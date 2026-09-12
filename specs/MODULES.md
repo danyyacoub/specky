@@ -21,6 +21,7 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 
 | Doc | Purpose |
 |---|---|
+| [cli/doctor.md](cli/doctor.md) | Diagnose a specky installation — toolchain, config, hook, index, site, doc backlog |
 | [cli/sync.md](cli/sync.md) | Backfill micro-documentation for commits that don't yet have one (idempotent resync) |
 
 ## Docs

@@ -57,6 +57,21 @@ def _render_html(args: argparse.Namespace) -> None:
     print(f"specky render-html: wrote {render_site(repo_root())}")
 
 
+def _doctor(args: argparse.Namespace) -> None:
+    import json
+
+    from specky.doctor import FAIL, report, run_checks, worst
+
+    checks = run_checks()
+    print(
+        json.dumps([c.as_dict() for c in checks], indent=2)
+        if args.json
+        else report(checks)
+    )
+    if worst(checks) == FAIL:
+        sys.exit(1)
+
+
 def _setup_diagrams(args: argparse.Namespace) -> None:
     from specky.mermaid_tool import setup
 
@@ -168,6 +183,11 @@ def build_parser() -> argparse.ArgumentParser:
         return sub
 
     command("init", "Choose/configure an AI provider, writes specky.toml", _init)
+    command(
+        "doctor",
+        "Check this repo's specky setup — toolchain, config, hook, index, site",
+        _doctor,
+    ).add_argument("--json", action="store_true", help="Machine-readable output")
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")
     command("render-html", "Render the static HTML doc site", _render_html)
