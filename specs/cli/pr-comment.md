@@ -19,7 +19,7 @@ When a pull request changes documentation files, reviewers can see from the file
 
 4. **Lookup purposes**: For each feature doc, read its one-line purpose from `MODULES.md`.
 
-5. **Diff `## What It Does`** (first 10 docs only): Extract and show the diff of the `## What It Does` section for updated docs — the part written for someone who doesn't read code.
+5. **Show the `## What It Does` section** (first 10 docs only): quoted whole for an added doc, and for an updated one as a `-`/`+` diff of that section — the part written for someone who doesn't read code. An updated doc whose summary didn't move says so, which is different from a doc past the limit that nobody looked at.
 
 6. **Bound the output**: Cap doc lists at 30 items, limit detailed diffs to 10 docs (one `git show` each), trim the full body at 55,000 characters on a line boundary.
 
@@ -29,20 +29,23 @@ When a pull request changes documentation files, reviewers can see from the file
 
 | Scenario | Behavior |
 |----------|----------|
-| No docs changed | Empty or minimal output |
-| Few docs changed | All docs listed with purposes; diffs shown for updated docs |
-| Many docs added/updated | Lists cut off at 30 with count of remaining; only first 10 diffs included |
-| Body exceeds 55k chars | Trimmed at line boundary; note appended saying what was cut |
-| History-heavy branch (e.g., 300 commits) | ~300 `specs/history/` docs counted as "… and N more" instead of listed |
+| No docs changed | One line: `**Docs:** no changes under specs/ since <base>` — honest to post as-is |
+| Few docs changed | All docs listed with purposes; summaries quoted or diffed |
+| Many docs added/updated | Lists cut off at 30 with a count of the rest; only the first 10 summaries included |
+| Body exceeds 55k chars | Trimmed at a line boundary, closing a code fence the cut landed inside, with a note saying it was trimmed |
+| History-heavy branch (e.g., 300 commits) | One line: "300 per-commit doc(s) under `specs/history/` not listed" |
+| A doc moved domain | Listed under its new path, with "(was `<old path>`)", and its summary diffed against the old path |
 
 ## Acceptance Tests
 
 | Given | When | Then |
 |-------|------|------|
-| Branch with 3 new docs, all documented in MODULES.md | `specky pr-comment --base main` | Added docs listed with their purposes; no diffs shown (new docs have no "before") |
+| Branch with 3 new docs, all documented in MODULES.md | `specky pr-comment --base main` | Added docs listed with their purposes, each with its `## What It Does` quoted as a blockquote |
 | Branch updating `specs/billing/refund-flow.md` | `specky pr-comment --base main` | Doc listed as updated; `## What It Does` section diff shown with `-`/`+` lines |
-| Branch with 50 changed docs | `specky pr-comment --base main` | Only 30 listed; output ends with "… and 20 more" or similar |
-| Branch with 300+ history docs added | `specky pr-comment --base main` | History group shows "… and ~300 more" (counted, not listed) |
-| Output would exceed 55k chars | `specky pr-comment --base main` | Body trimmed on line boundary; footer notes trim occurred |
-| Range includes only `MODULES.md` changes | `specky pr-comment --base main` | MODULES.md listed as updated; no product-behavior summary (index docs grouped) |
-| User pipes output to `gh pr comment` | `specky pr-comment --base main \| gh pr comment --body-file -` | Comment posted with zero intervention; output reviewed locally first |
+| Branch editing a doc everywhere except its `## What It Does` | `specky pr-comment --base main` | Doc listed as updated, with "Summary unchanged; the rest of the doc was edited" instead of a diff |
+| Branch with 50 changed docs | `specky pr-comment --base main` | Only 30 listed; output ends with "…and 20 more." |
+| Branch with 300 history docs added | `specky pr-comment --base main` | One line saying 300 per-commit docs weren't listed; no history path appears |
+| Output would exceed 55k chars | `specky pr-comment --base main` | Body trimmed on a line boundary with an even number of code fences; note says it was trimmed |
+| Range includes only `MODULES.md` changes | `specky pr-comment --base main` | MODULES.md named on the "Index docs updated" line; no summary quoted or diffed for it |
+| Target branch changed docs after the fork point | `specky pr-comment --base main` | Those docs are absent — the range is `main...HEAD`, so only this branch's own changes appear |
+| User pipes output to `gh pr comment` | `specky pr-comment --base main \| gh pr comment --body-file -` | specky itself posts nothing; the comment is created by the user's own `gh` command |
