@@ -28,6 +28,7 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | [cli/doctor.md](cli/doctor.md) | Diagnose a specky installation — toolchain, config, hook, index, site, doc backlog |
 | [cli/sync.md](cli/sync.md) | Backfill micro-documentation for commits that don't yet have one (idempotent resync) |
 | [cli/cost.md](cli/cost.md) | Report provider call statistics, cache hit rate, and character usage |
+| [cli/pr-comment.md](cli/pr-comment.md) | Generate markdown summaries of documentation changes in a commit range for GitHub PR comments |
 
 ## Docs
 
