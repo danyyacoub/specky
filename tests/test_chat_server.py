@@ -144,7 +144,9 @@ def test_build_prompt_labels_each_context_block():
 
 def test_answer_question_scopes_retrieval_and_reports_sources(indexed_repo, monkeypatch):
     provider = FakeProvider("Refunds work like this.")
-    monkeypatch.setattr(chat_server, "load_provider_from_toml", lambda _path: provider)
+    monkeypatch.setattr(
+        chat_server, "load_provider_from_toml", lambda _path, _command="": provider
+    )
 
     result = answer_question(indexed_repo, "#module:billing how do refunds work?")
 
@@ -154,7 +156,9 @@ def test_answer_question_scopes_retrieval_and_reports_sources(indexed_repo, monk
 
 def test_answer_question_returns_an_html_snippet_when_the_model_sends_one(indexed_repo, monkeypatch):
     provider = FakeProvider("Here:\n```html\n<table><tr><td>1</td></tr></table>\n```")
-    monkeypatch.setattr(chat_server, "load_provider_from_toml", lambda _path: provider)
+    monkeypatch.setattr(
+        chat_server, "load_provider_from_toml", lambda _path, _command="": provider
+    )
 
     result = answer_question(indexed_repo, "refund table?")
     assert result["answer"] == "Here:"

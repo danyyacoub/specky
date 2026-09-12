@@ -2,7 +2,8 @@
 
 One database per repo, at .specky/index.db. Tables: documents/commits mirror what's on
 disk and in git log; micro_docs and commit_links are written incrementally by
-commit_doc.py; doc_files is derived from git log by indexer.py. FTS5 virtual tables are
+commit_doc.py; doc_files is derived from git log by indexer.py; prompt_cache and usage are
+written by ai_provider.CachingProvider on every provider call. FTS5 virtual tables are
 kept in sync by indexer.py's full-rebuild pass, not by triggers, since a `specky index` run is
 cheap enough to just redo from scratch each time.
 """
@@ -72,6 +73,29 @@ CREATE TABLE IF NOT EXISTS doc_files (
 );
 
 CREATE INDEX IF NOT EXISTS doc_files_by_doc ON doc_files (doc_path);
+
+-- Memoized provider responses, keyed by sha256(model + prompt) — see ai_provider.CachingProvider.
+-- Pure memoization, not a record of anything: re-running `specky sync` over commits it already
+-- documented asks the model identical questions, and this is what stops it paying twice.
+CREATE TABLE IF NOT EXISTS prompt_cache (
+    hash TEXT PRIMARY KEY,
+    response TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- One row per provider call, cache hit or not, which is what `specky cost` reports. Characters
+-- rather than tokens or money: specky knows neither the provider's tokenizer nor its price list,
+-- and a made-up figure would be worse than an honest one.
+CREATE TABLE IF NOT EXISTS usage (
+    created_at TEXT NOT NULL,
+    command TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_chars INTEGER NOT NULL,
+    response_chars INTEGER NOT NULL,
+    cached INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS usage_by_date ON usage (created_at);
 """
 
 # Columns added to `documents`/`commits` after their initial release. connect() adds any

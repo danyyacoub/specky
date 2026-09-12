@@ -104,7 +104,7 @@ def _diagrams() -> list[Check]:
 
 
 def _config(repo_root: Path) -> list[Check]:
-    from specky.ai_provider import ConfigError, load_provider_from_toml
+    from specky.ai_provider import ConfigError, load_provider_from_toml, unwrap
 
     path = repo_root / "specky.toml"
     if not path.exists():
@@ -117,7 +117,9 @@ def _config(repo_root: Path) -> list[Check]:
         return [Check("config", FAIL, f"{path.name} is not valid TOML ({exc})")]
 
     try:
-        provider = load_provider_from_toml(path)
+        # Unwrapped: this reads fields off the concrete provider, and the caching wrapper doesn't
+        # have them.
+        provider = unwrap(load_provider_from_toml(path))
     except ConfigError as exc:
         return [Check("config", FAIL, str(exc))]
 

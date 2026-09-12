@@ -137,7 +137,7 @@ def _build_prompt(question: str, context: list[dict]) -> str:
 def answer_question(repo_root: Path, question: str) -> dict:
     question, scope = _parse_scope(question)
     context = retrieve_context(repo_root, question, scope=scope)
-    provider = load_provider_from_toml(repo_root / "specky.toml")
+    provider = load_provider_from_toml(repo_root / "specky.toml", "serve")
     raw = provider.generate(_build_prompt(question, context))
     answer, html_snippet = _extract_html_snippet(raw)
     result = {"answer": answer, "sources": sorted({c["source"] for c in context})}

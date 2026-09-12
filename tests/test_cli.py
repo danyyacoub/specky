@@ -66,6 +66,23 @@ def test_index_reports_what_it_indexed(tmp_repo, write_doc, monkeypatch, capsys)
     assert "indexed 1 docs, 1 commits" in out
 
 
+def test_cost_prints_a_report_and_clears_the_cache(tmp_repo, monkeypatch, capsys):
+    from specky.ai_provider import CachingProvider
+
+    class Fake:
+        def generate(self, prompt: str) -> str:
+            return "an answer"
+
+    CachingProvider(Fake(), tmp_repo, model="test-model", command="sync").generate("why?")
+    monkeypatch.chdir(tmp_repo)
+
+    _run(["cost"])
+    assert "test-model" in capsys.readouterr().out
+
+    _run(["cost", "--clear-cache"])
+    assert "cleared 1 cached response(s)" in capsys.readouterr().out
+
+
 def test_search_without_a_query_is_a_clean_error(tmp_repo, monkeypatch, capsys):
     monkeypatch.chdir(tmp_repo)
     with pytest.raises(SystemExit) as exit_info:

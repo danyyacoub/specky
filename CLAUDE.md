@@ -29,6 +29,9 @@ uv run specky check              # CI gate: exit 1 if changed code has a doc des
                                  # this range didn't update. No AI, no history walk. --base REV /
                                  # --since REV|DATE pick the range, --advisory reports and exits 0,
                                  # --json for annotations. Needs `specky index` first
+uv run specky cost               # provider calls, cache hit rate, prompt/response chars per
+                                 # command+model (--since DATE, --json). Every call is memoized in
+                                 # the index unless `[ai] cache = false`; --clear-cache empties it
 uv run specky index              # rebuild .specky/index.db (FTS5) from specs/ + git log
 uv run specky search "<query>"   # keyword search over the index
 uv run specky render-html        # write static site to .specky/site/index.html

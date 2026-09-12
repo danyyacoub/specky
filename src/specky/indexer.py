@@ -30,8 +30,9 @@ def _title_for(content: str, fallback: str) -> str:
 
 
 def _reset_tables(conn) -> None:
-    # micro_docs and commit_links are written incrementally by commit_doc.py and aren't
-    # derived from a rescan, so they're deliberately left out of this wipe. doc_files *is*
+    # micro_docs and commit_links (written incrementally by commit_doc.py) and prompt_cache/usage
+    # (written by the caching provider) aren't derived from a rescan, so they're deliberately left
+    # out of this wipe — re-indexing must not throw away a paid-for AI response. doc_files *is*
     # derived (from git log), so it gets rebuilt with everything else; the staleness columns live
     # on `documents` and are rewritten with the rows themselves.
     conn.execute("DELETE FROM documents")

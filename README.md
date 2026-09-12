@@ -162,6 +162,17 @@ Prints `[ok]`/`[warn]`/`[fail]` lines and exits non-zero only on a `fail`. It re
 provider's API-key env var is set, never any part of its value. Run it first whenever something
 behaves oddly.
 
+```bash
+specky cost                     # calls, cache hit rate and character totals per command and model
+specky cost --since 2026-09-01
+specky cost --clear-cache       # drop the memoized responses, keep the record of what was spent
+```
+
+Every provider call goes through a cache keyed on the model plus the prompt, so re-running `specky
+sync` over commits it already documented asks nothing new and costs nothing. `specky cost` reports
+in characters, not dollars or tokens: specky knows neither your provider's tokenizer nor its price
+list, and a made-up figure would be worse than an honest one.
+
 ## How it works
 
 - **Two doc-generation paths, one convention.** The post-commit hook documents commit by commit;
@@ -169,7 +180,7 @@ behaves oddly.
   `specs/<domain>/<topic>.md`, kebab-case topic, never `README.md`. An auto-commit is marked so the
   hook can't recurse on its own doc commits.
 - **One SQLite database.** `.specky/index.db` (gitignored) holds the docs, the commit log, their
-  FTS5 tables, and the file→doc map. `specky index` is a full rebuild every run — a specs/ tree and
+  FTS5 tables, the file→doc map, and the memoized provider responses `specky cost` reports on. `specky index` is a full rebuild every run — a specs/ tree and
   a git log are cheap to re-walk, and a rebuild can't drift from reality the way an incremental
   sync could.
 - **The file→doc map comes from git, not from local state.** Which docs describe which files is
@@ -199,10 +210,16 @@ provider = "anthropic"              # anthropic | openai-compatible | command
 model = "claude-haiku-4-5"
 api_key_env = "ANTHROPIC_API_KEY"   # the env var's *name*; the key itself never goes in this file
 max_tokens = 4096                   # raise if generation reports a truncated response
+cache = true                        # memoize responses in the index (default); see `specky cost`
 ```
 
 `provider = "openai-compatible"` also requires `base_url`, `model` and `api_key_env`.
 `provider = "command"` requires `command` (e.g. `command = "claude -p"`) and needs no key at all.
+
+The cache lives in the gitignored `.specky/index.db`, holds at most 20 MB of responses (oldest
+evicted first), and is keyed on the model — switching models re-asks rather than serving the old
+model's answers. `cache = false` turns it off; the usage log `specky cost` reads is written either
+way.
 
 ### `[serve]` — the chat server
 

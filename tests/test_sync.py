@@ -29,7 +29,9 @@ def in_repo(tmp_repo: Path, monkeypatch) -> Path:
 
 
 def _use_provider(monkeypatch, provider) -> None:
-    monkeypatch.setattr(commit_doc, "load_provider_from_toml", lambda _path: provider)
+    monkeypatch.setattr(
+        commit_doc, "load_provider_from_toml", lambda _path, _command="": provider
+    )
 
 
 def _history(repo: Path) -> set[str]:

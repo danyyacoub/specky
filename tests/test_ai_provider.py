@@ -4,11 +4,13 @@ from specky import ai_provider
 from specky.ai_provider import (
     DEFAULT_MAX_TOKENS,
     AnthropicProvider,
+    CachingProvider,
     CommandProvider,
     ConfigError,
     OpenAICompatibleProvider,
     load_provider,
     load_provider_from_toml,
+    unwrap,
 )
 
 
@@ -84,8 +86,25 @@ def test_load_from_toml_without_ai_table(tmp_path):
 
 
 def test_load_from_toml(tmp_path):
+    """Caching by default, so every caller gets it without asking — `load_provider_from_toml` is
+    the only construction path, which is what makes that possible."""
     path = tmp_path / "specky.toml"
     path.write_text('[ai]\nprovider = "command"\ncommand = "cat"\n')
+    provider = load_provider_from_toml(path)
+    assert isinstance(provider, CachingProvider)
+    assert isinstance(unwrap(provider), CommandProvider)
+
+
+def test_the_cache_can_be_turned_off(tmp_path):
+    path = tmp_path / "specky.toml"
+    path.write_text('[ai]\nprovider = "command"\ncommand = "cat"\ncache = false\n')
+    assert isinstance(load_provider_from_toml(path), CommandProvider)
+
+
+def test_a_quoted_cache_flag_is_honoured(tmp_path):
+    """`specky init` writes every [ai] value quoted, so "false" has to mean false."""
+    path = tmp_path / "specky.toml"
+    path.write_text('[ai]\nprovider = "command"\ncommand = "cat"\ncache = "false"\n')
     assert isinstance(load_provider_from_toml(path), CommandProvider)
 
 

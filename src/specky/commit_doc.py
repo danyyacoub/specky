@@ -320,7 +320,7 @@ def sync(
         return []
 
     _confirm(total, assume_yes)
-    provider = load_provider_from_toml(repo_root / "specky.toml")  # let ConfigError surface
+    provider = load_provider_from_toml(repo_root / "specky.toml", "sync")  # let ConfigError surface
 
     # One walk of specs/ for the whole backfill; sync_feature_doc folds each doc it writes back
     # into it, so commit 400 is told about the doc commit 3 created.
@@ -376,7 +376,7 @@ def main() -> None:
             return  # this commit *is* our own doc-sync commit from below — don't recurse
 
         try:
-            provider = load_provider_from_toml(repo_root / "specky.toml")
+            provider = load_provider_from_toml(repo_root / "specky.toml", "commit-doc")
         except ConfigError as exc:
             print(f"specky commit-doc: skipping ({exc})")
             return

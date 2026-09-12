@@ -84,6 +84,20 @@ def _check(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _cost(args: argparse.Namespace) -> None:
+    import json
+
+    from specky.cost import clear_cache, report_lines, run_cost
+    from specky.db import repo_root
+
+    root = repo_root()
+    if args.clear_cache:
+        print(f"specky cost: cleared {clear_cache(root)} cached response(s)")
+        return
+    report = run_cost(root, since=args.since)
+    print(json.dumps(report.as_dict(), indent=2) if args.json else "\n".join(report_lines(report)))
+
+
 def _setup_diagrams(args: argparse.Namespace) -> None:
     from specky.mermaid_tool import setup
 
@@ -131,7 +145,7 @@ def _tag(args: argparse.Namespace) -> None:
     from specky.generator import backfill_tags
 
     root = repo_root()
-    updated = backfill_tags(root, load_provider_from_toml(root / "specky.toml"))
+    updated = backfill_tags(root, load_provider_from_toml(root / "specky.toml", "tag"))
     if not updated:
         print("specky tag: already up to date")
     for path in updated:
@@ -215,6 +229,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--advisory", action="store_true", help="Print the same report but always exit 0"
     )
     check_cmd.add_argument("--json", action="store_true", help="Machine-readable output")
+    cost_cmd = command(
+        "cost", "Report provider calls, cache hit rate and character totals", _cost
+    )
+    cost_cmd.add_argument(
+        "--since", metavar="DATE", help="Only calls at or after DATE (e.g. 2026-09-01)"
+    )
+    cost_cmd.add_argument(
+        "--clear-cache", action="store_true", help="Drop every memoized response, keep the log"
+    )
+    cost_cmd.add_argument("--json", action="store_true", help="Machine-readable output")
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")
     command("render-html", "Render the static HTML doc site", _render_html)
