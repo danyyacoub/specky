@@ -7,65 +7,18 @@ tags: [cli, diagnostics]
 
 ## What It Does
 
-`specky doctor` answers one question: *why didn't a doc get generated?* It reports the state of every
-moving part of a specky installation — the toolchain it shells out to, the mermaid renderer, the AI
-provider configuration, the post-commit git hook, the SQLite index, the rendered site, and whether
-recent commits actually got documented — as `[ok]` / `[warn]` / `[fail]` lines grouped by section.
-
-It is free and fast: no AI provider is ever called, and no check walks the repository's full history,
-so it stays sub-second on a repo with hundreds of thousands of commits.
-
-`fail` is reserved for "specky cannot work here and won't fix itself". Anything a plain command would
-fix — no config, no index, no rendered site — is a `warn`, so the command exits 0 on a repo that has
-simply never been set up and can be dropped into CI as-is. Exit 1 means something needs a human.
+`specky doctor` answers one question: *why didn't a doc get generated?* It reports the state of every moving part of a specky installation — the toolchain it shells out to, the mermaid renderer, the AI provider configuration, the post-commit git hook, the SQLite index, the rendered site, and whether recent commits actually got documented. It is free and fast: no AI provider is ever called, and no check walks the repository's full history, so it stays sub-second on a repo with hundreds of thousands of commits.
 
 ## How It Works
 
-1. **Toolchain** — Report the running Python, then `git`, `uv` and `node` versions. A missing `git` is
-   a `fail` (specky is git-shaped); missing `uv` or `node` are `warn`s, because each is only needed
-   for one optional path (running from a checkout, rendering diagrams).
-2. **Diagrams** — Ask `mermaid_tool` which copy of the Node renderer is installed. If none is, list
-   every directory that was searched and point at `specky setup-diagrams`, since the failure mode
-   otherwise is invisible: diagrams silently stay fenced text.
-3. **Repo** — Resolve the repository root with `git rev-parse --show-toplevel`. Outside a repo this is
-   a `fail` and every later check is skipped rather than reported against the wrong directory.
-4. **Config** — If `specky.toml` is absent, `warn` and point at `specky init`. Otherwise parse it and
-   build a provider through `load_provider_from_toml()` — the same construction path generation uses,
-   so this check can't drift from what the hook will actually do. Report the configured provider,
-   whether the credential's environment variable is **set** (never any part of its value), and
-   whether a `command` provider's executable is on `PATH`.
-5. **Git hook** — A missing `post-commit` hook is a `warn`. A hook that exists but has no specky
-   marker is a `fail`: `install-git-hook` refuses to overwrite someone else's hook, so this state
-   needs a human to merge the two. A hook that isn't executable is also a `fail`, because git skips
-   it without a word, which looks exactly like specky being broken.
-6. **Index** — Open `.specky/index.db` read-only, report doc and commit counts, and `warn` if
-   `journal_mode` isn't `wal` (that's the reason a commit landing during `specky serve` could hit a
-   locked database). A file that's missing its tables is a `fail` pointing at `specky index`.
-7. **Site** — Report the page count under `.specky/site`, or `warn` that `specky render-html` hasn't
-   run yet.
-8. **Docs backlog** — Over the last 20 commits only, skipping specky's own doc-sync commits, count
-   how many have no `specs/history/` doc. This answers "is the hook working *now*"; counting the full
-   backlog is `specky sync --dry-run`'s job, which is where the message sends the reader.
-
-Each section is wrapped so that a check which itself throws becomes one `fail` row rather than a
-traceback — this is the command someone runs when things are already broken.
-
-```mermaid
-flowchart TD
-    A["Run specky doctor (--json)"] --> B["Toolchain: python, git, uv, node"]
-    B --> C["Diagrams: resolve mermaid renderer"]
-    C --> D{"Inside a git repo?"}
-    D -->|No| E["fail: not a git repository<br/>skip remaining checks"]
-    D -->|Yes| F["Config: specky.toml + provider<br/>credential presence only"]
-    F --> G["Git hook: installed, ours, executable"]
-    G --> H["Index: counts + journal_mode"]
-    H --> I["Site: page count"]
-    I --> J["Docs: last 20 commits documented?"]
-    J --> K{"Any fail row?"}
-    E --> K
-    K -->|Yes| L["Print report, exit 1"]
-    K -->|No| M["Print report, exit 0"]
-```
+1. **Toolchain** — Report the running Python, then `git`, `uv` and `node` versions. A missing `git` is a fail (specky is git-shaped); missing `uv` or `node` are warns, because each is only needed for one optional path (running from a checkout, rendering diagrams).
+2. **Diagrams** — Ask `mermaid_tool` which copy of the Node renderer is installed. If none is, list every directory that was searched and point at `specky setup-diagrams`, since the failure mode otherwise is invisible: diagrams silently stay fenced text.
+3. **Repo** — Resolve the repository root with `git rev-parse --show-toplevel`. Outside a repo this is a fail and every later check is skipped rather than reported against the wrong directory.
+4. **Config** — If `specky.toml` is absent, warn and point at `specky init`. Otherwise parse it and build a provider through `load_provider_from_toml()` — the same construction path generation uses, so this check can't drift from what the hook will actually do. Report the configured provider, whether the credential's environment variable is **set** (never any part of its value), and whether a `command` provider's executable is on `PATH`.
+5. **Git hook** — A missing `post-commit` hook is a warn. A hook that exists but has no specky marker is a fail: `install-git-hook` refuses to overwrite someone else's hook, so this state needs a human to merge the two. A hook that isn't executable is also a fail, because git skips it without a word, which looks exactly like specky being broken.
+6. **Index** — Open `.specky/index.db` read-only, report doc and commit counts, and warn if `journal_mode` isn't `wal` (that's the reason a commit landing during `specky serve` could hit a locked database). A file that's missing its tables is a fail pointing at `specky index`.
+7. **Site** — Report the page count under `.specky/site`, or warn that `specky render-html` hasn't run yet.
+8. **Docs backlog** — Over the last 20 commits only, skipping specky's own doc-sync commits, count how many have no `specs/history/` doc. This answers "is the hook working *now*"; counting the full backlog is `specky sync --dry-run`'s job, which is where the message sends the reader.
 
 ## Flags
 
