@@ -82,7 +82,13 @@ def _sync(args: argparse.Namespace) -> None:
 
     # sync() prints its own progress: one line per commit as it goes, so a backfill of several
     # hundred commits isn't a silent wait, plus a closing summary.
-    sync(since=args.since, limit=args.limit, dry_run=args.dry_run, assume_yes=args.yes)
+    sync(
+        since=args.since,
+        limit=args.limit,
+        dry_run=args.dry_run,
+        assume_yes=args.yes,
+        all_branches=args.all_branches,
+    )
 
 
 def _tag(args: argparse.Namespace) -> None:
@@ -186,6 +192,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sync_cmd.add_argument(
         "--yes", action="store_true", help="Skip the confirmation for a large backfill"
+    )
+    sync_cmd.add_argument(
+        "--all-branches",
+        action="store_true",
+        help="Document commits on every ref, not just HEAD (more commits, so more AI calls)",
     )
     command(
         "tag",

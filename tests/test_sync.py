@@ -45,12 +45,93 @@ def pending(repo: Path, **kwargs) -> list[str]:
 
 
 def test_a_commit_that_already_has_a_history_file_is_skipped(tmp_repo):
+    """A doc with no `sha:` frontmatter is one written before that was recorded — its filename is
+    the only claim it makes, so the filename is what it's matched on."""
     sha = _commit(tmp_repo, "second")
     history = tmp_repo / "specs" / "history"
     history.mkdir(parents=True)
     (history / f"{sha[:8]}.md").write_text("# done\n")
 
     assert sha not in pending(tmp_repo)
+
+
+def test_a_history_doc_is_matched_on_the_full_sha_it_records(tmp_repo):
+    sha = _commit(tmp_repo, "second")
+    history = tmp_repo / "specs" / "history"
+    history.mkdir(parents=True)
+    (history / f"{sha[:8]}.md").write_text(f"---\nsha: {sha}\n---\n\n# done\n")
+
+    assert sha not in pending(tmp_repo)
+
+
+def test_an_eight_hex_prefix_collision_no_longer_hides_a_commit(tmp_repo):
+    """`done` used to be a set of 8-char filename stems, so an unrelated commit sharing those 8
+    hex digits was silently treated as already documented — and never got a doc at all. Rare per
+    pair, unavoidable on a repo with enough commits, and invisible when it happens."""
+    sha = _commit(tmp_repo, "second")
+    history = tmp_repo / "specs" / "history"
+    history.mkdir(parents=True)
+    impostor = sha[:8] + "0" * 32
+    (history / f"{sha[:8]}.md").write_text(f"---\nsha: {impostor}\n---\n\n# some other commit\n")
+
+    assert sha in pending(tmp_repo)
+
+
+def test_a_colliding_commit_gets_its_own_longer_filename(tmp_repo, monkeypatch):
+    """...and documenting it must not overwrite the doc that holds the other commit's summary."""
+    commit = commit_doc.Commit(
+        sha="abcdef12" + "3" * 32, author="a", date="2026-01-01", message="mine", diff=""
+    )
+    history = tmp_repo / "specs" / "history"
+    history.mkdir(parents=True)
+    taken = history / "abcdef12.md"
+    taken.write_text(f"---\nsha: {'abcdef12' + '9' * 32}\n---\n\n# the other one\n")
+
+    path = commit_doc.write_history_file(tmp_repo, commit, "summary")
+
+    assert path.name == "abcdef123333.md"
+    assert "the other one" in taken.read_text()
+    assert commit_doc.history_doc_for(history, commit.sha) == path
+
+
+def test_a_re_sync_overwrites_the_docs_own_commit_not_a_neighbour(tmp_repo):
+    commit = commit_doc.Commit(
+        sha="abcdef12" + "3" * 32, author="a", date="2026-01-01", message="mine", diff=""
+    )
+    first = commit_doc.write_history_file(tmp_repo, commit, "first summary")
+    again = commit_doc.write_history_file(tmp_repo, commit, "second summary")
+
+    assert again == first
+    assert "second summary" in again.read_text()
+
+
+def test_the_history_doc_records_the_full_sha_and_still_reads_short(tmp_repo):
+    commit = commit_doc.Commit(
+        sha="a" * 40, author="Dev <d@example.com>", date="2026-01-01", message="subject\n\nbody", diff=""
+    )
+    text = commit_doc.write_history_file(tmp_repo, commit, "It changed things.").read_text()
+
+    assert text.startswith(f"---\nsha: {'a' * 40}\n---\n\n# Commit aaaaaaaa\n")
+    assert "- **Message:** subject" in text  # only the subject line, as before
+
+
+def test_all_branches_picks_up_a_commit_only_on_a_side_branch(tmp_repo):
+    git(tmp_repo, "checkout", "-q", "-b", "side")
+    side = _commit(tmp_repo, "on the side")
+    git(tmp_repo, "checkout", "-q", "-")
+
+    assert side not in pending(tmp_repo)
+    assert side in pending(tmp_repo, all_branches=True)
+
+
+def test_all_branches_still_honours_since(tmp_repo):
+    base = git(tmp_repo, "rev-parse", "HEAD").strip()
+    git(tmp_repo, "checkout", "-q", "-b", "side")
+    side = _commit(tmp_repo, "on the side")
+    git(tmp_repo, "checkout", "-q", "-")
+
+    assert pending(tmp_repo, since=base, all_branches=True) == [side]
+    assert pending(tmp_repo, since="2099-01-01", all_branches=True) == []
 
 
 def test_speckys_own_doc_sync_commits_are_never_documented(tmp_repo):

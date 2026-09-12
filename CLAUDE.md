@@ -19,8 +19,9 @@ uv run specky init               # configure AI provider, writes specky.toml (gi
 uv run specky install-git-hook   # install real .git/hooks/post-commit hook
 uv run specky sync               # backfill history/feature docs for existing commits
 uv run specky sync --dry-run     # ...or list what it would document first, calling no provider
-                                 # (--since REV|DATE, --limit N narrow it; --yes skips the
-                                 #  confirmation a >25-commit backfill stops for)
+                                 # (--since REV|DATE, --limit N narrow it; --all-branches widens
+                                 #  it past HEAD; --yes skips the confirmation a >25-commit
+                                 #  backfill stops for)
 uv run specky index              # rebuild .specky/index.db (FTS5) from specs/ + git log
 uv run specky search "<query>"   # keyword search over the index
 uv run specky render-html        # write static site to .specky/site/index.html

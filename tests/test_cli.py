@@ -39,21 +39,23 @@ def test_sync_flags_reach_the_handler(monkeypatch):
     to be wired all the way through, not just declared."""
     calls = {}
     monkeypatch.setattr(cli, "_sync", lambda args: calls.update(vars(args)))
-    _run(["sync", "--since", "HEAD~5", "--limit", "3", "--dry-run", "--yes"])
-    assert (calls["since"], calls["limit"], calls["dry_run"], calls["yes"]) == (
+    _run(["sync", "--since", "HEAD~5", "--limit", "3", "--dry-run", "--yes", "--all-branches"])
+    assert (calls["since"], calls["limit"], calls["dry_run"], calls["yes"], calls["all_branches"]) == (
         "HEAD~5",
         3,
+        True,
         True,
         True,
     )
 
     defaults = _subcommands()["sync"].parse_args([])
-    assert (defaults.since, defaults.limit, defaults.dry_run, defaults.yes) == (
-        None,
-        None,
-        False,
-        False,
-    )
+    assert (
+        defaults.since,
+        defaults.limit,
+        defaults.dry_run,
+        defaults.yes,
+        defaults.all_branches,
+    ) == (None, None, False, False, False)
 
 
 def test_index_reports_what_it_indexed(tmp_repo, write_doc, monkeypatch, capsys):

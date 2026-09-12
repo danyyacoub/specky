@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from specky import frontmatter
 from specky.ai_provider import ConfigError, Provider, load_provider_from_toml
 from specky.db import connect, repo_root as _repo_root
 
@@ -85,16 +86,47 @@ def generate_micro_doc(commit: Commit, provider: Provider) -> str:
     return provider.generate(prompt).strip()
 
 
+def _recorded_sha(path: Path) -> str | None:
+    """The full sha a history doc says it documents, or None for one written before that was
+    recorded (the filename's 8-hex prefix is all those carry)."""
+    recorded = frontmatter.parse(path.read_text())[0].get("sha")
+    return recorded if isinstance(recorded, str) else None
+
+
+def history_doc_for(history_dir: Path, sha: str) -> Path | None:
+    """The doc that documents `sha`, or None if this commit still needs one.
+
+    Two names are possible, because 8 hex digits is not a unique key on a large repo: the usual
+    `<sha8>.md`, and the `<sha12>.md` written when some other commit got there first. A doc with
+    no `sha:` is taken at its filename, which is the best that can be said for one written before
+    the full sha was recorded.
+    """
+    for name in (f"{sha[:8]}.md", f"{sha[:12]}.md"):
+        path = history_dir / name
+        if path.exists() and _recorded_sha(path) in (None, sha):
+            return path
+    return None
+
+
 def write_history_file(repo_root: Path, commit: Commit, summary: str) -> Path:
     history_dir = repo_root / "specs" / "history"
     history_dir.mkdir(parents=True, exist_ok=True)
+
     path = history_dir / f"{commit.sha[:8]}.md"
+    if path.exists() and _recorded_sha(path) not in (None, commit.sha):
+        path = history_dir / f"{commit.sha[:12]}.md"  # that name is another commit's
+
+    # The full sha is what `history_doc_for` matches on; the body keeps showing the short one,
+    # which is what a reader wants to see and copy.
     path.write_text(
-        f"# Commit {commit.sha[:8]}\n\n"
-        f"- **Date:** {commit.date}\n"
-        f"- **Author:** {commit.author}\n"
-        f"- **Message:** {commit.message.splitlines()[0]}\n\n"
-        f"{summary}\n"
+        frontmatter.render(
+            {"sha": commit.sha},
+            f"# Commit {commit.sha[:8]}\n\n"
+            f"- **Date:** {commit.date}\n"
+            f"- **Author:** {commit.author}\n"
+            f"- **Message:** {commit.message.splitlines()[0]}\n\n"
+            f"{summary}\n",
+        )
     )
     return path
 
@@ -134,37 +166,45 @@ def _is_revision(repo_root: Path, value: str) -> bool:
 
 
 def pending_commits(
-    repo_root: Path, since: str | None = None, limit: int | None = None
+    repo_root: Path,
+    since: str | None = None,
+    limit: int | None = None,
+    all_branches: bool = False,
 ) -> list[tuple[str, str]]:
     """(sha, subject) for every commit still needing a doc, oldest first.
 
-    Skipped: commits that already have a specs/history/<sha8>.md, and specky's own doc-sync
-    commits — `main()` refuses to document those when the hook fires, and a backfill has no
-    business paying to document them either.
+    Skipped: commits that already have a history doc (see `history_doc_for`), and specky's own
+    doc-sync commits — `main()` refuses to document those when the hook fires, and a backfill has
+    no business paying to document them either.
 
     `since` accepts either form a user is likely to reach for: a revision (`v1.2.0`, `HEAD~50`,
     a sha) becomes `<since>..HEAD`, and anything else is handed to git as `--since=<date>`
     ("2 weeks ago", "2026-01-01"). `limit` caps the result *after* filtering, so `--limit 5`
     means five commits actually processed, not five inspected.
+
+    `all_branches` walks every ref instead of just `HEAD`, so work that only exists on a side
+    branch gets documented too. Opt-in, because it multiplies the commit count — and therefore
+    the number of billable calls — that `_confirm` exists to make deliberate.
     """
     history_dir = repo_root / "specs" / "history"
-    done = {p.stem for p in history_dir.glob("*.md")} if history_dir.exists() else set()
 
     # `git log` rather than `rev-list` for the subject line, which the progress and --dry-run
     # output both want; the revision walking is identical.
     args = ["git", "log", "--reverse", "--format=%H%x1f%s"]
+    tip = ["--all"] if all_branches else ["HEAD"]
     if since and _is_revision(repo_root, since):
-        args.append(f"{since}..HEAD")
+        # `--all --not <rev>` is the multi-ref spelling of `<rev>..HEAD`.
+        args += [*tip, "--not", since] if all_branches else [f"{since}..HEAD"]
     elif since:
-        args += [f"--since={since}", "HEAD"]
+        args += [f"--since={since}", *tip]
     else:
-        args.append("HEAD")
+        args += tip
 
     log = subprocess.run(args, cwd=repo_root, capture_output=True, text=True, check=True).stdout
     pending = []
     for line in log.splitlines():
         sha, _, subject = line.partition("\x1f")
-        if sha[:8] in done or subject.startswith(_AUTO_COMMIT_MARKER):
+        if subject.startswith(_AUTO_COMMIT_MARKER) or history_doc_for(history_dir, sha):
             continue
         pending.append((sha, subject))
     return pending[:limit] if limit else pending
@@ -247,6 +287,7 @@ def sync(
     limit: int | None = None,
     dry_run: bool = False,
     assume_yes: bool = False,
+    all_branches: bool = False,
 ) -> list[Path]:
     """Generate a micro-doc + feature/workflow doc update for every commit that doesn't have a
     history entry yet. Idempotent for the history log — safe to re-run any time (e.g. after
@@ -259,14 +300,14 @@ def sync(
     transient provider error) shouldn't abandon a backfill of several hundred commits that's
     already half done.
 
-    `since`/`limit` narrow the range (see `missing_shas`), `dry_run` lists what would be
-    processed without contacting the provider at all, and `assume_yes` skips the confirmation
-    that a large backfill otherwise stops for.
+    `since`/`limit`/`all_branches` choose the range (see `pending_commits`), `dry_run` lists what
+    would be processed without contacting the provider at all, and `assume_yes` skips the
+    confirmation that a large backfill otherwise stops for.
     """
     from specky.generator import ExistingDocs
 
     repo_root = _repo_root()
-    pending = pending_commits(repo_root, since=since, limit=limit)
+    pending = pending_commits(repo_root, since=since, limit=limit, all_branches=all_branches)
     total = len(pending)
     if not pending:
         print("specky sync: already up to date")
