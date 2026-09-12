@@ -99,6 +99,42 @@ def test_to_mermaid_ids_are_derived_from_the_doc_path(indexed_repo):
     assert "specs_billing_refund_flow[" in mermaid
 
 
+def test_mermaid_labels_escape_what_would_end_the_label_and_nothing_else(tmp_repo, write_doc):
+    write_doc(
+        "billing/hostile.md",
+        '# Billing [v2] (draft) | #edge <b> "quoted"\n\nProse.\n',
+        {"type": "feature", "tags": ["refunds"]},
+    )
+    run_index(tmp_repo)
+    label = catalog.to_mermaid(catalog.build_graph(tmp_repo)).split('["')[1].split('"]')[0]
+
+    assert '"' not in label and "]" not in label
+    # Everything a quoted label already survives is left readable rather than entity-encoded.
+    assert label == "Billing [v2#93; (draft) | #edge <b> #quot;quoted#quot;"
+
+
+def test_a_bracket_in_a_title_no_longer_truncates_its_own_label(tmp_repo, write_doc):
+    """The whole point, and only the renderer proves it: `Billing [v2] (draft)` used to come out
+    as a node reading `"Billing [v2` — everything from the `]` on lost, plus a stray quote, with
+    no error to notice."""
+    from specky.html_render import _MERMAID_TOOL_DIR, render_mermaid_svg
+
+    if not (_MERMAID_TOOL_DIR / "node_modules").exists():
+        pytest.skip("mermaid tool dependencies not installed")
+
+    write_doc(
+        "billing/hostile.md",
+        "# Billing [v2] (draft)\n\nProse.\n",
+        {"type": "feature", "tags": ["refunds"]},
+    )
+    run_index(tmp_repo)
+
+    svg = render_mermaid_svg(catalog.to_mermaid(catalog.build_graph(tmp_repo)))
+    assert svg is not None and svg.lstrip().startswith("<svg")
+    assert "(draft)" in svg  # the tail of the title survived the `]`
+    assert "&quot;Billing" not in svg  # ...and the label isn't a half-parsed string any more
+
+
 def test_commit_info_and_commits_for_doc(indexed_repo):
     conn = db.connect(indexed_repo)
     conn.execute(

@@ -135,6 +135,24 @@ def commits_for_doc(repo_root: Path, doc_path: str) -> list[dict]:
     ]
 
 
+def _mermaid_label(title: str) -> str:
+    """A doc title is arbitrary prose, and it goes inside a `["…"]` node label.
+
+    Quoting is mermaid's own escape mechanism and covers almost everything: `(`, `)`, `{`, `}`,
+    `|`, `<`, `>` and `#` all render literally, in real mermaid and in the vendored renderer
+    `render-html` uses. Two don't, and both fail silently:
+
+    - `]` — the vendored renderer ends the label there and swallows the rest of the line, so a
+      title containing one drops that node's neighbours out of the diagram with no error anywhere.
+    - `"` — closes the label in any renderer.
+
+    Both become mermaid entity codes, which real mermaid substitutes back when it draws the label
+    (the vendored renderer prints them literally, which is why nothing else is escaped: a title
+    with a paren in it should read as a paren, not as `#40;`).
+    """
+    return title.replace("]", "#93;").replace('"', "#quot;")
+
+
 def to_mermaid(graph: dict) -> str:
     lines = [
         "flowchart LR",
@@ -142,8 +160,7 @@ def to_mermaid(graph: dict) -> str:
         "  classDef workflow fill:#fff7ed,stroke:#b45309",
     ]
     for node in graph["nodes"]:
-        label = node["title"].replace('"', "'")
-        lines.append(f'  {node["id"]}["{label}"]:::{node["type"]}')
+        lines.append(f'  {node["id"]}["{_mermaid_label(node["title"])}"]:::{node["type"]}')
 
     node_id_by_path = {n["path"]: n["id"] for n in graph["nodes"]}
     for edge in graph["edges"]:
