@@ -11,7 +11,7 @@ The Ask widget now remembers recent questions and answers within a browser tab, 
 
 ## How It Works
 
-1. **Browser generates a session ID** when the chat panel opens, a random UUID stored in the tab's sessionStorage.
+1. **Browser generates a session ID** when the page loads — `crypto.randomUUID()` where it exists, otherwise a timestamp-plus-random string, since `randomUUID` needs a secure context that plain `http://` on a real hostname isn't — and stores it in the tab's sessionStorage.
 2. **Each question includes the session ID** when sent to the server, along with its full text.
 3. **Server stores recent turns** (questions and answers) for that session in memory, keyed by the session ID.
 4. **History is folded into the prompt** above the retrieved context on follow-up questions, labeled so the model understands it as conversation context rather than a source to answer from.
