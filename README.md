@@ -118,6 +118,23 @@ Served pages get exact full-text search straight from the FTS5 index; the `file:
 to its in-page index, and the widget tells the reader to start the server rather than failing
 silently. See [`[serve]`](#serve--the-chat-server) for who is allowed to talk to it.
 
+Some readers won't open a folder of HTML, and some want the docs where the rest of the company's
+already are. `specky export` writes the same rendered content — same markdown pipeline, same tables,
+same server-side diagrams — as one file you can hand over:
+
+```bash
+specky export                          # .specky/export/specky-docs.html: one page, no JavaScript
+specky export --pdf                    # ...and print it, if weasyprint is installed
+specky export --confluence             # one storage-format XHTML per doc, plus an index page
+specky export --include-history        # add the per-commit notes, normally left out
+```
+
+The single page has a table of contents, a print stylesheet and no scripts at all, so it survives
+being emailed, opened off a share, or printed from any browser — `--pdf` is a convenience, not the
+only route to one. `specs/history/` is excluded by default: it's one doc per commit, and a reader
+opening a single file wants the docs, not the changelog. Nothing is ever truncated; the command
+reports what it left out and how big the result is.
+
 ## Enforce
 
 `specky check` fails when a change edits code that a doc describes without updating that doc. It

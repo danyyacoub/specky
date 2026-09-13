@@ -118,6 +118,21 @@ def _tests(args: argparse.Namespace) -> None:
         print(f"specky tests: {line}")
 
 
+def _export(args: argparse.Namespace) -> None:
+    from specky.db import repo_root
+    from specky.export import report_lines, run_export
+
+    result = run_export(
+        repo_root(),
+        mode="confluence" if args.confluence else "single-page",
+        include_history=args.include_history,
+        pdf=args.pdf,
+        title=args.title,
+    )
+    for line in report_lines(result):
+        print(f"specky export: {line}")
+
+
 def _setup_diagrams(args: argparse.Namespace) -> None:
     from specky.mermaid_tool import setup
 
@@ -284,6 +299,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tests_cmd.add_argument(
         "--force", action="store_true", help="Overwrite scaffolds that already exist"
+    )
+    export_cmd = command(
+        "export",
+        "Write the docs as one self-contained HTML file, a PDF, or Confluence storage format",
+        _export,
+    )
+    # Not `--single-page`, which would be a flag whose only job is to name the default. The two
+    # output shapes are mutually exclusive, so the second one is the flag — and `--pdf` prints the
+    # single page, so asking for both shapes at once is a mistake worth failing on rather than
+    # taking one and dropping the other in silence.
+    shape = export_cmd.add_mutually_exclusive_group()
+    shape.add_argument(
+        "--confluence",
+        action="store_true",
+        help="One Confluence storage-format XHTML per doc plus an index, instead of a single page",
+    )
+    shape.add_argument(
+        "--pdf",
+        action="store_true",
+        help="Also print the single page to PDF with weasyprint, if it's installed",
+    )
+    export_cmd.add_argument(
+        "--include-history",
+        action="store_true",
+        help="Include specs/history/ — one doc per commit, so this grows with the repo's history",
+    )
+    export_cmd.add_argument(
+        "--title", default="Documentation", help="Title on the cover and in the browser tab"
     )
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")

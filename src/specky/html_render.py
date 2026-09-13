@@ -1014,7 +1014,13 @@ def _tag_class(tag: str) -> str:
     return f"tag-{int(hashlib.sha1(tag.encode()).hexdigest(), 16) % _TAG_COLOR_COUNT}"
 
 
-def _domain_sort_key(domain: str) -> tuple[int, str]:
+def domain_sort_key(domain: str) -> tuple[int, str]:
+    """Root docs first, per-commit history last, everything else alphabetical between them.
+
+    Shared with `specky export` so a single-page export reads in the same order as the viewer's
+    sidebar — two orders for the same docs is the kind of difference a reader notices and can't
+    explain.
+    """
     if domain == _DOMAIN_ORDER_FIRST:
         return (0, domain)
     if domain == _DOMAIN_ORDER_LAST:
@@ -1022,7 +1028,7 @@ def _domain_sort_key(domain: str) -> tuple[int, str]:
     return (1, domain)
 
 
-def _slug(doc_path: str) -> str:
+def slug(doc_path: str) -> str:
     """A doc's repo-relative path flattened into one page name.
 
     Uses the *whole* path under specs/, not just `<domain>-<stem>`: a domain is only the first
@@ -1278,6 +1284,27 @@ def _render_mermaid_blocks(body_html: str) -> tuple[str, bool, bool]:
     return _MERMAID_BLOCK.sub(repl, body_html), any_source, any_rendered
 
 
+# python-markdown's defaults leave a `|` table as a paragraph of pipes and a ``` fence as
+# indented text, which are the two constructs every generated doc is made of.
+MARKDOWN_EXTENSIONS = ["tables", "fenced_code"]
+
+
+def markdown_html(content: str) -> str:
+    return md.markdown(content, extensions=MARKDOWN_EXTENSIONS)
+
+
+def render_doc_body(content: str, glossary: dict[str, str]) -> tuple[str, bool, bool]:
+    """A doc's markdown as the HTML every specky renderer shows: glossary terms wrapped, tables in
+    a scrollable figure, ```mermaid``` fences replaced by static SVG.
+
+    Returns `(html, any mermaid source, any of it rendered)` — the two flags drive the one-time
+    "run `specky setup-diagrams`" hint. `specky export` shares this so a stakeholder's single-page
+    HTML or PDF is the same content as the viewer's, not a second renderer's guess at it.
+    """
+    body_html = link_glossary(markdown_html(content), glossary)
+    return _render_mermaid_blocks(_wrap_tables(body_html))
+
+
 # --- doc chrome: breadcrumb/tags header, and the "Related" cross-link section ---------
 
 
@@ -1392,7 +1419,7 @@ def _render_rail(
             # group when the page you're on is one of them.
             "open": domain != _DOMAIN_ORDER_LAST,
         }
-        for domain in sorted(domains, key=_domain_sort_key)
+        for domain in sorted(domains, key=domain_sort_key)
     ]
     return _RAIL_TEMPLATE.render(
         domains=ordered,
@@ -1459,7 +1486,7 @@ def render_site(repo_root: Path) -> Path:
     for row in rows:
         path, domain, title, content, doc_type, tags_raw, related_raw, owner = row[:8]
         stale_since, last_code = row[8:]
-        html_name = f"{_slug(path)}.html"
+        html_name = f"{slug(path)}.html"
         tags = [t for t in tags_raw.split(",") if t]
         related = [r for r in related_raw.split(",") if r]
         all_tags.update(tags)
@@ -1525,10 +1552,7 @@ def render_site(repo_root: Path) -> Path:
     any_mermaid_source = False
     any_mermaid_rendered = False
     for doc in docs:
-        body_html = md.markdown(doc["content"], extensions=["tables", "fenced_code"])
-        body_html = link_glossary(body_html, glossary)
-        body_html = _wrap_tables(body_html)
-        body_html, has_source, has_rendered = _render_mermaid_blocks(body_html)
+        body_html, has_source, has_rendered = render_doc_body(doc["content"], glossary)
         any_mermaid_source = any_mermaid_source or has_source
         any_mermaid_rendered = any_mermaid_rendered or has_rendered
         body = _doc_header(doc) + body_html + _related_section(doc, path_lookup)

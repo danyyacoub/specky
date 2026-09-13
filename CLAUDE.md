@@ -39,6 +39,11 @@ uv run specky tests              # scaffold tests/spec/test_<domain>_<topic>.py 
                                  # `## Acceptance Tests` table: one skipped, assertion-free test per
                                  # row. Existing files are kept unless --force. Gitignored here —
                                  # this repo's own scaffolds would duplicate tests/
+uv run specky export             # docs as one handable file in .specky/export/: a single no-JS
+                                 # HTML page (default, same render pipeline as the viewer),
+                                 # `--pdf` for weasyprint if installed, `--confluence` for one
+                                 # storage-format XHTML per doc + an index. specs/history/ is left
+                                 # out unless --include-history; `--title` names the cover
 uv run specky index              # rebuild .specky/index.db (FTS5) from specs/ + git log
 uv run specky search "<query>"   # keyword search over the index
 uv run specky render-html        # write static site to .specky/site/index.html

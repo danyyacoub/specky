@@ -176,7 +176,7 @@ def test_rerender_replaces_a_stale_page(site, write_doc, tmp_repo):
 
 
 def test_docs_sharing_a_domain_and_a_stem_each_get_their_own_page(tmp_repo, write_doc):
-    """Regression: `_slug` keyed on domain + stem, so the second of these two silently
+    """Regression: `slug` keyed on domain + stem, so the second of these two silently
     overwrote the first and vanished from the site."""
     write_doc("x/a/same.md", "# A same\n")
     write_doc("x/b/same.md", "# B same\n")

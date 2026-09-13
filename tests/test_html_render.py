@@ -4,7 +4,7 @@ from specky import html_render
 from specky.html_render import (
     _excerpt,
     _scrub_svg,
-    _slug,
+    slug,
     _tag_class,
     _wrap_tables,
     link_glossary,
@@ -30,18 +30,18 @@ GLOSSARY = {
         ("specs/a/b/c/deep.md", "a-b-c-deep"),
     ],
 )
-def test_slug(path, expected):
-    assert _slug(path) == expected
+def testslug(path, expected):
+    assert slug(path) == expected
 
 
 def test_slug_distinguishes_same_stem_in_different_subdirectories():
     """Two docs sharing a domain (first path part) and a stem used to collapse onto one page
     name, and the second render silently overwrote the first."""
-    assert _slug("specs/x/a/same.md") != _slug("specs/x/b/same.md")
+    assert slug("specs/x/a/same.md") != slug("specs/x/b/same.md")
 
 
 def test_root_doc_named_index_cannot_clobber_the_home_page():
-    assert _slug("specs/index.md") == "root-index"
+    assert slug("specs/index.md") == "root-index"
 
 
 # --- excerpts and tags ------------------------------------------------------------------
