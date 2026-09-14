@@ -31,8 +31,14 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from specky import mermaid_tool
-from specky.commit_doc import HOOK_MARKER, _AUTO_COMMIT_MARKER, history_doc_for
+from specky import mermaid_tool, paths
+from specky.commit_doc import (
+    HOOK_MARKER,
+    HOOKS,
+    _AUTO_COMMIT_MARKER,
+    history_doc_for,
+    hooks_dir,
+)
 from specky.generator import PENDING_DIR
 
 OK, WARN, FAIL = "ok", "warn", "fail"
@@ -147,21 +153,51 @@ def _config(repo_root: Path) -> list[Check]:
 
 
 def _git_hook(repo_root: Path) -> list[Check]:
-    hook = repo_root / ".git" / "hooks" / "post-commit"
-    if not hook.is_file():
-        return [Check("git hook", WARN, "post-commit hook not installed — run `specky install-git-hook`")]
-    if HOOK_MARKER not in hook.read_text():
-        return [
+    """All three hooks, in the directory git actually runs them from.
+
+    Reported per hook rather than as one verdict, because the interesting case is the *partial*
+    install: a repo set up before `post-merge`/`post-rewrite` existed has a working post-commit
+    hook and still misses every merge and every rebase. That's a `warn` naming the fix, while a
+    hook file specky didn't write stays a `fail` — `install-git-hook` won't overwrite one.
+    """
+    hooks_path = hooks_dir(repo_root)
+    checks = []
+    missing = []
+    for name in HOOKS:
+        hook = hooks_path / name
+        if not hook.is_file():
+            missing.append(name)
+        elif HOOK_MARKER not in hook.read_text():
+            checks.append(
+                Check(
+                    "git hook",
+                    FAIL,
+                    f"{hook} exists but wasn't installed by specky, and `install-git-hook` won't "
+                    "overwrite it — add `specky commit-doc || true` to it by hand",
+                )
+            )
+        elif not os.access(hook, os.X_OK):
+            checks.append(
+                Check("git hook", FAIL, f"{hook} is not executable, so git silently never runs it")
+            )
+        else:
+            checks.append(Check("git hook", OK, f"{name} hook installed at {hook}"))
+
+    if missing:
+        installed = len(HOOKS) - len(missing)
+        checks.append(
             Check(
                 "git hook",
-                FAIL,
-                f"{hook} exists but wasn't installed by specky, and `install-git-hook` won't "
-                "overwrite it — add `specky commit-doc || true` to it by hand",
+                WARN,
+                f"{', '.join(missing)} hook(s) not installed — run `specky install-git-hook`"
+                + (
+                    ", so commits that arrive by merge, pull, rebase or amend go undocumented"
+                    if installed
+                    else ""
+                ),
             )
-        ]
-    if not os.access(hook, os.X_OK):
-        return [Check("git hook", FAIL, f"{hook} is not executable, so git silently never runs it")]
-    return [Check("git hook", OK, f"post-commit hook installed at {hook}")]
+        )
+    return checks
 
 
 def _index(repo_root: Path) -> list[Check]:
@@ -223,7 +259,7 @@ def _pending(repo_root: Path) -> list[Check]:
 
 def _backlog(repo_root: Path) -> list[Check]:
     """Whether the hook is producing docs *now*, over a fixed window of recent commits."""
-    history_dir = repo_root / "specs" / "history"
+    history_dir = paths.history_dir(repo_root)
     log = _run(
         ["git", "log", f"-{BACKLOG_PROBE_COMMITS}", "--format=%H%x1f%s"], cwd=repo_root
     ).stdout

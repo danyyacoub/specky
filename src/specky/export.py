@@ -37,6 +37,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from specky import paths
 from specky.db import connect
 from specky.html_render import (
     domain_sort_key,
@@ -50,7 +51,6 @@ EXPORT_DIR = ".specky/export"
 SINGLE_PAGE_NAME = "specky-docs.html"
 PDF_NAME = "specky-docs.pdf"
 CONFLUENCE_INDEX = "index.xhtml"
-HISTORY_PREFIX = "specs/history/"
 
 MODES = ("single-page", "confluence")
 
@@ -76,7 +76,9 @@ class Doc:
 
     @property
     def name(self) -> str:
-        return self.path.removeprefix("specs/")
+        """`specs/billing/refunds.md` → `billing/refunds.md` — the path without the docs root,
+        which is the same shape whatever that root is called."""
+        return self.path.split("/", 1)[-1]
 
 
 @dataclass
@@ -97,7 +99,7 @@ class Export:
 
 
 def collect(repo_root: Path, include_history: bool = False) -> tuple[list[Doc], int]:
-    """Every doc worth exporting, plus how many `specs/history/` docs were left out."""
+    """Every doc worth exporting, plus how many per-commit history docs were left out."""
     conn = connect(repo_root)
     try:
         rows = conn.execute(
@@ -108,9 +110,10 @@ def collect(repo_root: Path, include_history: bool = False) -> tuple[list[Doc], 
     if not rows:
         raise RuntimeError("no documents indexed yet — run `specky index` first")
 
+    history_prefix = paths.history_prefix(repo_root)
     docs, skipped = [], 0
     for path, domain, title, content, doc_type, owner in rows:
-        if path.startswith(HISTORY_PREFIX) and not include_history:
+        if path.startswith(history_prefix) and not include_history:
             skipped += 1
             continue
         docs.append(Doc(path, domain, title, content, doc_type or "", owner or ""))

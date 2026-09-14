@@ -54,7 +54,7 @@ from pathlib import Path
 import markdown as md
 from jinja2 import Environment
 
-from specky import mermaid_tool
+from specky import mermaid_tool, paths
 from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
 from specky.staleness import days_behind
@@ -1031,13 +1031,13 @@ def domain_sort_key(domain: str) -> tuple[int, str]:
 def slug(doc_path: str) -> str:
     """A doc's repo-relative path flattened into one page name.
 
-    Uses the *whole* path under specs/, not just `<domain>-<stem>`: a domain is only the first
-    path component (see `indexer._domain_for`), so `specs/a/b/x.md` and `specs/a/c/x.md` share
-    a domain and a stem, and keying on those two alone made the second page overwrite the first
-    and silently vanish from the site. Root-level docs keep the `root-` prefix their domain
+    Uses the *whole* path under the docs root, not just `<domain>-<stem>`: a domain is only the
+    first path component (see `indexer._domain_for`), so `specs/a/b/x.md` and `specs/a/c/x.md`
+    share a domain and a stem, and keying on those two alone made the second page overwrite the
+    first and silently vanish from the site. Root-level docs keep the `root-` prefix their domain
     already gives them, which also keeps `specs/index.md` from colliding with the home page.
     """
-    parts = Path(doc_path).relative_to("specs").with_suffix("").parts
+    parts = Path(doc_path).with_suffix("").parts[1:]  # [1:] drops the docs root's own name
     if len(parts) == 1:
         parts = ("root",) + parts
     return "-".join(re.sub(r"[^A-Za-z0-9]+", "-", p).strip("-") for p in parts)
@@ -1128,7 +1128,7 @@ def load_glossary(repo_root: Path) -> dict[str, str]:
     Empty if the repo has no glossary yet — auto-linking degrades to a no-op, same as a
     doc with no glossary terms to find.
     """
-    path = repo_root / "specs" / "GLOSSARY.md"
+    path = paths.docs_root(repo_root) / "GLOSSARY.md"
     if not path.exists():
         return {}
     terms: dict[str, str] = {}
@@ -1355,7 +1355,7 @@ def _related_section(doc: dict, path_lookup: dict[str, dict]) -> str:
     """`related:` slugs resolved to real links — dead data until now (see module docstring)."""
     items = []
     for slug in doc["related"]:
-        target = path_lookup.get(f"specs/{slug}.md")
+        target = path_lookup.get(f"{slug}.md")
         if not target:
             continue
         items.append(
@@ -1514,7 +1514,9 @@ def render_site(repo_root: Path) -> Path:
             }
         )
         docs.append(doc)
-        path_lookup[path] = {"title": title, "html_name": html_name}
+        # Keyed by `<domain>/<topic>.md`: that's how a `related:` entry names its target, whatever
+        # the docs root happens to be called (see `_related_section`).
+        path_lookup[path.split("/", 1)[-1]] = {"title": title, "html_name": html_name}
         entry = {
             "title": title,
             "domain": domain,

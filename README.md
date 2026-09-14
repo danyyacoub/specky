@@ -15,8 +15,10 @@ opencode and Kiro.
 
 ## Install
 
-The post-commit hook runs `specky` from a plain shell, so it has to be on your PATH globally — not
-only inside a project's `.venv`:
+The git hooks run `specky` from a plain shell, so install it globally rather than only inside a
+project's `.venv` (the hooks fall back to the absolute path of the `specky` that installed them, so
+a login-less PATH in a GUI git client still works — but a global install is what keeps that path
+valid):
 
 ```bash
 uv tool install --editable /path/to/specky   # once published: uv tool install specky
@@ -46,15 +48,49 @@ arbitrary local command — including the `claude` CLI in print mode, if you'd r
 second API key. It writes `specky.toml`, which is gitignored: it can hold the name of an API-key
 env var, never a key.
 
+`install-git-hook` writes three hooks — `post-commit`, `post-merge` and `post-rewrite` — into
+wherever git actually runs hooks from (`core.hooksPath` if pre-commit/husky/lefthook set it, and the
+shared common dir in a `git worktree`). One hook isn't enough: `post-commit` fires for `git commit`
+only. A hook file specky didn't write is never overwritten.
+
+If `specs/` already means something else in your repo — OpenAPI documents, a Rust `specs` crate, an
+ECS module — `specky init` notices and offers another name, writing `[docs] root` for you. You can
+also set it by hand; put it in `pyproject.toml` for CI to see it (see [`[docs]`](#docs--where-the-docs-live)).
+
+### A repo that already has docs
+
+Don't let the first sync invent twins of docs you already wrote — import them first:
+
+```bash
+specky adopt --dry-run    # show the mapping: docs/billing/refunds.md -> specs/billing/refunds.md
+specky adopt              # git mv them in, marked `authored: human` so the hook won't rewrite them
+specky tag && specky index
+specky sync --since v1.2.0   # narrow on purpose: your existing docs already cover what came before
+```
+
+`adopt` finds tracked markdown under `docs/`, `doc/`, `documentation/`, `adr/`, `rfc/`, nested
+`decisions/`, plus `ARCHITECTURE.md`/`DESIGN.md`/`RUNBOOK.md`/`OPERATIONS.md`; `--include GLOB` and
+`--exclude GLOB` adjust that. It makes no AI call, commits nothing, and a destination that's already
+taken is reported and skipped rather than silently renamed. Full behaviour:
+[specs/documentation/doc-adoption.md](specs/documentation/doc-adoption.md).
+
 ## Document
 
-After `install-git-hook`, commit as usual. The hook — a real git `post-commit` hook, so it fires
-for any tool, agent or human — writes a short summary to `specs/history/<sha8>.md` and
+After `install-git-hook`, commit as usual. The hooks are real git hooks, so they fire for any tool,
+agent or human. Each fire writes a short summary to `specs/history/<sha8>.md` and
 generates/updates the feature-level doc the commit affects (`specs/<domain>/<topic>.md`), skipping
 commits with no feature-level behaviour change. Generated docs land in a follow-up commit of their
-own.
+own, which stages exactly the files that run wrote — an in-progress doc edit of yours is never swept
+into it.
 
-Catch up on commits made before the hook existed:
+A fire works on the **backlog**, not on `HEAD`: it documents up to 5 of the newest 20 undocumented
+commits. That's what makes a merge, a rebase, a cherry-pick, a `git am`, a squash-merge in the
+GitHub UI or a teammate with no hook installed get documented anyway — a hook only has to fire
+eventually. An amend or rebase *renames* the history doc it already paid for instead of orphaning it,
+so nothing is generated twice. Nothing is committed while a rebase or cherry-pick is in progress —
+those paths are noted in `.specky/` and committed by the next fire instead.
+
+Catch up on anything older than that window, or on a repo the hooks have never run in:
 
 ```bash
 specky sync --dry-run          # list what it would document, calling no provider
@@ -62,6 +98,84 @@ specky sync                    # backfill; stops to confirm at 25 commits or mor
 specky sync --since v1.2.0 --limit 20
 specky sync --all-branches     # commits reachable from any ref, not just HEAD
 ```
+
+For the commits no developer's machine ever sees — a squash-merge done in the forge's UI, a push from
+a contributor without the hook — add a job that reconciles the default branch and opens a PR with
+whatever it wrote, as `.github/workflows/docs-sync.yml`:
+
+```yaml
+name: docs-sync
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * *"     # a capped run leaves a backlog nothing else comes back for
+  workflow_dispatch:
+
+concurrency:                 # two runs would open two PRs for the same commits
+  group: specky-docs-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write            # push the docs branch
+  pull-requests: write       # open the PR
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # sync diffs the whole history; a shallow clone looks undocumented
+      - name: Skip our own doc commits
+        id: guard
+        run: |
+          subject=$(git log -1 --format=%s)
+          if [ "${subject#docs: sync specky docs \[skip specky\]}" != "$subject" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: astral-sh/setup-uv@v5
+        if: steps.guard.outputs.skip != 'true'
+      - if: steps.guard.outputs.skip != 'true'
+        run: uv tool install specky
+      - name: Configure the provider
+        if: steps.guard.outputs.skip != 'true'
+        run: |
+          cat > specky.toml <<'TOML'
+          [ai]
+          provider = "anthropic"
+          model = "claude-haiku-4-5"
+          api_key_env = "ANTHROPIC_API_KEY"
+          TOML
+      - name: Reconcile the doc backlog
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          specky sync --limit 50 --yes   # --limit bounds the spend; the next run picks up the rest
+          specky index
+      - name: Open a pull request
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -n "$(git status --porcelain -- specs)" ] || exit 0
+          branch="specky/docs-sync-${{ github.run_id }}"
+          git config user.name "specky[bot]"
+          git config user.email "specky[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add -- specs        # so the specky.toml written above can't ride along
+          git commit -m "docs: sync specky docs [skip specky]"
+          git push -u origin "$branch"
+          gh pr create --title "docs: sync specky docs" \
+            --body "Generated by \`specky sync\` — read it as a draft."
+```
+
+A PR rather than a push to `main`: docs written by a model are a change somebody should read, and a
+job that can push to your default branch is a much bigger thing to hand a CI runner. This is the one
+job that needs an API key — `index` and `check` are offline. The `[skip specky]` guard is what stops
+merging the PR from triggering the next run.
 
 Add a line to any generated doc's frontmatter to say who to ask about it:
 
@@ -236,10 +350,15 @@ list, and a made-up figure would be worse than an honest one.
 
 ## How it works
 
-- **Two doc-generation paths, one convention.** The post-commit hook documents commit by commit;
-  the `document-domain` skill documents an area in one pass. Both write
-  `specs/<domain>/<topic>.md`, kebab-case topic, never `README.md`. An auto-commit is marked so the
-  hook can't recurse on its own doc commits.
+- **Two doc-generation paths, one convention.** The git hooks document commit by commit; the
+  `document-domain` skill documents an area in one pass. Both write `specs/<domain>/<topic>.md`,
+  kebab-case topic, never `README.md`. An auto-commit is marked so the hooks can't recurse on their
+  own doc commits.
+- **Reconciliation, not events.** "Which commits have no doc" is derived by diffing the git log
+  against `specs/history/`, and that diff is what a hook fire, `specky sync`, `specky doctor` and the
+  CI job all act on — three tiers of trigger over one mechanism. Git fires hooks for only some of the
+  ways a commit can arrive, so anything that depends on catching the event is a permanent gap;
+  anything that reconciles only has to run eventually.
 - **One SQLite database.** `.specky/index.db` (gitignored) holds the docs, the commit log, their
   FTS5 tables, the file→doc map, and the memoized provider responses `specky cost` reports on. `specky index` is a full rebuild every run — a specs/ tree and
   a git log are cheap to re-walk, and a rebuild can't drift from reality the way an incremental
@@ -281,6 +400,22 @@ The cache lives in the gitignored `.specky/index.db`, holds at most 20 MB of res
 evicted first), and is keyed on the model — switching models re-asks rather than serving the old
 model's answers. `cache = false` turns it off; the usage log `specky cost` reads is written either
 way.
+
+### `[docs]` — where the docs live
+
+`specs/` is only the default name for the tree specky maintains. Read from `[docs]` in `specky.toml`,
+or from `[tool.specky.docs]` in `pyproject.toml` — prefer the second, because `specky.toml` is
+gitignored and CI has to resolve the same tree or `specky check` reads an empty one:
+
+```toml
+[tool.specky.docs]
+root = "documentation"      # repo-relative; must be inside the repo
+```
+
+Everything follows it: generation, `index`, `search`, `check`, the viewer, `export`, `tests` and
+`doctor`. `<root>/history/` is not configurable. A root that's absolute or escapes the repo falls
+back to `specs`. Changing the root on a repo that already has docs means moving them yourself —
+nothing migrates an existing tree.
 
 ### `[serve]` — the chat server
 

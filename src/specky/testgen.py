@@ -22,6 +22,7 @@ import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
+from specky import paths
 from specky.db import connect
 
 OUT_DIR = "tests/spec"
@@ -180,7 +181,8 @@ def parse_scenarios(content: str) -> list[Scenario]:
 
 def out_path_for(doc_path: str) -> str:
     """`specs/cli/cost.md` → `tests/spec/test_cli_cost.py`."""
-    stem = re.sub(r"^specs/", "", doc_path).removesuffix(".md")
+    # The leading segment is the docs root, whatever it's called; the test name is about the doc.
+    stem = doc_path.split("/", 1)[-1].removesuffix(".md")
     slug = re.sub(r"[^a-z0-9]+", "_", stem.lower()).strip("_")
     return f"{OUT_DIR}/test_{slug}.py"
 
@@ -234,8 +236,8 @@ def collect(repo_root: Path) -> list[Suite]:
     conn = connect(repo_root)
     try:
         rows = conn.execute(
-            "SELECT path, content FROM documents WHERE path NOT LIKE 'specs/history/%' "
-            "ORDER BY path"
+            "SELECT path, content FROM documents WHERE path NOT LIKE ? ORDER BY path",
+            (f"{paths.history_prefix(repo_root)}%",),
         ).fetchall()
     finally:
         conn.close()

@@ -13,7 +13,7 @@ import sys
 import pytest
 
 from specky import cli, doctor
-from specky.commit_doc import POST_COMMIT_HOOK
+from specky.commit_doc import HOOKS, install_git_hook
 
 from conftest import git
 
@@ -41,10 +41,9 @@ def _write_config(repo, body: str) -> None:
 
 
 def _install_hook(repo) -> None:
-    hook = repo / ".git" / "hooks" / "post-commit"
-    hook.parent.mkdir(parents=True, exist_ok=True)
-    hook.write_text(POST_COMMIT_HOOK)
-    hook.chmod(0o755)
+    """The real installer, so these tests can't pass against a hook shape specky no longer writes.
+    `in_repo` has already chdir'd, which is how install_git_hook finds the repo."""
+    install_git_hook()
 
 
 # --- the fresh-repo contract -------------------------------------------------------------
@@ -128,9 +127,22 @@ def test_a_missing_api_key_fails_and_a_present_one_is_never_printed(in_repo, mon
 # --- git hook ----------------------------------------------------------------------------
 
 
-def test_speckys_own_hook_passes(in_repo):
+def test_speckys_own_hooks_pass(in_repo):
     _install_hook(in_repo)
-    assert _statuses(doctor.run_checks(), "git hook") == [doctor.OK]
+    assert _statuses(doctor.run_checks(), "git hook") == [doctor.OK] * len(HOOKS)
+
+
+def test_a_half_installed_set_warns_about_the_missing_hooks(in_repo):
+    """The state a repo set up before post-merge/post-rewrite existed is in: post-commit works, so
+    nothing looks wrong, and every merge and rebase is silently going undocumented."""
+    _install_hook(in_repo)
+    for name in ("post-merge", "post-rewrite"):
+        (in_repo / ".git" / "hooks" / name).unlink()
+
+    checks = _by_section(doctor.run_checks())["git hook"]
+    assert [c.status for c in checks] == [doctor.OK, doctor.WARN]
+    assert "post-merge, post-rewrite" in checks[1].detail
+    assert "install-git-hook" in checks[1].detail
 
 
 def test_someone_elses_post_commit_hook_is_a_failure(in_repo):
@@ -142,7 +154,7 @@ def test_someone_elses_post_commit_hook_is_a_failure(in_repo):
     hook.chmod(0o755)
 
     checks = _by_section(doctor.run_checks())["git hook"]
-    assert [c.status for c in checks] == [doctor.FAIL]
+    assert [c.status for c in checks] == [doctor.FAIL, doctor.WARN]
     assert "wasn't installed by specky" in checks[0].detail
 
 
@@ -153,7 +165,7 @@ def test_a_non_executable_hook_is_a_failure(in_repo):
     (in_repo / ".git" / "hooks" / "post-commit").chmod(0o644)
 
     checks = _by_section(doctor.run_checks())["git hook"]
-    assert [c.status for c in checks] == [doctor.FAIL]
+    assert [c.status for c in checks] == [doctor.FAIL, doctor.OK, doctor.OK]
     assert "not executable" in checks[0].detail
 
 

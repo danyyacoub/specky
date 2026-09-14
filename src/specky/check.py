@@ -16,13 +16,14 @@ not regressions a contributor introduced.
 from __future__ import annotations
 
 import subprocess
-import tomllib
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
+from specky import paths
 from specky.commit_doc import _AUTO_COMMIT_MARKER, _is_revision, history_doc_for
 from specky.db import connect
+from specky.paths import read_table as _read_table
 from specky.staleness import days_behind
 
 # git's hash of the empty tree: diffing against it yields the whole worktree, which is what a
@@ -51,17 +52,6 @@ DEFAULT_IGNORE = (
 # pairing the same two is what distinguishes a doc that tracks a file from a coincidence. Pairs
 # below the threshold still count as coverage; they just don't fail anything.
 MIN_LINK_COMMITS = 2
-
-
-def _read_table(path: Path, keys: tuple[str, ...]) -> dict:
-    """A nested TOML table, or `{}` if the file or any key along the way is absent."""
-    if not path.exists():
-        return {}
-    with path.open("rb") as f:
-        table = tomllib.load(f)
-    for key in keys:
-        table = table.get(key) or {}
-    return table
 
 
 # How far a doc may lag the code it covers before staleness.py calls it stale. Two weeks, because
@@ -247,7 +237,7 @@ def _changed_files(repo_root: Path, base: str) -> list[str]:
 
 
 def _undocumented_commits(repo_root: Path, base: str) -> list[tuple[str, str]]:
-    history_dir = repo_root / "specs" / "history"
+    history_dir = paths.history_dir(repo_root)
     # The empty tree isn't a commit, so there's no range to exclude — that case is "all of it".
     revs = "HEAD" if base == EMPTY_TREE else f"{base}..HEAD"
     log = _git(repo_root, "log", "--reverse", "--format=%H%x1f%s", revs)
@@ -260,20 +250,20 @@ def _undocumented_commits(repo_root: Path, base: str) -> list[tuple[str, str]]:
     return pending
 
 
-def _covering_docs(repo_root: Path, paths: list[str]) -> dict[str, list[tuple[str, int]]]:
+def _covering_docs(repo_root: Path, files: list[str]) -> dict[str, list[tuple[str, int]]]:
     """`{file: [(doc_path, how many linked commits paired them), ...]}` from the precomputed
     table. Joined against `documents` so a doc that has since been deleted can't be demanded."""
-    if not paths:
+    if not files:
         return {}
     conn = connect(repo_root)
     try:
-        placeholders = ",".join("?" * len(paths))
+        placeholders = ",".join("?" * len(files))
         rows = conn.execute(
             f"SELECT doc_files.path, doc_files.doc_path, doc_files.commits FROM doc_files "
             f"JOIN documents ON documents.path = doc_files.doc_path "
             f"WHERE doc_files.path IN ({placeholders}) "
             f"ORDER BY doc_files.path, doc_files.commits DESC, doc_files.doc_path",
-            paths,
+            files,
         ).fetchall()
     finally:
         conn.close()
@@ -322,8 +312,11 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
     resolved = resolve_base(repo_root, base=base, since=since)
     changed = _changed_files(repo_root, resolved)
 
-    touched_docs = sorted(f for f in changed if f.startswith("specs/"))
-    code_files = sorted(f for f in changed if not f.startswith("specs/") and not config.ignores(f))
+    docs_prefix = paths.docs_prefix(repo_root)
+    touched_docs = sorted(f for f in changed if f.startswith(docs_prefix))
+    code_files = sorted(
+        f for f in changed if not f.startswith(docs_prefix) and not config.ignores(f)
+    )
 
     covering = _covering_docs(repo_root, code_files)
     undocumented = [
@@ -377,8 +370,8 @@ def report_lines(report: Report) -> list[str]:
     if report.undocumented_commits:
         lines.append("")
         lines.append(
-            f"Warning: {len(report.undocumented_commits)} commit(s) have no specs/history/ doc "
-            "— the post-commit hook may not be installed (`specky install-git-hook`, then "
+            f"Warning: {len(report.undocumented_commits)} commit(s) have no history doc "
+            "— the git hooks may not be installed (`specky install-git-hook`, then "
             "`specky sync`):"
         )
         lines += [f"  {sha[:8]} {subject}" for sha, subject in report.undocumented_commits]
@@ -408,7 +401,8 @@ def report_lines(report: Report) -> list[str]:
     if report.stale_elsewhere:
         lines.append("")
         lines.append(
-            f"Note: {report.stale_elsewhere} doc(s) elsewhere in specs/ are behind their code too "
+            f"Note: {report.stale_elsewhere} doc(s) elsewhere in the docs tree are behind their "
+            "code too "
             "— the viewer's Stale filter lists them"
         )
     if report.weak_links:

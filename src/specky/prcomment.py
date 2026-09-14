@@ -28,7 +28,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from specky import gitlog
+from specky import gitlog, paths
 from specky.check import EMPTY_TREE, resolve_base
 from specky.generator import PENDING_DIR, modules_purposes
 from specky.testgen import section
@@ -56,9 +56,18 @@ WHAT_IT_DOES = "what it does"
 _INDEX_DOCS = "index docs"
 
 
-def _kind(path: str) -> str:
-    """Which part of the comment a changed `specs/` path belongs in."""
-    if path.startswith("specs/history/"):
+def _rel(path: str) -> str:
+    """`specs/billing/refund-flow.md` → `billing/refund-flow.md`.
+
+    The docs root's own name carries no information in a comment about docs, and dropping the first
+    segment rather than a literal `specs/` keeps that true in a repo that renamed it.
+    """
+    return path.split("/", 1)[-1]
+
+
+def _kind(path: str, history_prefix: str) -> str:
+    """Which part of the comment a changed doc path belongs in."""
+    if path.startswith(history_prefix):
         return "history"
     return _INDEX_DOCS if path.count("/") < 2 else "doc"
 
@@ -79,7 +88,7 @@ class DocChange:
     @property
     def name(self) -> str:
         """`specs/billing/refund-flow.md` → `billing/refund-flow.md`."""
-        return self.path.removeprefix("specs/")
+        return _rel(self.path)
 
     def as_dict(self) -> dict:
         return {
@@ -139,16 +148,19 @@ def _diff_base(repo_root: Path, base: str) -> str:
 
 
 def _changed_docs(repo_root: Path, rev: str) -> list[tuple[str, str, str]]:
-    """`[(status letter, path, old path), ...]` for the `specs/` paths this range changed."""
-    out = gitlog.run(repo_root, ["diff", "--name-status", "-M", f"{rev}..HEAD", "--", "specs"])
+    """`[(status letter, path, old path), ...]` for the doc paths this range changed."""
+    out = gitlog.run(
+        repo_root,
+        ["diff", "--name-status", "-M", f"{rev}..HEAD", "--", paths.docs_prefix(repo_root)],
+    )
     changed = []
     for line in out.splitlines():
         fields = line.split("\t")
         if len(fields) < 2:
             continue
-        status, paths = fields[0][:1], fields[1:]
+        status, names = fields[0][:1], fields[1:]
         # A rename is `R100\told\tnew`; everything else is `<letter>\tpath`.
-        path, old = (paths[1], paths[0]) if status == "R" and len(paths) > 1 else (paths[0], "")
+        path, old = (names[1], names[0]) if status == "R" and len(names) > 1 else (names[0], "")
         changed.append((status, path, old))
     return changed
 
@@ -199,18 +211,19 @@ def _section_diff(old: str, new: str) -> tuple[str, ...]:
 def run_pr_comment(repo_root: Path, base: str | None = None, since: str | None = None) -> Report:
     resolved = resolve_base(repo_root, base=base, since=since)
     rev = _diff_base(repo_root, resolved)
-    purposes = modules_purposes(repo_root / "specs" / "MODULES.md")
+    purposes = modules_purposes(paths.modules_index(repo_root))
+    history_prefix = paths.history_prefix(repo_root)
 
     added, updated, removed, index_docs, history = [], [], [], [], 0
     for status, path, old_path in sorted(_changed_docs(repo_root, rev), key=lambda c: c[1]):
-        kind = _kind(path)
+        kind = _kind(path, history_prefix)
         if kind == "history":
             history += 1
             continue
         if kind == _INDEX_DOCS:
-            index_docs.append(path.removeprefix("specs/"))
+            index_docs.append(_rel(path))
             continue
-        purpose = purposes.get(path.removeprefix("specs/"), "")
+        purpose = purposes.get(_rel(path), "")
         if status == "D":
             removed.append(DocChange(path, "removed", purpose))
         elif status == "A":
@@ -269,7 +282,7 @@ def _entry(change: DocChange) -> list[str]:
     """One bullet. The path is code-formatted rather than linked: a relative link in a PR *comment*
     isn't resolved against the repo the way one in a README is, so it would be a dead link."""
     purpose = f" — {change.purpose}" if change.purpose else ""
-    renamed = f" (was `{change.old_path.removeprefix('specs/')}`)" if change.old_path else ""
+    renamed = f" (was `{_rel(change.old_path)}`)" if change.old_path else ""
     lines = [f"- **`{change.name}`**{purpose}{renamed}"]
     if change.summary:
         lines += ["", f"  > {change.summary}"]

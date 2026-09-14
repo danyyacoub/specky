@@ -1,0 +1,134 @@
+# The last line of defence in specky's three-tier sync story, and the only one that catches a
+# commit no developer's machine ever saw: a squash-merge done in the GitHub UI, a commit pushed by a
+# contributor who never ran `install-git-hook`, or a hook that fired into a broken provider config.
+# Local hooks reconcile what they can; `specky sync` is the manual catch-up; this job is what makes
+# the default branch converge without anyone remembering to.
+#
+# It opens a pull request rather than pushing to main. Docs written by a model are a change someone
+# should read — and a job with push access to the default branch is a much bigger thing to hand a
+# CI runner than one that can open a PR.
+name: docs-sync
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly, because a push isn't the only way the branch moves: a squash-merge lands as a push
+    # here, but a `specky sync --limit` that hit its cap, or a run that failed on a provider
+    # hiccup, leaves a backlog nothing else comes back for.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+# Serialized, never cancelled: two runs racing would open two PRs documenting the same commits, and
+# cancelling a run mid-`sync` would waste the provider calls it had already paid for.
+concurrency:
+  group: specky-docs-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the docs branch
+  pull-requests: write # open the PR
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `specky sync` diffs the whole history against specs/history/, and `specky index` reads
+          # the git log. The shallow default clone would make almost every commit look undocumented.
+          fetch-depth: 0
+
+      # The merge of this job's own PR is a push to main, which triggers this job again. The marker
+      # `commit_doc._AUTO_COMMIT_MARKER` puts on every doc-sync commit is how the run recognizes its
+      # own work and stops, exactly as the post-commit hook does.
+      - name: Skip our own doc commits
+        id: guard
+        run: |
+          subject=$(git log -1 --format=%s)
+          if [ "${subject#docs: sync specky docs \[skip specky\]}" != "$subject" ]; then
+            echo "HEAD is a specky doc-sync commit — nothing to reconcile"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the provider key is available
+        if: steps.guard.outputs.skip != 'true'
+        id: key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # A fork, or a repo that hasn't set the secret yet, gets a clear skip instead of a red X
+          # on every push: this job is optional infrastructure, not a gate.
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::ANTHROPIC_API_KEY is not set — skipping doc reconciliation"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: astral-sh/setup-uv@v5
+        if: steps.guard.outputs.skip != 'true' && steps.key.outputs.present == 'true'
+        with:
+          enable-cache: true
+
+      # This repo *is* specky, so it runs its own working copy — which also means a change that
+      # breaks sync is caught here rather than after a release. A repo *using* specky replaces this
+      # with `uv tool install specky` (see the README).
+      - name: Install
+        if: steps.guard.outputs.skip != 'true' && steps.key.outputs.present == 'true'
+        run: uv sync --all-groups
+
+      - name: Configure the provider
+        if: steps.guard.outputs.skip != 'true' && steps.key.outputs.present == 'true'
+        run: |
+          # specky.toml is gitignored, so CI writes its own. Only the env var *name* goes in the
+          # file; the key itself stays in the environment, where the provider reads it.
+          cat > specky.toml <<'TOML'
+          [ai]
+          provider = "anthropic"
+          model = "claude-haiku-4-5"
+          api_key_env = "ANTHROPIC_API_KEY"
+          TOML
+
+      - name: Reconcile the doc backlog
+        if: steps.guard.outputs.skip != 'true' && steps.key.outputs.present == 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # --limit bounds the spend per run: a repo adopting specky has a backlog of its whole
+          # history, and that first pass belongs in a deliberate local `specky sync`, not in a job
+          # that fires on every push. Whatever is left over is picked up by the next run.
+          # --yes because there's nobody here to answer the confirmation prompt.
+          uv run specky sync --limit 50 --yes
+          uv run specky index
+
+      - name: Open a pull request
+        if: steps.guard.outputs.skip != 'true' && steps.key.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "$(git status --porcelain -- specs)" ]; then
+            echo "Docs are already in sync"
+            exit 0
+          fi
+
+          branch="specky/docs-sync-${{ github.run_id }}"
+          git config user.name "specky[bot]"
+          git config user.email "specky[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          # `-- specs` so the specky.toml written above (and anything else the run touched) can
+          # never ride along into the commit.
+          git add -- specs
+          git commit -m "docs: sync specky docs [skip specky]"
+          git push -u origin "$branch"
+
+          gh pr create \
+            --title "docs: sync specky docs" \
+            --body "Automated by the \`docs-sync\` workflow: these commits reached \`main\` without a
+          local hook documenting them — a squash-merge, a contributor with no hook installed, or a
+          fire that failed.
+
+          Written by \`specky sync\`, so read it as a draft: the summaries are generated, and a doc
+          that says the wrong thing about the code is worth fixing in this PR rather than after it
+          merges.
+
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -12,7 +12,8 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | Doc | Purpose |
 |---|---|
 | [documentation/domain-documentation-workflow.md](documentation/domain-documentation-workflow.md) | Workflow for generating and maintaining functional documentation for code domains |
-| [documentation/auto-commit-docs.md](documentation/auto-commit-docs.md) | Automatically generate AI summaries of commits via git post-commit hook |
+| [documentation/auto-commit-docs.md](documentation/auto-commit-docs.md) | Reconcile the history-doc backlog on every git hook fire, so a commit is documented however it landed |
+| [documentation/doc-adoption.md](documentation/doc-adoption.md) | Import a repo's existing markdown into the docs tree, and configure where that tree lives |
 | [documentation/feature-sync.md](documentation/feature-sync.md) | Automatically generate and update feature/workflow documentation on each commit |
 | [documentation/feature-classification-and-tags.md](documentation/feature-classification-and-tags.md) | Classify and tag features and workflows for search and discovery |
 | [documentation/auto-doc-commit.md](documentation/auto-doc-commit.md) | Automatically commit generated history and feature docs as a follow-up commit instead of leaving them uncommitted |

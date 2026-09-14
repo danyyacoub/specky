@@ -7,17 +7,22 @@ tags: [sync, documentation]
 
 ## What It Does
 
-`specky sync` generates a micro-doc for any commit in the repository's history that doesn't have one yet. Use it to backfill docs for existing commits when you first install specky on a repo, or to catch up on commits the post-commit hook missed. The command is idempotent—running it multiple times is safe and will only generate docs for commits that are still missing them. Specky automatically skips its own doc-sync commits to avoid self-referential loops.
+`specky sync` generates a micro-doc for any commit in the repository's history that doesn't have one yet. Use it to backfill docs for existing commits when you first install specky on a repo, or to catch up on commits the git hooks missed. The command is idempotent—running it multiple times is safe and will only generate docs for commits that are still missing them. Specky automatically skips its own doc-sync commits to avoid self-referential loops.
+
+`sync` and the git hooks are the same backlog pass over the same list of undocumented commits (see [documentation/auto-commit-docs.md](../documentation/auto-commit-docs.md)); the only difference is how much of it each one is allowed to do. A hook fire inspects the newest 20 commits and documents at most 5 of them, because it is spending money inside a git hook. `sync` is unbounded — it walks the whole history unless `--since`/`--limit` narrow it — which makes it the command for the two things a hook deliberately won't do: the first backfill of a repo's entire history, and any commit older than the hook's window. That's why the hook's own output points at it, and why `specky doctor` names it when it finds a backlog.
+
+Unlike a hook fire, `sync` never commits what it writes. The docs are left in the working tree for you to read and commit yourself, which is what you want for a run that may have touched hundreds of files.
 
 ## How It Works
 
-1. **Determine scope** — List commits reachable from HEAD in reverse chronological order, optionally filtered by `--since REV|DATE` and `--limit N`. With `--all-branches`, walk every ref instead of just HEAD, so work that only exists on a side branch is documented too.
+1. **Determine scope** — List commits reachable from HEAD in reverse chronological order, optionally filtered by `--since REV|DATE` and `--limit N`. With `--all-branches`, walk every ref instead of just HEAD, so work that only exists on a side branch is documented too. `--limit` caps the list *after* the already-documented commits are filtered out, so `--limit 5` means five commits processed rather than five inspected. (The hooks use a fourth bound, a `depth`, which caps how many commits are *inspected* — `git log -n <depth>`. It's spelled as a depth rather than as `--since HEAD~20` on purpose: on a repo with fewer commits than that, `HEAD~20` isn't a revision, so it would be taken for a date and silently match everything.)
 2. **Check for existing docs** — Each history doc records the full sha it documents in its frontmatter, and that's what a commit is matched against; a doc written before that was recorded falls back to its 8-hex filename. Eight hex digits aren't unique on a large repo, so matching on the filename alone silently marked undocumented commits as done.
 3. **Identify gaps** — Build a list of commits with no history doc. A commit whose `<sha8>.md` name is already taken by a different commit is written as `<sha12>.md` rather than overwriting it.
 4. **Preview (optional)** — With `--dry-run`, print what would be documented and exit without calling the AI provider.
 5. **Confirm if needed** — For backlogs over 25 commits, require explicit user confirmation (via `--yes` or tty prompt). Refuse to prompt if stdin is not a tty.
-6. **Generate and save** — For each missing commit, fetch its metadata, generate a micro-doc using your configured AI provider, write the file to `specs/history/`, and record it in the index database. Commit summaries are fetched four at a time for efficiency; classification and file writes remain serial and in commit order to prevent duplicate docs.
-7. **Report results** — Print per-commit progress and final summary.
+6. **Take the writer lock** — A non-blocking `flock` on `.specky/hook.lock`, shared with the hooks. A hook firing partway through a long `sync` would otherwise pick the same pending commit and write the same file twice. If the lock is already held, `sync` says so and exits 0 without writing.
+7. **Generate and save** — For each missing commit, fetch its metadata, generate a micro-doc using your configured AI provider, write the file to `specs/history/` (under the configured docs root — see [documentation/doc-adoption.md](../documentation/doc-adoption.md)), and record it in the index database. Commit summaries are fetched four at a time for efficiency; classification and file writes remain serial and in commit order to prevent duplicate docs.
+8. **Report results** — Print per-commit progress and final summary. The written files are left uncommitted.
 
 ```mermaid
 flowchart TD
@@ -29,7 +34,9 @@ flowchart TD
     F -->|No| G["Exit: require --yes"]
     F -->|Yes| H["Proceed to generate"]
     E -->|No| H
-    H --> I["Build list of commits<br/>with no existing doc"]
+    H --> Q{"Writer lock free?"}
+    Q -->|No| R["Print 'another specky run<br/>is writing docs', exit 0"]
+    Q -->|Yes| I["Build list of commits<br/>with no existing doc"]
     I --> J["For each missing commit:<br/>fetch metadata + generate"]
     J --> K["Write file + record in index"]
     K --> L{"More commits?"}
@@ -41,6 +48,7 @@ flowchart TD
     G --> P
     N --> P
     O --> P
+    R --> P
 ```
 
 ## Flags
@@ -63,6 +71,9 @@ flowchart TD
 | `--dry-run` flag supplied | Prints estimated commit count and cost, exits without generating |
 | `--all-branches` supplied | Commits reachable from any ref are considered, not just HEAD's; a side-branch commit gets a doc |
 | Two commits share the same 8 hex digits | The second one is written as `<sha12>.md`; the first one's doc is left intact |
+| A commit is older than the hooks' 20-commit window | No hook fire will ever reach it; `sync` documents it, which is why `doctor` and the hook output both point here |
+| A hook fire (or another `sync`) already holds the writer lock | Prints that another specky run is writing docs and exits 0; nothing is written |
+| Docs are written | They are left uncommitted in the working tree — unlike a hook fire, `sync` makes no doc-sync commit |
 | Provider configuration is missing or invalid | Exits with error message; no docs are written |
 | Provider call fails (API error, network issue, etc.) | Exits with error; partially written docs remain on disk |
 
@@ -82,3 +93,6 @@ flowchart TD
 | Excludes specky's own docs | Repo with 3 commits (2 feature changes, 1 specky doc-sync commit) | Run `specky sync` | Only 2 feature docs are generated; specky's own doc-sync commit is skipped |
 | Side-branch commit | Repo whose only undocumented commit lives on a branch that isn't checked out | Run `specky sync --all-branches` | That commit is documented; without the flag it isn't considered at all |
 | Short-sha collision | A history doc named `<sha8>.md` records a different commit's full sha in its frontmatter | Run `specky sync` | The colliding commit is treated as undocumented and written to `<sha12>.md`; the existing doc is untouched |
+| Beyond the hook window | A repo with 30 undocumented commits, the hooks installed | A hook fires, then `specky sync` runs | The hook documents 5 and reports the rest; `sync` documents everything still missing |
+| Another writer holds the lock | A hook fire is in progress | Run `specky sync` | It prints that another specky run is writing docs and exits 0; no files are written and the backlog is unchanged |
+| Sync leaves the commit to the human | Repo with 2 undocumented commits | Run `specky sync` | The docs exist on disk and `git status` shows them as new; HEAD is the same sha as before the run |

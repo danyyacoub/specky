@@ -1,10 +1,19 @@
-"""Per-commit micro-doc generation, called by the git post-commit hook.
+"""Per-commit micro-doc generation, called by git's post-commit/post-merge/post-rewrite hooks.
 
-This is deliberately a real git hook rather than an agent-specific one (Claude Code
-PostToolUse, opencode tool.execute.after, Kiro agent hooks) — it must fire on every
+These are deliberately real git hooks rather than agent-specific ones (Claude Code
+PostToolUse, opencode tool.execute.after, Kiro agent hooks) — they must fire on every
 commit regardless of which agent (or no agent) made it. Each commit gets a real
 markdown file under specs/history/, plus a mirrored row in the micro_docs sqlite
 table for Phase 3's indexer to pick up.
+
+**A hook fire reconciles a backlog; it does not document "the commit that just happened".**
+That distinction is the whole reliability story, because git gives no hook that fires for every
+new commit. `post-commit` is invoked by `git commit` and nothing else (see githooks(5)): a merge
+commit, a rebase, a cherry-pick, a revert, a `git am`, a squash-merge performed in the forge's
+web UI, and a commit by anyone who never ran `install-git-hook` all produce no fire at all. So
+`main()` asks `pending_commits()` — the diff between git history and what's already in
+specs/history/ — and works through the tail of it. A hook then only has to fire *eventually*,
+which is a property git does give us, and `specky sync` is the same pass without the bound.
 
 Deliberately post-commit, not pre-commit/commit-msg: the history doc's filename is keyed
 by the commit SHA, which doesn't exist until the commit object is created, and doc
@@ -18,25 +27,47 @@ firing doesn't recurse.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping, Sequence
 
-from specky import frontmatter
+from specky import frontmatter, paths
 from specky.ai_provider import ConfigError, Provider, load_provider_from_toml
 from specky.db import connect, repo_root as _repo_root
+from specky.lock import LockBusy, exclusive
 
 if TYPE_CHECKING:  # generator imports from this module, so it can only be imported lazily here
     from specky.generator import ExistingDocs
 
-POST_COMMIT_HOOK = """#!/bin/sh
-# Installed by `specky install-git-hook`. Records a short AI micro-doc for this commit.
-command -v specky >/dev/null 2>&1 && specky commit-doc || true
+# The hook scripts, one per git event specky listens to. `{specky}` is filled in with the absolute
+# path of the `specky` that installed them, and it is the point of the whole template: git hooks
+# run from a plain, often login-less shell, and a GUI client (IntelliJ, Fork, Tower, VS Code's git
+# integration) frequently starts with a PATH that has no `~/.local/bin` in it. The old script was
+# `command -v specky … || true`, which in that shell is a silent no-op — the single most common
+# reason a repo has the hook installed and no docs to show for it. So: try PATH first (it survives
+# `uv tool upgrade` moving the binary), then fall back to the recorded absolute path.
+_HOOK_BODY = """#!/bin/sh
+# Installed by `specky install-git-hook`. Reconciles the history-doc backlog for this repo.
+if command -v specky >/dev/null 2>&1; then
+    specky commit-doc{args} || true
+elif [ -x "{specky}" ]; then
+    "{specky}" commit-doc{args} || true
+fi
+exit 0
 """
+
+# post-rewrite is handed `<old-sha> <new-sha>` pairs on stdin, which lets an amend or a rebase
+# *rename* the history doc it already paid for instead of orphaning it (see `apply_rewrites`).
+HOOKS = {
+    "post-commit": "",
+    "post-merge": "",
+    "post-rewrite": " --rewritten",
+}
 
 HOOK_MARKER = "specky commit-doc"
 
@@ -44,6 +75,10 @@ HOOK_MARKER = "specky commit-doc"
 # at the top of `main()` so that commit's own post-commit firing recognizes itself and returns
 # immediately instead of generating a doc *for* the doc-sync commit and recursing forever.
 _AUTO_COMMIT_MARKER = "docs: sync specky docs [skip specky]"
+
+# Where a fire that couldn't commit (git midway through a rebase or a cherry-pick) leaves the list of
+# paths for the next fire to commit. Under `.specky/`, so it's gitignored and per-checkout.
+DEFERRED_LEDGER = "deferred-docs"
 
 # Diffs are truncated to this many characters before going into a prompt — long enough for
 # context, short enough to keep prompt cost/latency predictable regardless of commit size.
@@ -55,6 +90,33 @@ DIFF_TRUNCATE_CHARS = 8000
 SYNC_CONCURRENCY = 4
 SYNC_CONFIRM_THRESHOLD = 25
 
+# How much of the backlog a *hook* fire will look at and act on. Both bounds matter, for different
+# reasons:
+#
+# - DEPTH bounds the `git log` walk, so a hook on a repo with 200k commits costs the same as one on
+#   a repo with 20. Anything older than this is `specky sync`'s job, which is what `specky doctor`
+#   already tells people (its own probe uses the same window).
+# - MAX bounds the *spending*. A `git pull` that fast-forwards 300 undocumented commits fires
+#   post-merge once, and that one fire must not turn into 600 provider calls inside a git hook.
+#   The rest stays pending and is reported.
+HOOK_CATCHUP_DEPTH = 20
+HOOK_CATCHUP_MAX = 5
+
+# Sequencer state files. While any of these exists, git is midway through a multi-commit operation
+# and `_commit_doc_updates` must not run a `git commit`: doing so during a rebase or cherry-pick
+# writes a commit into the middle of someone else's replay, which at best confuses the sequencer and
+# at worst has to be untangled by hand. Docs are still written — they just wait for the next fire (or
+# a `specky sync`) to be committed.
+_SEQUENCER_PATHS = (
+    "rebase-merge",
+    "rebase-apply",
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "BISECT_LOG",
+    "sequencer",
+)
+
 
 @dataclass
 class Commit:
@@ -65,16 +127,26 @@ class Commit:
     diff: str
 
 
-def _commit_info(rev: str = "HEAD") -> Commit:
+def _commit_info(rev: str = "HEAD", with_diff: bool = True) -> Commit:
+    """Metadata for one revision, plus its diff unless the caller has no use for it.
+
+    `with_diff=False` exists for `apply_rewrites`, which re-renders a doc's metadata block for a
+    new sha and never prompts: a rebase of 50 commits shouldn't pay for 50 `git show` calls to
+    produce diffs nothing reads.
+    """
     sha, author, date, message = subprocess.run(
         ["git", "log", "-1", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%B", rev],
         capture_output=True,
         text=True,
         check=True,
     ).stdout.split("\x1f", 3)
-    diff = subprocess.run(
-        ["git", "show", "--format=", sha], capture_output=True, text=True, check=True
-    ).stdout
+    diff = (
+        subprocess.run(
+            ["git", "show", "--format=", sha], capture_output=True, text=True, check=True
+        ).stdout
+        if with_diff
+        else ""
+    )
     return Commit(sha=sha, author=author, date=date, message=message.strip(), diff=diff)
 
 
@@ -109,7 +181,7 @@ def history_doc_for(history_dir: Path, sha: str) -> Path | None:
 
 
 def write_history_file(repo_root: Path, commit: Commit, summary: str) -> Path:
-    history_dir = repo_root / "specs" / "history"
+    history_dir = paths.history_dir(repo_root)
     history_dir.mkdir(parents=True, exist_ok=True)
 
     path = history_dir / f"{commit.sha[:8]}.md"
@@ -170,8 +242,12 @@ def pending_commits(
     since: str | None = None,
     limit: int | None = None,
     all_branches: bool = False,
+    depth: int | None = None,
 ) -> list[tuple[str, str]]:
     """(sha, subject) for every commit still needing a doc, oldest first.
+
+    This is specky's source of truth for "what is undocumented", and both callers are the same
+    pass over it: `sync()` unbounded, and a hook fire bounded by `depth`/`HOOK_CATCHUP_MAX`.
 
     Skipped: commits that already have a history doc (see `history_doc_for`), and specky's own
     doc-sync commits — `main()` refuses to document those when the hook fires, and a backfill has
@@ -182,15 +258,24 @@ def pending_commits(
     ("2 weeks ago", "2026-01-01"). `limit` caps the result *after* filtering, so `--limit 5`
     means five commits actually processed, not five inspected.
 
+    `depth` caps it the other way round — `git log -n <depth>`, so only the newest `depth` commits
+    are *inspected* at all. That's what keeps a hook fire's cost independent of how long the repo's
+    history is. It's spelled this way rather than as `since="HEAD~20"` on purpose: on a repo with
+    fewer commits than that, `HEAD~20` isn't a revision, so it would fall through `_is_revision`
+    and be handed to git as a *date*, which silently matches everything.
+
     `all_branches` walks every ref instead of just `HEAD`, so work that only exists on a side
     branch gets documented too. Opt-in, because it multiplies the commit count — and therefore
     the number of billable calls — that `_confirm` exists to make deliberate.
     """
-    history_dir = repo_root / "specs" / "history"
+    history_dir = paths.history_dir(repo_root)
 
     # `git log` rather than `rev-list` for the subject line, which the progress and --dry-run
     # output both want; the revision walking is identical.
     args = ["git", "log", "--reverse", "--format=%H%x1f%s"]
+    if depth:
+        # git applies `-n` before `--reverse`, so this is the newest `depth` commits, reversed.
+        args += [f"-n{depth}"]
     tip = ["--all"] if all_branches else ["HEAD"]
     if since and _is_revision(repo_root, since):
         # `--all --not <rev>` is the multi-ref spelling of `<rev>..HEAD`.
@@ -308,8 +393,6 @@ def sync(
     would be processed without contacting the provider at all, and `assume_yes` skips the
     confirmation that a large backfill otherwise stops for.
     """
-    from specky.generator import ExistingDocs
-
     repo_root = _repo_root()
     pending = pending_commits(repo_root, since=since, limit=limit, all_branches=all_branches)
     total = len(pending)
@@ -326,7 +409,31 @@ def sync(
     _confirm(total, assume_yes)
     provider = load_provider_from_toml(repo_root / "specky.toml", "sync")  # let ConfigError surface
 
-    # One walk of specs/ for the whole backfill; sync_feature_doc folds each doc it writes back
+    try:
+        with exclusive(repo_root):
+            written = _document(repo_root, pending, provider, label_prefix="")
+    except LockBusy as exc:
+        print(f"specky sync: {exc}")
+        return []
+    print(f"specky sync: wrote {len(written)} files across {total} commits")
+    return written
+
+
+def _document(
+    repo_root: Path,
+    pending: list[tuple[str, str]],
+    provider: Provider,
+    label_prefix: str = "",
+) -> list[Path]:
+    """Work through a pending list in commit order, batching the micro-doc calls.
+
+    Shared by `sync()` and the hook's catch-up so the two can't drift: same batching, same
+    `ExistingDocs` snapshot, same per-commit error containment. Caller holds the lock.
+    """
+    from specky.generator import ExistingDocs
+
+    total = len(pending)
+    # One walk of the docs tree for the whole run; sync_feature_doc folds each doc it writes back
     # into it, so commit 400 is told about the doc commit 3 created.
     existing = ExistingDocs.load(repo_root)
 
@@ -335,7 +442,7 @@ def sync(
         batch = [_commit_info(sha) for sha, _ in pending[start : start + SYNC_CONCURRENCY]]
         summaries = _prefetch_summaries(batch, provider)
         for offset, commit in enumerate(batch):
-            label = f"[{start + offset + 1}/{total}] {commit.sha[:8]}"
+            label = f"{label_prefix}[{start + offset + 1}/{total}] {commit.sha[:8]}"
             try:
                 written += _sync_one(
                     repo_root,
@@ -347,57 +454,380 @@ def sync(
                 )
             except Exception as exc:
                 print(f"{label}: skipped ({exc})")
-    print(f"specky sync: wrote {len(written)} files across {total} commits")
     return written
 
 
-def _commit_doc_updates(repo_root: Path) -> None:
-    """Stage and commit whatever `_sync_one` just wrote under specs/, as its own commit —
-    covers the history file, any feature/workflow doc, and update_modules_index()'s
-    best-effort MODULES.md edit (generator.py) without having to track each path. Best-effort
-    like the rest of this module: a failure here (e.g. another hook rejects the commit) is
-    printed, not raised — the original commit already succeeded and must stay that way."""
+def _git_path(repo_root: Path, name: str) -> Path:
+    """Where git would keep `name` for this repo — `git rev-parse --git-path`.
+
+    Asked of git rather than assembled as `repo_root / ".git" / name`, because `.git` is a *file*
+    in a linked worktree and several of these live in the common dir shared by all worktrees.
+    """
+    out = subprocess.run(
+        ["git", "rev-parse", "--git-path", name],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return repo_root / out  # relative to the worktree root, absolute paths absorb the join
+
+
+def sequencer_in_progress(repo_root: Path) -> str | None:
+    """The name of the multi-commit git operation currently underway, or None.
+
+    See `_SEQUENCER_PATHS`: while one of these exists, `git commit` is either refused outright or
+    lands in the middle of someone else's replay.
+    """
+    for name in _SEQUENCER_PATHS:
+        if _git_path(repo_root, name).exists():
+            return name
+    return None
+
+
+def _read_deferred(repo_root: Path) -> dict[str, bool]:
+    """Paths an earlier fire wrote but couldn't commit; `True` means the path must end up *gone*.
+
+    Which half a path was matters: a doc that a rewrite deleted has to be committed as a deletion
+    even if a `git checkout` or a merge has since put the file back (see `_commit_doc_updates`).
+    """
+    ledger = repo_root / ".specky" / DEFERRED_LEDGER
+    if not ledger.exists():
+        return {}
+    entries: dict[str, bool] = {}
+    for line in ledger.read_text().splitlines():
+        if rel := line.strip().removeprefix("-"):
+            entries[rel] = line.strip().startswith("-")
+    return entries
+
+
+def _write_deferred(repo_root: Path, targets: Mapping[str, bool]) -> None:
+    """Record paths for the next fire to commit, or clear the record when there are none left."""
+    ledger = repo_root / ".specky" / DEFERRED_LEDGER
+    if not targets:
+        ledger.unlink(missing_ok=True)
+        return
+    ledger.parent.mkdir(exist_ok=True)
+    ledger.write_text("".join(f"{'-' if gone else ''}{rel}\n" for rel, gone in targets.items()))
+
+
+def _stageable(repo_root: Path, rel_paths: list[str]) -> list[str]:
+    """The subset git will accept as a pathspec: on disk, or tracked and so stageable as a deletion.
+
+    A path that is neither — an untracked doc a previous fire wrote and `apply_rewrites` has since
+    renamed away — would make `git add` fail with `pathspec did not match any files` and take the
+    whole commit down with it.
+    """
+    missing = [rel for rel in rel_paths if not (repo_root / rel).exists()]
+    tracked: set[str] = set()
+    if missing:
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--", *missing],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        tracked = {rel for rel in listed.stdout.split("\0") if rel}
+    return [rel for rel in rel_paths if (repo_root / rel).exists() or rel in tracked]
+
+
+def _commit_doc_updates(
+    repo_root: Path, written: list[Path], removed: Sequence[Path] = ()
+) -> None:
+    """Commit exactly the docs this run wrote, as a separate commit.
+
+    Only `written` and `removed` (plus MODULES.md, which update_modules_index edits as a side
+    effect) is staged and committed. A bare `git add <docs root>` would sweep up a human's
+    half-finished doc edit — somebody who is mid-sentence in a feature doc when a commit lands would
+    find their draft committed under specky's name, and reverting the bot's commit would take their
+    work with it. The `git commit -- <paths>` pathspec does the same job on the other side: a partial
+    commit leaves anything else the user had staged staged. `removed` is the deleted half of a
+    rename, which has to be staged explicitly for the same reason — nothing else would notice it.
+
+    Mid-sequencer the commit can't happen (see `_SEQUENCER_PATHS`), so the paths go into a ledger
+    under `.specky/` and the next fire commits them. Without that, a `post-rewrite` that fires while
+    `rebase-merge` still exists leaves the rename in the working tree forever: the deleted old-sha
+    doc comes back with the next `git checkout` or merge, orphaned, and the new-sha doc stays
+    untracked, so a clean clone and CI both see that commit as undocumented and pay to redo it.
+
+    Best-effort like the rest of this module: a failure here (another hook rejecting the commit, a
+    rebase in progress) is printed, not raised — the commit being documented already succeeded and
+    must stay that way.
+    """
+    modules = paths.modules_index(repo_root)
+    targets: dict[str, bool] = {}  # rel path -> is a deletion. Deduped, in the order written.
+    for path in [*written, modules]:  # a batch often rewrites one feature doc twice
+        if path.exists() and path.is_relative_to(repo_root):
+            targets[path.relative_to(repo_root).as_posix()] = False
+    for path in removed:
+        if path.is_relative_to(repo_root):
+            targets.setdefault(path.relative_to(repo_root).as_posix(), True)
+    for rel, gone in _read_deferred(repo_root).items():
+        targets.setdefault(rel, gone)
+
+    if (operation := sequencer_in_progress(repo_root)) is not None:
+        if targets:
+            _write_deferred(repo_root, targets)
+            print(
+                f"specky commit-doc: {len(targets)} doc file(s) written but left uncommitted — git "
+                f"is midway through an operation ({operation}). They're committed by the next fire, "
+                "or by `git add` + `git commit` once you're done."
+            )
+        return
+
+    # A deletion the ledger is still carrying, whose file is back: a checkout or a fast-forward
+    # restored the *committed* old-sha doc, which now documents a commit that isn't in the history.
+    # It goes again — leaving it would re-commit the orphan the rename existed to remove.
+    for rel, gone in targets.items():
+        if gone:
+            (repo_root / rel).unlink(missing_ok=True)
+
+    staged_paths = _stageable(repo_root, list(targets))
+    if not staged_paths:
+        return  # nothing written this run (e.g. every commit was skipped by classification)
+
     try:
-        subprocess.run(["git", "add", "specs"], cwd=repo_root, check=True)
-        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo_root)
+        subprocess.run(["git", "add", "--", *staged_paths], cwd=repo_root, check=True)
+        staged = subprocess.run(
+            ["git", "diff", "--cached", "--quiet", "--", *staged_paths], cwd=repo_root
+        )
         if staged.returncode == 0:
-            return  # nothing written this run (e.g. commit was skipped by classification)
-        subprocess.run(["git", "commit", "-m", _AUTO_COMMIT_MARKER], cwd=repo_root, check=True)
+            _write_deferred(repo_root, {})  # already committed by someone else; stop carrying them
+            return  # the docs were regenerated byte-for-byte identical
+        # Cleared *before* the commit: that commit fires this hook again, and a nested fire that
+        # found the ledger still full would report the lock it can't take as a problem.
+        _write_deferred(repo_root, {})
+        subprocess.run(
+            ["git", "commit", "-m", _AUTO_COMMIT_MARKER, "--", *staged_paths],
+            cwd=repo_root,
+            check=True,
+        )
         print("specky commit-doc: committed doc updates")
     except subprocess.CalledProcessError as exc:
+        _write_deferred(repo_root, targets)
         print(f"specky commit-doc: doc updates written but not committed ({exc})")
 
 
-def main() -> None:
-    """post-commit hook entry point. Never raises: the commit it's documenting has already
-    landed, so every failure mode here — bad config, provider down, unparseable response — is
-    a printed line and a clean exit. The installed hook's `|| true` is a second belt; this is
-    the actual guarantee (see the module docstring)."""
+def _rewrite_pairs(stdin_text: str) -> list[tuple[str, str]]:
+    """`<old-sha> SP <new-sha>` lines, which is post-rewrite's stdin contract (githooks(5)).
+
+    A third field is possible for `git rebase -i`'s squashes and is ignored; a line that isn't two
+    shas is skipped rather than raising, because this runs in a hook.
+    """
+    pairs = []
+    for line in stdin_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and all(len(p) >= 7 for p in parts[:2]):
+            pairs.append((parts[0], parts[1]))
+    return pairs
+
+
+def _existing_summary(path: Path) -> str | None:
+    """The prose a history doc ends with, separated from the metadata block above it.
+
+    The doc's shape is a heading, a run of `- **Key:** value` bullets, then the summary. Read back
+    rather than regenerated so a rewrite costs no provider call, and so a hand-edited summary
+    survives the rename. Returns None if the file doesn't have that shape, in which case the
+    caller leaves the doc alone rather than guessing.
+    """
+    body = frontmatter.parse(path.read_text())[1]
+    lines = body.splitlines()
+    cut = 0
+    for i, line in enumerate(lines):
+        if line.startswith(("# ", "- **")) or not line.strip():
+            cut = i + 1
+        else:
+            break
+    summary = "\n".join(lines[cut:]).strip()
+    return summary or None
+
+
+def _repoint_rows(repo_root: Path, old_sha: str, new_sha: str) -> None:
+    """Move the index rows keyed by the old sha onto the new one.
+
+    `OR REPLACE` on both, because a rebase can map two old commits onto one new sha (an
+    interactive squash), and the second move would otherwise collide with the first on the
+    primary key. The `documents` table isn't touched: `specky index` rebuilds it from the files.
+    """
+    conn = connect(repo_root)
+    try:
+        conn.execute("UPDATE OR REPLACE micro_docs SET sha = ? WHERE sha = ?", (new_sha, old_sha))
+        conn.execute("UPDATE OR REPLACE commit_links SET sha = ? WHERE sha = ?", (new_sha, old_sha))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def apply_rewrites(repo_root: Path, stdin_text: str) -> list[tuple[Path, Path]]:
+    """Follow `git commit --amend` / `git rebase` by *renaming* the history docs they invalidated.
+
+    An amend replaces one commit with another that has a different sha, and a rebase does it for
+    every replayed commit. Without this, the doc for the old sha is orphaned — it documents a
+    commit that is no longer in the history — and the new sha looks undocumented, so the next fire
+    pays a provider call to write what is almost exactly the same paragraph again.
+
+    So the doc moves instead: same summary, new filename, refreshed `sha:` and metadata block (an
+    amend can change the message, author and date, all of which git already knows). Free, and it
+    keeps `pending_commits` honest, which is what everything else here reads.
+
+    Pairs whose old doc doesn't exist are left for the ordinary catch-up to document.
+
+    Returns `(old path, new path)` per rename. Both halves matter to the caller: the rename has to be
+    *committed*, and staging only the new file would leave the old one — a doc for a sha that is no
+    longer in the history — to come back with the next checkout.
+    """
+    history_dir = paths.history_dir(repo_root)
+    moved: list[tuple[Path, Path]] = []
+    for old_sha, new_sha in _rewrite_pairs(stdin_text):
+        if old_sha == new_sha:
+            continue
+        old_doc = history_doc_for(history_dir, old_sha)
+        if old_doc is None:
+            continue
+        summary = _existing_summary(old_doc)
+        if summary is None:
+            continue
+        try:
+            commit = _commit_info(new_sha, with_diff=False)
+        except subprocess.CalledProcessError:
+            continue  # the rewrite didn't land (an aborted rebase), so the old doc still stands
+        old_doc.unlink()  # before writing: on an amend, both shas can want the same <sha8>.md
+        new_doc = write_history_file(repo_root, commit, summary)
+        _repoint_rows(repo_root, old_sha, commit.sha)
+        moved.append((old_doc, new_doc))
+        print(f"specky commit-doc: {old_doc.name} -> {new_doc.name} ({old_sha[:8]} was rewritten)")
+    return moved
+
+
+def _head_subject(repo_root: Path) -> str:
+    return subprocess.run(
+        ["git", "log", "-1", "--format=%s"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def main(rewritten: bool = False) -> None:
+    """Hook entry point for post-commit, post-merge and post-rewrite alike.
+
+    Works on the *backlog* rather than on HEAD (see the module docstring): whatever git event
+    caused this fire, the job is the same — take the tail of `pending_commits()` and close as much
+    of it as one fire is allowed to. That's what makes a merge, a rebase or a colleague's
+    hookless commit end up documented anyway.
+
+    Never raises. The commit it's documenting has already landed, so every failure mode here — bad
+    config, provider down, unparseable response — is a printed line and a clean exit. The installed
+    hook's `|| true` is a second belt; this is the actual guarantee.
+    """
     try:
         repo_root = _repo_root()
-        commit = _commit_info("HEAD")
-        if commit.message.startswith(_AUTO_COMMIT_MARKER):
-            return  # this commit *is* our own doc-sync commit from below — don't recurse
+        renames: list[tuple[Path, Path]] = []
+        if rewritten:
+            # Before the backlog is computed: renaming the docs an amend/rebase invalidated is what
+            # keeps their commits *out* of the pending list.
+            renames = apply_rewrites(repo_root, sys.stdin.read())
+        written = [new for _, new in renames]
+        removed = [old for old, _ in renames]
+
+        # Our own doc-sync commit's fire, or a rebase replaying one. Nothing new to document —
+        # anything still pending is picked up by the next real commit or by `specky sync` — but a
+        # rename or an earlier fire's deferred write still has to be committed, so fall through to
+        # `_commit_doc_updates` rather than returning here. That can't recurse: the commit it makes
+        # stages exactly these paths, so the fire it triggers finds nothing left to do.
+        ours = _head_subject(repo_root).startswith(_AUTO_COMMIT_MARKER)
+
+        batch: list[tuple[str, str]] = []
+        too_old: list[tuple[str, str]] = []
+        if not ours:
+            pending = pending_commits(repo_root, depth=HOOK_CATCHUP_DEPTH)
+            batch, too_old = pending[:HOOK_CATCHUP_MAX], pending[HOOK_CATCHUP_MAX:]
+
+        if not (batch or written or removed or _read_deferred(repo_root)):
+            return  # nothing to document and nothing owed: don't even take the lock
+
+        provider = None
+        if batch:
+            try:
+                provider = load_provider_from_toml(repo_root / "specky.toml", "commit-doc")
+            except ConfigError as exc:
+                print(f"specky commit-doc: skipping ({exc})")
 
         try:
-            provider = load_provider_from_toml(repo_root / "specky.toml", "commit-doc")
-        except ConfigError as exc:
-            print(f"specky commit-doc: skipping ({exc})")
+            with exclusive(repo_root):
+                if provider is not None:
+                    written += _document(
+                        repo_root, batch, provider, label_prefix="specky commit-doc "
+                    )
+                # Inside the lock: the commit below fires this hook again, and the nested fire
+                # finding the lock held is what stops two of them interleaving.
+                _commit_doc_updates(repo_root, written, removed=removed)
+        except LockBusy as exc:
+            print(f"specky commit-doc: {exc}")
             return
 
-        _sync_one(repo_root, commit, provider)
-        _commit_doc_updates(repo_root)
+        if too_old and provider is not None:
+            print(
+                f"specky commit-doc: {len(too_old)} older commit(s) still undocumented — run "
+                "`specky sync` to catch up"
+            )
     except Exception as exc:
         print(f"specky commit-doc: failed, commit is unaffected ({type(exc).__name__}: {exc})")
 
 
-def install_git_hook() -> Path:
+def hooks_dir(repo_root: Path) -> Path:
+    """The directory git actually runs hooks from.
+
+    `repo_root/.git/hooks` is wrong twice over: in a linked `git worktree` `.git` is a file, and a
+    repo that sets `core.hooksPath` (which `pre-commit`, husky and lefthook all do) has git reading
+    hooks from somewhere else entirely — so a hook written to the assumed path is silently never
+    run, which is indistinguishable from specky being broken.
+    """
+    configured = subprocess.run(
+        ["git", "config", "--get", "core.hooksPath"], cwd=repo_root, capture_output=True, text=True
+    ).stdout.strip()
+    if configured:
+        # A relative hooksPath is resolved against the worktree root, which is where git runs hooks.
+        return repo_root / Path(configured).expanduser()
+    return _git_path(repo_root, "hooks")
+
+
+def install_git_hook() -> list[Path]:
+    """Install every hook in `HOOKS`, all of them calling `specky commit-doc`.
+
+    Three hooks because one isn't enough: `post-commit` is invoked by `git commit` only, so
+    without `post-merge` and `post-rewrite` a `git pull` or a rebase produces no fire at all.
+    They share one entry point — each fire reconciles the backlog — so which one fired barely
+    matters; installing all three only makes the reconciliation happen sooner.
+
+    A pre-existing hook specky didn't write is never overwritten, and one foreign hook stops the
+    whole install rather than leaving half the set in place: a partial install is the state that's
+    hardest to reason about later.
+    """
     repo_root = _repo_root()
-    hook_path = repo_root / ".git" / "hooks" / "post-commit"
-    if hook_path.exists() and HOOK_MARKER not in hook_path.read_text():
+    target = hooks_dir(repo_root)
+    target.mkdir(parents=True, exist_ok=True)
+
+    foreign = [
+        path
+        for name in HOOKS
+        if (path := target / name).exists() and HOOK_MARKER not in path.read_text()
+    ]
+    if foreign:
         raise RuntimeError(
-            f"{hook_path} already exists and wasn't installed by specky — not overwriting it"
+            f"{', '.join(str(p) for p in foreign)} already exist(s) and wasn't installed by specky "
+            "— not overwriting it. Add `specky commit-doc || true` to it by hand (and "
+            "`specky commit-doc --rewritten` to post-rewrite)"
         )
-    hook_path.write_text(POST_COMMIT_HOOK)
-    hook_path.chmod(0o755)
-    return hook_path
+
+    # Recorded now, while we're running as the `specky` the user just invoked: the hook needs an
+    # absolute path to fall back on when it runs from a PATH that lacks it.
+    specky = shutil.which("specky") or sys.argv[0]
+    written = []
+    for name, args in HOOKS.items():
+        path = target / name
+        path.write_text(_HOOK_BODY.format(args=args, specky=specky))
+        path.chmod(0o755)
+        written.append(path)
+    return written

@@ -14,7 +14,7 @@ Stale when the second is more than `[check] stale_after_days` past the first. Do
 row mentions are neither stale nor fresh — nothing is known about them, and inventing a verdict
 would be worse than leaving the badge off.
 
-**Cost.** Two git processes, whatever the repo's size. The doc side is path-limited to `specs/`.
+**Cost.** Two git processes, whatever the repo's size. The doc side is path-limited to the docs root.
 The code side is limited to commits *since the oldest last_doc_change among covered docs*, which
 is the only span that can make anything stale: a file whose last change predates every covered
 doc's own last change is, by definition, not behind. So an actively documented repo walks days of
@@ -31,7 +31,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from specky import gitlog
+from specky import gitlog, paths
 
 # `%cI` is strict ISO 8601 with an offset, which datetime.fromisoformat reads directly. Dates are
 # compared as datetimes, never as strings: two commits an hour apart in different timezones sort
@@ -59,7 +59,9 @@ def _newest_per_path(log: str, keep: set[str] | None = None) -> dict[str, str]:
 
 
 def last_doc_changes(repo_root: Path) -> dict[str, str]:
-    log = gitlog.run(repo_root, ["log", _FORMAT, "--name-only", "--", "specs/"])
+    log = gitlog.run(
+        repo_root, ["log", _FORMAT, "--name-only", "--", paths.docs_prefix(repo_root)]
+    )
     return _newest_per_path(log)
 
 

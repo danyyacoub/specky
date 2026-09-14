@@ -63,7 +63,9 @@ def build_graph(repo_root: Path) -> dict:
     >=1 tag, plus one edge per hand-authored `related:` reference not already covered by a
     shared tag."""
     docs = _classified_docs(repo_root)
-    by_path = {d["path"]: d for d in docs}
+    # Keyed by `<domain>/<topic>.md`, which is the spelling a `related:` entry uses — the docs
+    # root's own name never appears in one, and needn't be known here to resolve it.
+    by_path = {d["path"].split("/", 1)[-1]: d for d in docs}
 
     nodes = [
         {"id": _node_id(d["path"]), "path": d["path"], "title": d["title"], "type": d["type"]} for d in docs
@@ -89,7 +91,7 @@ def build_graph(repo_root: Path) -> dict:
 
     for doc in docs:
         for rel_topic in doc["related"]:
-            target = by_path.get(f"specs/{rel_topic}.md")
+            target = by_path.get(f"{rel_topic}.md")
             if target:
                 add_edge(doc, target, "related")
 

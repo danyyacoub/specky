@@ -19,7 +19,13 @@ uv run specky init               # configure AI provider, writes specky.toml (gi
 uv run specky doctor [--json]    # is this repo's setup working? toolchain, config, hook, index,
                                  # site, recent-commit backlog. Exit 1 only on `fail`
 
-uv run specky install-git-hook   # install real .git/hooks/post-commit hook
+uv run specky install-git-hook   # install real post-commit + post-merge + post-rewrite hooks, in
+                                 # whatever dir git runs hooks from (core.hooksPath / worktree-aware)
+uv run specky adopt              # one-time import of a repo's existing markdown (docs/, adr/,
+                                 # ARCHITECTURE.md) into the docs tree as <domain>/<topic>.md, so
+                                 # sync can't invent twins of it. No AI call, commits nothing.
+                                 # --dry-run, --move (default) / --keep / --stub, --domain NAME,
+                                 # --include/--exclude GLOB (repeatable), --yes
 uv run specky sync               # backfill history/feature docs for existing commits
 uv run specky sync --dry-run     # ...or list what it would document first, calling no provider
                                  # (--since REV|DATE, --limit N narrow it; --all-branches widens
@@ -55,7 +61,10 @@ uv run specky serve [--port N] [--host ADDR]  # serve .specky/site/ *and* the "A
 uv run specky-mcp                # run MCP server directly over stdio, for local testing
 ```
 
-`specky commit-doc` — not for manual use, called by installed git hook after every commit.
+`specky commit-doc [--rewritten]` — not for manual use, called by the installed hooks. Each fire
+reconciles the tail of the doc backlog rather than documenting HEAD; `--rewritten` is post-rewrite's,
+and renames the history docs an amend/rebase invalidated. A fire that can't commit (git midway
+through a rebase or cherry-pick) leaves its paths in `.specky/deferred-docs` for the next fire.
 
 ## Scripts
 
@@ -81,9 +90,17 @@ Full details live in the docs themselves, indexed at [specs/MODULES.md](specs/MO
 Key entry points:
 
 - [`commit_doc.py`](src/specky/commit_doc.py) / [`generator.py`](src/specky/generator.py) —
-  automatic per-commit doc generation, driven by real git post-commit hook (not a Claude-Code-
-  specific hook — must fire for any tool/agent, per
-  [documentation/auto-commit-docs.md](specs/documentation/auto-commit-docs.md)).
+  automatic per-commit doc generation, driven by real git hooks (post-commit/post-merge/post-rewrite,
+  not a Claude-Code-specific hook — must fire for any tool/agent). `pending_commits()` is the source
+  of truth for "what's undocumented" and every tier (hook fire, `sync`, `doctor`, the CI job) is a
+  pass over it, so a hook only has to fire *eventually*, per
+  [documentation/auto-commit-docs.md](specs/documentation/auto-commit-docs.md).
+- [`paths.py`](src/specky/paths.py) — the only place `specs` is spelled out. Never hardcode the docs
+  root: `paths.docs_root/docs_prefix/history_dir/history_prefix/modules_index`. It imports nothing
+  from specky, so it can't join a cycle. [`adopt.py`](src/specky/adopt.py) imports an existing docs
+  tree into it (see [documentation/doc-adoption.md](specs/documentation/doc-adoption.md)).
+- [`lock.py`](src/specky/lock.py) — non-blocking `flock` on `.specky/hook.lock`, held by any run that
+  writes docs. A busy lock prints and exits 0; it must never block a hook.
 - [`skills/document-domain/SKILL.md`](skills/document-domain/SKILL.md) — agent-driven doc path.
 - [`db.py`](src/specky/db.py) — single shared SQLite schema (`connect()`), only place that
   defines/migrates tables. All FTS5 `MATCH` queries must go through `db.fts_match_query()`

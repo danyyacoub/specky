@@ -10,7 +10,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from specky import frontmatter, gitlog
+from specky import frontmatter, gitlog, paths
 from specky.check import CheckConfig
 from specky.commit_doc import _AUTO_COMMIT_MARKER
 from specky.db import connect, fts_match_query
@@ -43,7 +43,7 @@ def _reset_tables(conn) -> None:
 
 
 def index_documents(repo_root: Path, conn) -> int:
-    specs_root = repo_root / "specs"
+    specs_root = paths.docs_root(repo_root)
     if not specs_root.exists():
         return 0
 
@@ -118,23 +118,28 @@ DOC_FILES_MAX_PER_COMMIT = 50
 # specky's own repo, three such commits produced 12 of 13 reported violations.
 DOC_FILES_MAX_DOCS_PER_COMMIT = 3
 
-# specky's own outputs, which no doc "describes": the docs themselves, and the index/site under
-# .specky/ in a repo that forgot to gitignore it (check.py ignores these too, but a pair recorded
-# here would still be reported as coverage the repo doesn't have).
-_NOT_COVERABLE = ("specs/", ".specky/")
-
-
-HISTORY_PREFIX = "specs/history/"
+def _not_coverable(repo_root: Path) -> tuple[str, ...]:
+    """specky's own outputs, which no doc "describes": the docs themselves, and the index/site
+    under `.specky/` in a repo that forgot to gitignore it (check.py ignores these too, but a pair
+    recorded here would still be reported as coverage the repo doesn't have)."""
+    return (paths.docs_prefix(repo_root), ".specky/")
 
 
 def doc_commits(repo_root: Path) -> list[tuple[str, list[str], str, list[str]]]:
-    """`(sha, parents, subject, doc paths)` for every commit that touched `specs/`.
+    """`(sha, parents, subject, doc paths)` for every commit that touched the docs tree.
 
     Path-limited, so both the walk and the file lists stay proportional to the number of
     doc-producing commits rather than to the length of history.
     """
     log = gitlog.run(
-        repo_root, ["log", "--format=%x01%H%x1f%P%x1f%s", "--name-only", "--", "specs/"]
+        repo_root,
+        [
+            "log",
+            "--format=%x01%H%x1f%P%x1f%s",
+            "--name-only",
+            "--",
+            paths.docs_prefix(repo_root),
+        ],
     )
     commits = []
     for lines in gitlog.blocks(log):
@@ -143,7 +148,9 @@ def doc_commits(repo_root: Path) -> list[tuple[str, list[str], str, list[str]]]:
     return commits
 
 
-def _documented_revs(sha: str, parents: list[str], subject: str, docs: list[str]) -> list[str]:
+def _documented_revs(
+    sha: str, parents: list[str], subject: str, docs: list[str], history_prefix: str
+) -> list[str]:
     """Which commits' code the docs in this commit describe.
 
     specky's own flow splits the two: the code lands in one commit and the hook's follow-up
@@ -153,7 +160,7 @@ def _documented_revs(sha: str, parents: list[str], subject: str, docs: list[str]
     belong to the commit it followed. Any other commit (a hand-written doc, an agent that
     committed code and docs together) describes itself.
     """
-    if stems := [Path(d).stem for d in docs if d.startswith(HISTORY_PREFIX)]:
+    if stems := [Path(d).stem for d in docs if d.startswith(history_prefix)]:
         return stems
     return parents[:1] if subject.startswith(_AUTO_COMMIT_MARKER) else [sha]
 
@@ -186,7 +193,7 @@ def _code_files(repo_root: Path, shas: list[str]) -> dict[str, list[str]]:
         stdin="\n".join(shas),
     )
     return {
-        lines[0]: [f for f in lines[1:] if f and not f.startswith(_NOT_COVERABLE)]
+        lines[0]: [f for f in lines[1:] if f and not f.startswith(_not_coverable(repo_root))]
         for lines in gitlog.blocks(log)
     }
 
@@ -211,16 +218,17 @@ def index_doc_files(repo_root: Path, conn) -> int:
     if not commits:
         return 0
 
+    history_prefix = paths.history_prefix(repo_root)
     # A history doc is a per-commit narrative and the root docs (MODULES, GLOSSARY, PRODUCT) are
-    # indexes; neither "covers" a code file. What's left is specs/<domain>/<topic>.md.
+    # indexes; neither "covers" a code file. What's left is <docs root>/<domain>/<topic>.md.
     covering = {
         sha: docs
         for sha, _, _, all_docs in commits
-        if 0 < len(docs := [d for d in all_docs if d.count("/") >= 2 and not d.startswith(HISTORY_PREFIX)])
+        if 0 < len(docs := [d for d in all_docs if d.count("/") >= 2 and not d.startswith(history_prefix)])
         <= DOC_FILES_MAX_DOCS_PER_COMMIT
     }
     targets = {
-        sha: _documented_revs(sha, parents, subject, docs)
+        sha: _documented_revs(sha, parents, subject, docs, history_prefix)
         for sha, parents, subject, docs in commits
         if sha in covering
     }

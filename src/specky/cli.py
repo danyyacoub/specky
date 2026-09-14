@@ -22,9 +22,12 @@ from pathlib import Path
 
 
 def _init(args: argparse.Namespace) -> None:
+    from specky.db import repo_root
     from specky.setup_wizard import run_init
 
-    run_init(Path("specky.toml"))
+    # The repo root, not the cwd: specky.toml is looked for beside `.git` by every reader of it, so
+    # `specky init` run from a subdirectory has to write it there too.
+    run_init(repo_root() / "specky.toml")
 
 
 def _index(args: argparse.Namespace) -> None:
@@ -133,6 +136,24 @@ def _export(args: argparse.Namespace) -> None:
         print(f"specky export: {line}")
 
 
+def _adopt(args: argparse.Namespace) -> None:
+    from specky.adopt import report_lines, run_adopt
+    from specky.db import repo_root
+
+    report = run_adopt(
+        repo_root(),
+        mode=args.mode,
+        domain=args.domain,
+        include=tuple(args.include),
+        exclude=tuple(args.exclude),
+        dry_run=args.dry_run,
+        assume_yes=args.yes,
+    )
+    # No `specky adopt:` prefix per line: the report's own first line carries it, and the rest is an
+    # indented list plus the next-steps block, which a prefix on every line would make unreadable.
+    print("\n".join(report_lines(report)))
+
+
 def _setup_diagrams(args: argparse.Namespace) -> None:
     from specky.mermaid_tool import setup
 
@@ -151,13 +172,14 @@ def _serve(args: argparse.Namespace) -> None:
 def _commit_doc(args: argparse.Namespace) -> None:
     from specky.commit_doc import main as commit_doc_main
 
-    commit_doc_main()  # never raises by design — see its docstring
+    commit_doc_main(rewritten=args.rewritten)  # never raises by design — see its docstring
 
 
 def _install_git_hook(args: argparse.Namespace) -> None:
     from specky.commit_doc import install_git_hook
 
-    print(f"Installed {install_git_hook()}")
+    for path in install_git_hook():
+        print(f"Installed {path}")
 
 
 def _sync(args: argparse.Namespace) -> None:
@@ -328,6 +350,60 @@ def build_parser() -> argparse.ArgumentParser:
     export_cmd.add_argument(
         "--title", default="Documentation", help="Title on the cover and in the browser tab"
     )
+    adopt_cmd = command(
+        "adopt",
+        "Import the repo's existing markdown (docs/, adr/, ARCHITECTURE.md) into the docs tree",
+        _adopt,
+    )
+    adopt_cmd.add_argument(
+        "--dry-run", action="store_true", help="List what it would import, touch nothing"
+    )
+    # The three source-file dispositions are one choice, not three flags: `--move --keep` together
+    # has no meaning, and a mutually exclusive group says so in `--help` and enforces it for free.
+    disposition = adopt_cmd.add_mutually_exclusive_group()
+    disposition.add_argument(
+        "--move",
+        dest="mode",
+        action="store_const",
+        const="move",
+        help="git mv the original into the docs tree (the default)",
+    )
+    disposition.add_argument(
+        "--keep",
+        dest="mode",
+        action="store_const",
+        const="keep",
+        help="Copy instead, leaving the original where it is (two live copies to keep in step)",
+    )
+    disposition.add_argument(
+        "--stub",
+        dest="mode",
+        action="store_const",
+        const="stub",
+        help="Move, leaving a one-line link behind for anything pointing at the old path",
+    )
+    adopt_cmd.set_defaults(mode="move")
+    adopt_cmd.add_argument(
+        "--domain",
+        help="Put every adopted doc in this domain, instead of reading one per source path",
+    )
+    adopt_cmd.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Also adopt paths matching GLOB, e.g. 'wiki/**/*.md' (repeatable)",
+    )
+    adopt_cmd.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Never adopt paths matching GLOB, e.g. 'docs/vendor/*' (repeatable, wins over --include)",
+    )
+    adopt_cmd.add_argument(
+        "--yes", action="store_true", help="Skip the confirmation for a large import"
+    )
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")
     command("render-html", "Render the static HTML doc site", _render_html)
@@ -346,12 +422,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bind address (default 127.0.0.1, or [serve] host). Anything but loopback exposes "
         "this repo's docs to whoever can reach the port",
     )
-    command(
+    commit_doc_cmd = command(
         "commit-doc",
-        "Record a micro-doc for HEAD (invoked by the post-commit git hook)",
+        "Document the undocumented commits at the tip of this branch (invoked by the git hooks)",
         _commit_doc,
     )
-    command("install-git-hook", "Install the post-commit micro-doc hook", _install_git_hook)
+    commit_doc_cmd.add_argument(
+        "--rewritten",
+        action="store_true",
+        help="Read `<old-sha> <new-sha>` pairs on stdin and rename the history docs they "
+        "invalidated (the post-rewrite hook's contract — an amend or a rebase)",
+    )
+    command(
+        "install-git-hook",
+        "Install the post-commit, post-merge and post-rewrite doc hooks",
+        _install_git_hook,
+    )
     sync_cmd = command(
         "sync",
         "Backfill micro-docs for any commit that doesn't have one yet (idempotent)",

@@ -17,7 +17,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from specky import frontmatter
+from specky import frontmatter, paths
 from specky.ai_provider import Provider
 from specky.commit_doc import DIFF_TRUNCATE_CHARS, Commit
 from specky.testgen import split_sections
@@ -174,11 +174,11 @@ class ExistingDocs:
     @classmethod
     def load(cls, repo_root: Path) -> ExistingDocs:
         snapshot = cls()
-        specs_root = repo_root / "specs"
+        specs_root = paths.docs_root(repo_root)
         if not specs_root.exists():
             return snapshot
 
-        purposes = modules_purposes(specs_root / "MODULES.md")
+        purposes = modules_purposes(paths.modules_index(repo_root))
         for md_path in sorted(specs_root.rglob("*.md")):
             rel = md_path.relative_to(specs_root)
             domain = rel.parts[0] if len(rel.parts) > 1 else "root"
@@ -425,7 +425,7 @@ def update_modules_index(repo_root: Path, domain: str, doc_rel_path: str, purpos
     creating the section if needed. Known limitation: only recognizes a section whose heading is
     exactly '## {Domain Title}' — a hand-written heading with extra text won't be matched, so this
     may create a duplicate section rather than reusing it."""
-    modules_path = repo_root / "specs" / "MODULES.md"
+    modules_path = paths.modules_index(repo_root)
     heading = f"## {domain.replace('-', ' ').title()}"
     link_target = f"({doc_rel_path})"
 
@@ -525,7 +525,7 @@ def sync_feature_doc(
     if classification.skip:
         return None
 
-    doc_path = repo_root / "specs" / classification.domain / f"{classification.topic}.md"
+    doc_path = paths.docs_root(repo_root) / classification.domain / f"{classification.topic}.md"
     rel = doc_path.relative_to(repo_root)
     existing_meta: dict = {}
     existing_body = None
@@ -540,13 +540,14 @@ def sync_feature_doc(
 
     body = generate_feature_doc(existing_body, commit, classification.domain, classification.topic, provider)
 
-    # type/tags come from this run's classification; hand-authored `related`, `owner` and
-    # `authored` values are preserved across regenerations since the AI is never asked to produce
+    # type/tags come from this run's classification; hand-authored `related`, `owner`, `authored`
+    # and `origin` values are preserved across regenerations since the AI is never asked to produce
     # any of them. Losing an `owner:` to an automatic doc update would be worse than never having
     # supported it — the hook runs on every commit, so it would silently strip the line within a
-    # day of someone adding it.
+    # day of someone adding it. `origin` is `specky adopt`'s pointer back to where a doc used to
+    # live, which is the one thing a reader needs to resolve a stale link somebody else wrote.
     meta: dict[str, str | list[str]] = {"type": classification.doc_type, "tags": classification.tags}
-    for key in ("related", "owner", "authored"):
+    for key in ("related", "owner", "authored", "origin"):
         if existing_meta.get(key):
             meta[key] = existing_meta[key]
     content = frontmatter.render(meta, body)
@@ -595,7 +596,7 @@ Doc content:
 def backfill_tags(repo_root: Path, provider: Provider) -> list[Path]:
     """Add type/tags frontmatter to feature/workflow docs written before this feature existed.
     Idempotent — skips any doc that already has a `type` set."""
-    specs_root = repo_root / "specs"
+    specs_root = paths.docs_root(repo_root)
     if not specs_root.exists():
         return []
 

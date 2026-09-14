@@ -6,29 +6,43 @@ tags: [documentation, sync]
 # Documentation — Auto Doc Commit
 
 ## What It Does
-The post-commit hook automatically stages and commits generated documentation (history, feature, and workflow docs) to the repository after each commit. Instead of leaving generated files as uncommitted changes, the hook creates a separate commit to capture them, identified by a special marker message to prevent infinite recursion.
+After generating documentation, the git hooks stage and commit it as a separate follow-up commit, identified by the marker message `docs: sync specky docs [skip specky]` to prevent infinite recursion. Instead of leaving generated files as uncommitted changes, the docs land in the repository on their own. Only the files this run actually wrote are committed, and nothing is committed at all while git is midway through a multi-commit operation — but what couldn't be committed then is remembered and committed by the next fire, because a doc left uncommitted forever is worse than no doc at all.
 
 ## How It Works
-1. **User commits**: When a commit is made to the repository, the post-commit hook runs.
-2. **Check marker**: The hook checks if the current commit's message starts with the auto-commit marker (`docs: sync specky docs [skip specky]`). If it does, return immediately — this is the hook's own auto-commit.
-3. **Generate docs**: The hook generates documentation for the commit, including a history file (`specs/history/<sha>.md`), and any feature/workflow docs from commit analysis.
-4. **Stage changes**: The hook stages all changes under `specs/` using `git add specs`.
-5. **Check for changes**: If nothing was written (no staged changes), the process ends without creating a commit.
-6. **Commit updates**: The hook commits the staged docs with the auto-commit marker message.
-7. **Report result**: If successful, the user sees "specky commit-doc: committed doc updates". If the commit fails (e.g., due to another hook rejection), the failure is printed but does not affect the original commit.
+1. **A hook fires**: `post-commit`, `post-merge` or `post-rewrite` runs (see [documentation/auto-commit-docs.md](auto-commit-docs.md)).
+2. **Check marker**: If `HEAD`'s message starts with the auto-commit marker, nothing new is documented — this is the hook's own auto-commit, and documenting it would recurse forever. The run still continues to the staging steps below, because a rebase replays doc-sync commits too, so this is exactly the state a rebase's own rename arrives in.
+3. **Generate docs**: The run reconciles the backlog, writing a history file (`specs/history/<sha8>.md`) per commit plus any feature/workflow docs, and returns the list of paths it wrote. A `post-rewrite` fire adds both halves of each renamed history doc: the new file, and the old path it has to record as deleted.
+4. **Add what an earlier fire owes**: Paths a previous fire wrote but couldn't commit are read back from a ledger in `.specky/` and joined to this run's. A path recorded as *deleted* whose file has since reappeared — a fast-forward or a checkout restoring the committed old-sha doc — is deleted again, so the commit removes the orphan instead of resurrecting it.
+5. **Stage exactly those paths**: `git add -- <written paths> specs/MODULES.md`. A bare `git add specs` would sweep up a human's half-finished doc edit — somebody mid-sentence in a feature doc when a commit lands would find their draft committed under specky's name, and reverting the bot's commit would take their work with it. A path that neither exists nor is tracked is dropped first: handing git the deletion of a path it never knew fails the whole commit with `pathspec did not match any files`.
+6. **Refuse mid-sequencer**: If a rebase, cherry-pick, revert, merge or bisect is in progress, write the paths to the ledger, print that the docs were written but left uncommitted, naming the operation, and stop. A `git commit` inside someone else's replay confuses the sequencer at best.
+7. **Check for changes**: If nothing was written, or the docs came out byte-for-byte identical to what's already committed, the process ends without creating a commit.
+8. **Commit updates**: `git commit -m <marker> -- <the same paths>`. The pathspec makes it a partial commit, so anything else the user had staged stays staged. The ledger is cleared *before* the commit: that commit fires the hook again, and a nested fire that still saw a full ledger would report the lock it cannot take as a problem. A failed commit writes it back.
+9. **Report result**: On success the user sees "specky commit-doc: committed doc updates". A failure (another hook rejecting the commit) is printed and does not affect the original commit.
 
 ## Outcomes
 | Scenario | Result |
 |----------|--------|
-| Docs generated successfully | New commit created with marker message, original commit unaffected |
-| Nothing written (e.g., commit skipped by classification) | No auto-commit created, original commit unaffected |
+| Docs generated successfully | New commit created with marker message, containing only the written docs and MODULES.md; original commit unaffected |
+| Nothing written (e.g. every commit skipped by classification) | No auto-commit created, original commit unaffected |
+| Docs regenerated byte-for-byte identical | Nothing staged is different, so no commit is created; HEAD unchanged |
+| A rebase, cherry-pick, revert, merge or bisect is in progress | Docs stay on disk uncommitted; the operation is named; their paths go to the `.specky/` ledger |
+| A later fire runs with the sequencer finished | The ledger's paths are committed and the ledger removed; a deletion whose file came back is re-applied |
+| A `post-rewrite` renamed a history doc | The commit carries the new file and the deletion of the old one, so the old sha's doc leaves the tree |
+| A human has uncommitted edits elsewhere in the docs root | Those edits are neither staged nor committed |
+| The user had unrelated staged work | It is still staged after the doc commit |
 | Auto-commit attempt fails | Error printed to output, original commit unaffected |
-| Hook detects its own marker | Returns immediately without generating docs again |
+| Hook detects its own marker | Nothing new is documented; a rename or a ledger debt is still committed |
 
 ## Acceptance Tests
 | Given | When | Then |
 |-------|------|------|
-| User makes a regular commit | Post-commit hook runs | Hook generates docs, stages them, creates a follow-up commit with marker message |
-| Post-commit hook creates auto-commit with marker | Hook runs for that auto-commit | Hook detects marker, returns immediately without recursion |
-| No docs are generated (commit filtered by classification) | Hook stages specs/ | Hook finds no staged changes, skips creating a commit |
-| Another hook rejects the doc commit | Hook attempts to commit staged specs/ | Original user commit remains; error is printed; user sees "doc updates written but not committed" message |
+| User makes a regular commit | A hook runs | Docs are generated, staged by path, and a follow-up commit with the marker message is created |
+| A hook creates the auto-commit with the marker | The hook runs for that auto-commit | The marker is detected, no provider call is made, and no second commit appears |
+| A rebase replays a work commit and a doc-sync commit | `post-rewrite` fires with the marker on HEAD | The renamed doc is committed anyway and the working tree is left clean |
+| A rename was deferred by a sequencer file | The next ordinary fire runs | The rename is committed, the tree is clean, and the ledger file is gone |
+| No docs are generated (commit filtered by classification) | The hook stages nothing | No commit is created |
+| The docs regenerate identically | A hook runs twice over the same commit | HEAD is the same sha after the second run as after the first |
+| A half-written feature doc is uncommitted in the docs root | A hook writes docs and commits | The draft is absent from the commit and still holds its uncommitted edits |
+| `src.py` is staged when a hook fires | The doc commit is made | `git status --porcelain` still shows `A  src.py` |
+| `.git/CHERRY_PICK_HEAD` exists | A hook writes docs | The history doc exists, HEAD is unchanged, and the output says the docs were left uncommitted |
+| Another hook rejects the doc commit | The hook attempts to commit | The original user commit remains; the error is printed; the user sees "doc updates written but not committed" |
