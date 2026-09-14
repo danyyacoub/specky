@@ -148,6 +148,45 @@ def test_the_target_branchs_own_doc_changes_are_not_credited_to_the_branch(tmp_r
     assert "invoices.md" not in body
 
 
+# --- refused drafts --------------------------------------------------------------------
+# A doc the hook wanted to change and wouldn't is the one thing about this range a reviewer can't
+# see anywhere else: the draft is under .specky/, which is gitignored, so it isn't in the diff.
+
+
+def _stage_draft(repo, rel: str = "billing/refund-flow.md") -> None:
+    path = repo / prcomment.PENDING_DIR / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# a draft the hook refused to write\n")
+
+
+def test_a_refused_draft_is_reported_alongside_the_docs_that_did_change(tmp_repo):
+    _commit(tmp_repo, "document refunds", {DOC: _doc("Refunds are automatic.")})
+    _stage_draft(tmp_repo, "billing/invoices.md")
+
+    body = _body(tmp_repo, base="HEAD~1")
+    assert "1 doc update(s) were generated and refused" in body
+    assert "`billing/invoices.md`" in body
+    assert "specky doctor" in body  # where to go next
+
+
+def test_a_refused_draft_is_reported_even_when_the_range_changed_no_docs(tmp_repo):
+    """The worst case for silence: nothing under `specs/` moved *because* the write was refused."""
+    _commit(tmp_repo, "just code", {"src/app.py": "x = 1\n"})
+    _stage_draft(tmp_repo)
+
+    body = _body(tmp_repo, base="HEAD~1")
+    assert "no changes under `specs/`" in body
+    assert "generated and refused" in body
+
+
+def test_no_drafts_means_no_note(tmp_repo):
+    _commit(tmp_repo, "document refunds", {DOC: _doc("Refunds are automatic.")})
+    report = run_pr_comment(tmp_repo, base="HEAD~1")
+
+    assert report.pending_docs == ()
+    assert "refused" not in comment_markdown(report)
+
+
 # --- bounds ----------------------------------------------------------------------------
 # specky is installed into other people's repos, so the range is not this repo's range. GitHub
 # refuses a comment body over 65,536 characters; these pin that the output can't get there.

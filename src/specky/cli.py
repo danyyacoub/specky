@@ -388,6 +388,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def known_flags() -> set[str]:
+    """Every long option this CLI actually accepts, asked of the parser instead of listed here.
+
+    `generator.ungrounded_flags` checks a regenerated doc against this, because a doc claiming a
+    flag that doesn't exist is the one kind of generation error a machine can settle by itself. Kept
+    here rather than there so it can never drift from `build_parser`: adding an argument above
+    updates this by construction.
+    """
+    parser = build_parser()
+    subparsers = [
+        sub
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+        for sub in action.choices.values()
+    ]
+    return {
+        option
+        for action in [*parser._actions, *(a for sub in subparsers for a in sub._actions)]
+        for option in action.option_strings
+        if option.startswith("--")
+    }
+
+
 def main() -> None:
     args = build_parser().parse_args()
     try:

@@ -11,7 +11,7 @@ Optional chat widget on the generated docs site. Lets you ask questions and get 
 
 ## How It Works
 
-1. **Start the server** — Run `specky serve`; it listens on `127.0.0.1:8420`.
+1. **Start the server** — Run `specky serve`; it listens on `127.0.0.1:8420` unless `--port`/`--host` or the `[serve]` table in `specky.toml` say otherwise. A page served on another port still finds its own server: the widget asks its own origin first and only falls back to the port baked in at render time.
 2. **Ask a question** — Click "Ask" button in the viewer, type your question.
 3. **Server retrieves context** — Searches FTS5 index for matching docs and commit summaries (up to 5 of each).
 4. **AI generates answer** — Calls your configured provider (Anthropic, OpenAI-compatible, or local CLI) with context + question.

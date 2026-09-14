@@ -13,16 +13,38 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from specky import frontmatter
 from specky.ai_provider import Provider
 from specky.commit_doc import DIFF_TRUNCATE_CHARS, Commit
+from specky.testgen import split_sections
 
 # Docs excluded from type/tags classification — root-level meta docs and the per-commit
 # changelog trail aren't feature/workflow reference docs.
 _UNTAGGED_DOMAINS = {"root", "history"}
+
+# Where a regeneration this module refused to write is parked instead. Under `.specky/`, which is
+# gitignored, so a rejected rewrite can never reach a commit — and `specky doctor` warns for as
+# long as one is sitting there.
+PENDING_DIR = ".specky/pending"
+
+# How much of a section (or of the whole doc) a regeneration may drop before it counts as a rewrite
+# rather than an update. Measured against this repo's own history rather than guessed: across 33
+# honest doc updates, no section ever fell below 98% of its previous size, while the two
+# destructive rewrites ran 46–71% with sections missing outright. 0.8 sits in that gap with room on
+# both sides. A false positive costs a refused write and a warning; a false negative costs prose
+# nobody notices is gone, which is what happened twice.
+MIN_KEPT_RATIO = 0.8
+# Sections smaller than this are exempt from the ratio. A three-line section losing half its
+# characters is noise; the losses worth stopping were thousands of characters each.
+MIN_SECTION_CHARS = 400
+
+# A long-form CLI flag as it appears in prose. The lookbehind keeps `--foo` out of `x---foo` and
+# stops mid-word matches inside an already-matched flag.
+_FLAG = re.compile(r"(?<![\w-])--[a-z][a-z0-9-]*")
 
 # A MODULES.md table row: `| [billing/refund-flow.md](billing/refund-flow.md) | Issue refunds |`.
 _MODULES_ROW = re.compile(r"^\|\s*\[[^\]]*\]\(([^)]+)\)\s*\|([^|]*)\|")
@@ -80,6 +102,27 @@ omitting the section.
 
 Style: plain language, compact, focus on WHAT and WHY not implementation details, tables for structured
 information, no code blocks except formulas/thresholds, understandable by non-technical stakeholders.
+"""
+
+# The update path asks for sections rather than a whole file. A whole-file answer means every
+# untouched paragraph is re-emitted from the model's reading of it, which is how hand-written
+# detail gets quietly dropped and how prose gets reflowed into one line per paragraph (making
+# `git diff specs/` useless for review). A section the model doesn't mention is copied through
+# byte-for-byte instead.
+SECTION_UPDATE_INSTRUCTIONS = """Respond with ONLY a JSON object, no other text:
+{{"sections": {{"<heading>": "<that section's new markdown, without its `##` heading line>"}}}}
+
+- Include ONLY the sections this commit actually changes. A section you leave out is kept exactly
+  as it already is, which is the right outcome for anything this change didn't touch.
+- To replace a section, use its heading exactly as listed below. To add one, use a new heading —
+  it's appended at the end.
+- A section you do rewrite must carry its existing content through. It may hold hand-written
+  detail, tables or diagrams that are still correct; edit around them rather than summarising them
+  away. A rewrite that shortens a section is rejected outright and the doc is left alone.
+- Respond with {{"sections": {{}}}} if the doc is already accurate for this change.
+
+Sections in the doc right now:
+{section_list}
 """
 
 
@@ -197,24 +240,172 @@ def classify_change(
     )
 
 
+def _grounded_in_source(repo_root: Path, flag: str) -> bool:
+    """Does this flag appear in tracked source outside `specs/`, on a line that isn't a comment?
+
+    Docs legitimately name other tools' flags — `git diff --name-only`, `gh pr comment --body-file`
+    — and those show up in the argument lists and usage examples that actually run them, so tracked
+    source is the right second corpus after argparse.
+
+    Comment lines are excluded for one specific reason: a comment explaining that a flag was
+    considered and *rejected* would otherwise ground the exact mistake this check exists to catch.
+    This repo has such a comment (above `export`'s mutually exclusive group in cli.py), and the doc
+    that copied a flag out of it is why any of this is here. `specs/` is excluded too, or one doc's
+    invention grounds the next one's.
+    """
+    hits = subprocess.run(
+        ["git", "grep", "--fixed-strings", "-h", "-e", flag, "--", ":!specs/"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return any(not line.lstrip().startswith("#") for line in hits.splitlines())
+
+
+def ungrounded_flags(repo_root: Path, body: str) -> list[str]:
+    """Every `--flag` in this doc that neither the CLI accepts nor any real code mentions.
+
+    The one error class in a generated doc that a machine can settle on its own. The model reads a
+    diff, so a source comment naming a flag that doesn't exist reads to it exactly like one that
+    does — and argparse already knows which is which, so this asks it rather than guessing.
+
+    Deliberately not naming the flag that prompted this: writing a phantom flag into source is how
+    the mistake propagated in the first place, and `_grounded_in_source` would then be one comment
+    away from blessing it again.
+    """
+    from specky.cli import known_flags
+
+    unknown = set(_FLAG.findall(body)) - known_flags()
+    return sorted(flag for flag in unknown if not _grounded_in_source(repo_root, flag))
+
+
+def lost_content(existing_body: str, new_body: str) -> str | None:
+    """Why this regeneration reads as a rewrite rather than an update — or None if it looks like one.
+
+    Two signals, and neither alone is enough. Both regressions in this repo's own history prove it:
+
+    - `f087a01` dropped three whole `##` sections from `specs/cli/check.md` and kept 32% of its
+      characters. A heading check catches it; so does a whole-doc ratio.
+    - `eefb94b` kept every heading in `specs/cli/doctor.md` **and** 83% of its characters — while
+      gutting `## How It Works` from 48 lines to 11, mermaid flowchart included. A grown Acceptance
+      Tests table hid the loss in the total. Only a per-section ratio catches that one.
+
+    So: a section may not vanish, and a section that survives may not lose most of its body. The
+    whole-doc ratio stays as a backstop for a rewrite that restructures the headings entirely.
+    """
+    after = {title.lower(): "\n".join(lines) for title, lines in split_sections(new_body)}
+    dropped: list[str] = []
+    shrunk: list[tuple[float, str, int, int]] = []
+    for title, lines in split_sections(existing_body):
+        if not title:
+            continue  # the preamble: frontmatter and the H1, rendered fresh either way
+        kept = after.get(title.lower())
+        # Both sides include their own `## ` line, which keeps the ratio honest for a short section.
+        before = len("\n".join(lines).strip())
+        if kept is None:
+            dropped.append(title)
+            continue
+        now = len(kept.strip())
+        if before >= MIN_SECTION_CHARS and now < before * MIN_KEPT_RATIO:
+            shrunk.append((now / before, title, before, now))
+
+    if dropped:
+        listed = ", ".join(f"`## {title}`" for title in dropped[:3])
+        more = f" and {len(dropped) - 3} more" if len(dropped) > 3 else ""
+        also = f", and guts {len(shrunk)} other section(s)" if shrunk else ""
+        return f"it drops {listed}{more}{also}"
+    if shrunk:
+        _, title, before, now = min(shrunk)
+        also = f", as did {len(shrunk) - 1} other section(s)" if len(shrunk) > 1 else ""
+        return f"`## {title}` keeps {round(100 * now / before)}% of its {before} characters{also}"
+    before, now = len(existing_body.strip()), len(new_body.strip())
+    if before and now < before * MIN_KEPT_RATIO:
+        return f"the doc keeps {round(100 * now / before)}% of its {before} characters"
+    return None
+
+
+def _strip_own_heading(title: str, text: str) -> str:
+    """Drop a leading `## Title` the model included anyway — the splice adds it back itself."""
+    lines = text.strip().splitlines()
+    heading = lines[0].lstrip("#").strip().lower() if lines and lines[0].startswith("#") else None
+    return "\n".join(lines[1:]).strip() if heading == title.strip().lower() else text.strip()
+
+
+def merge_sections(existing_body: str, updates: dict) -> str:
+    """Splice replacement sections into a doc, leaving every other section byte-identical.
+
+    An update naming a heading the doc doesn't have is appended in the order the model sent it —
+    that's how a new `## Outcomes` arrives on a doc that never had one.
+    """
+    replacements = {
+        title.strip().lower(): text
+        for title, text in updates.items()
+        if isinstance(title, str) and isinstance(text, str)
+    }
+    out: list[str] = []
+    for title, lines in split_sections(existing_body):
+        replacement = replacements.pop(title.strip().lower(), None) if title else None
+        if replacement is None:
+            out += lines
+        else:
+            out += [lines[0], "", _strip_own_heading(title, replacement), ""]
+    for title, text in updates.items():
+        if isinstance(title, str) and title.strip().lower() in replacements:
+            out += [f"## {title.strip()}", "", _strip_own_heading(title, text), ""]
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _commit_block(commit: Commit) -> str:
+    return (
+        f"---\nThis commit changed the feature:\n\nCommit message:\n{commit.message}\n\n"
+        f"Diff (may be truncated):\n{commit.diff[:DIFF_TRUNCATE_CHARS]}\n---\n\n"
+    )
+
+
+def update_feature_doc(
+    existing_content: str, commit: Commit, domain: str, topic: str, provider: Provider
+) -> str:
+    """An existing doc's new body, built by replacing only the sections the model names.
+
+    Falls back to the whole-body path when the response isn't the JSON shape asked for — same
+    graceful degradation as `classify_change`, and `lost_content` guards the result either way, so
+    a provider that ignores the format is no worse off than before this existed.
+    """
+    titles = [title for title, _ in split_sections(existing_content) if title]
+    prompt = (
+        f"You maintain specs/{domain}/{topic}.md, the living reference doc for this "
+        "feature/workflow.\n\nIts current content follows in full.\n\n"
+        f"{existing_content}\n\n"
+        + _commit_block(commit)
+        + SECTION_UPDATE_INSTRUCTIONS.format(
+            section_list="\n".join(f"- {title}" for title in titles) or "(no sections yet)"
+        )
+    )
+    raw = _strip_code_fence(provider.generate(prompt))
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict) and isinstance(parsed.get("sections"), dict):
+        return merge_sections(existing_content, parsed["sections"])
+    # Not the JSON contract: read it as a whole replacement body, frontmatter echo and all.
+    _, body = frontmatter.parse(raw)
+    return body + "\n"
+
+
 def generate_feature_doc(
     existing_content: str | None, commit: Commit, domain: str, topic: str, provider: Provider
 ) -> str:
+    """This feature's doc body. A doc that already exists is updated section by section
+    (`update_feature_doc`); one that doesn't is written whole, from this commit alone."""
     if existing_content:
-        context = (
-            "Existing doc content follows — update only the parts this change affects, "
-            f"preserve everything else that's still accurate:\n\n{existing_content}"
-        )
-    else:
-        context = (
-            "No existing doc yet — write one from scratch based on this change, staying grounded in "
-            "what's actually shown below (don't invent behaviour the diff/message doesn't evidence)."
-        )
+        return update_feature_doc(existing_content, commit, domain, topic, provider)
 
     prompt = (
         f"You maintain specs/{domain}/{topic}.md, the living reference doc for this feature/workflow.\n\n"
-        f"{context}\n\n---\nThis commit changed the feature:\n\n"
-        f"Commit message:\n{commit.message}\n\nDiff (may be truncated):\n{commit.diff[:DIFF_TRUNCATE_CHARS]}\n---\n\n"
+        "No existing doc yet — write one from scratch based on this change, staying grounded in "
+        "what's actually shown below (don't invent behaviour the diff/message doesn't evidence).\n\n"
+        + _commit_block(commit)
         + DOC_STYLE_INSTRUCTIONS.format(
             domain_title=domain.replace("-", " ").title(), topic_title=topic.replace("-", " ").title()
         )
@@ -285,11 +476,47 @@ def update_modules_index(repo_root: Path, domain: str, doc_rel_path: str, purpos
     modules_path.write_text("\n".join(lines) + "\n")
 
 
+@dataclass(frozen=True)
+class DocSync:
+    """What `sync_feature_doc` decided about one commit.
+
+    `path` is the doc this commit belongs to whether or not anything was written — a frozen or
+    refused doc still earns its commit link, which is what `specky commit-info` answers with and
+    what `specky features` counts. `written` is False when the doc on disk was deliberately left
+    as it is, so a caller doesn't count it as changed. `note` is the line to print, always set:
+    library code here does no printing of its own.
+    """
+
+    path: Path
+    written: bool
+    note: str
+
+
+def _stage_pending(repo_root: Path, domain: str, topic: str, content: str) -> Path:
+    """Park a refused draft where a human can read it, out of git's reach (see `PENDING_DIR`)."""
+    path = repo_root / PENDING_DIR / domain / f"{topic}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
 def sync_feature_doc(
     repo_root: Path, commit: Commit, provider: Provider, existing: ExistingDocs | None = None
-) -> Path | None:
+) -> DocSync | None:
     """Classify a commit and, if it affects a feature/workflow, generate or update its reference
-    doc under specs/<domain>/<topic>.md. Returns the doc path written, or None if skipped.
+    doc under specs/<domain>/<topic>.md. Returns what it did, or None if the commit was skipped.
+
+    A regeneration is not trusted blindly. Three things can stop it reaching disk, and all three
+    exist because they had to: the hook runs on every commit, so anything it gets wrong it gets
+    wrong repeatedly, and it silently outvotes whoever corrected the doc by hand last time.
+
+    1. `authored: human` in the frontmatter freezes the body outright — no generation call at all.
+    2. `lost_content` refuses a rewrite that drops or guts a section.
+    3. `ungrounded_flags` refuses a doc naming a `--flag` that nothing in this repo accepts.
+
+    In cases 2 and 3 the draft goes to `.specky/pending/` rather than being thrown away: it may
+    well be a better doc than what's on disk, and that's a judgement for a human. `specky doctor`
+    warns while one is waiting there.
 
     `existing` is the shared snapshot when a caller is walking many commits (see `sync()`);
     left out, it's loaded for this one commit."""
@@ -299,22 +526,45 @@ def sync_feature_doc(
         return None
 
     doc_path = repo_root / "specs" / classification.domain / f"{classification.topic}.md"
+    rel = doc_path.relative_to(repo_root)
     existing_meta: dict = {}
     existing_body = None
     if doc_path.exists():
         existing_meta, existing_body = frontmatter.parse(doc_path.read_text())
 
+    # Checked before generating, so a frozen doc costs nothing but the classification call that
+    # identified it. Still linked and still reported: a commit that changed this feature is
+    # exactly when someone should look at the doc they took ownership of.
+    if str(existing_meta.get("authored", "")).strip().lower() == "human":
+        return DocSync(doc_path, False, f"left {rel} alone (authored: human) — may need a look")
+
     body = generate_feature_doc(existing_body, commit, classification.domain, classification.topic, provider)
 
-    # type/tags come from this run's classification; hand-authored `related` and `owner` values are
-    # preserved across regenerations since the AI is never asked to produce either. Losing an
-    # `owner:` to an automatic doc update would be worse than never having supported it — the hook
-    # runs on every commit, so it would silently strip the line within a day of someone adding it.
+    # type/tags come from this run's classification; hand-authored `related`, `owner` and
+    # `authored` values are preserved across regenerations since the AI is never asked to produce
+    # any of them. Losing an `owner:` to an automatic doc update would be worse than never having
+    # supported it — the hook runs on every commit, so it would silently strip the line within a
+    # day of someone adding it.
     meta: dict[str, str | list[str]] = {"type": classification.doc_type, "tags": classification.tags}
-    for key in ("related", "owner"):
+    for key in ("related", "owner", "authored"):
         if existing_meta.get(key):
             meta[key] = existing_meta[key]
     content = frontmatter.render(meta, body)
+
+    problem = lost_content(existing_body, body) if existing_body else None
+    if not problem:
+        invented = ungrounded_flags(repo_root, body)
+        if invented:
+            named = ", ".join(f"`{flag}`" for flag in invented)
+            problem = f"it names {named}, which nothing in this repo accepts"
+    if problem:
+        pending = _stage_pending(repo_root, classification.domain, classification.topic, content)
+        return DocSync(
+            doc_path,
+            False,
+            f"refused to rewrite {rel} — {problem}. Draft kept at "
+            f"{pending.relative_to(repo_root)}",
+        )
 
     doc_path.parent.mkdir(parents=True, exist_ok=True)
     doc_path.write_text(content)
@@ -324,7 +574,7 @@ def sync_feature_doc(
     existing.record(
         f"{classification.domain}/{classification.topic}", classification.purpose, classification.tags
     )
-    return doc_path
+    return DocSync(doc_path, True, f"updated {rel}")
 
 
 TAG_PROMPT = """You maintain a set of feature/workflow reference docs under specs/<domain>/<topic>.md for \

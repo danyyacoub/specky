@@ -1,12 +1,18 @@
+import json
+
 from specky import generator
 from specky.commit_doc import Commit
 from specky.generator import (
+    PENDING_DIR,
     _parse_type_and_tags,
     _strip_code_fence,
     classify_change,
+    lost_content,
+    merge_sections,
     sync_feature_doc,
     update_modules_index,
 )
+from specky.testgen import split_sections
 
 from conftest import FakeProvider
 
@@ -197,10 +203,11 @@ def test_sync_feature_doc_writes_doc_frontmatter_and_index(tmp_repo):
             "# Billing — Refund Flow\n\n## What It Does\nIssues refunds.\n",
         ]
     )
-    path = sync_feature_doc(tmp_repo, _commit(), provider)
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
 
-    assert path == tmp_repo / "specs" / "billing" / "refund-flow.md"
-    text = path.read_text()
+    assert result.path == tmp_repo / "specs" / "billing" / "refund-flow.md"
+    assert result.written
+    text = result.path.read_text()
     assert text.startswith("---\ntype: workflow\ntags: [refunds]\n---\n")
     assert "## What It Does" in text
     assert "billing/refund-flow.md" in (tmp_repo / "specs" / "MODULES.md").read_text()
@@ -217,7 +224,7 @@ def test_a_frontmatter_block_the_model_echoed_back_is_not_written_twice(tmp_repo
             "---\ntype: feature\ntags: [copied, from, the, diff]\n---\n\n# Billing — Refund Flow\n",
         ]
     )
-    text = sync_feature_doc(tmp_repo, _commit(), provider).read_text()
+    text = sync_feature_doc(tmp_repo, _commit(), provider).path.read_text()
 
     assert text.count("---\n") == 2  # one block: its opening and closing fence
     assert text.startswith("---\ntype: workflow\ntags: [refunds]\n---\n")  # classification wins
@@ -241,9 +248,179 @@ def test_sync_feature_doc_preserves_a_hand_authored_related_list(tmp_repo, write
             "# New body\n",
         ]
     )
-    text = sync_feature_doc(tmp_repo, _commit(), provider).read_text()
+    text = sync_feature_doc(tmp_repo, _commit(), provider).path.read_text()
     assert "related: [search/fts5-syntax-safety]" in text
     assert "tags: [refunds]" in text  # regenerated from this run's classification
+
+
+# --- refusing a destructive regeneration -------------------------------------------------
+#
+# Two real regressions are what this section exists for: f087a01 cut specs/cli/check.md from 118
+# lines to 63, and eefb94b gutted specs/cli/doctor.md's How It Works section — mermaid flowchart
+# included — while keeping every heading and 83% of the file's characters. Both were hand-written
+# content, and both went in via the post-commit hook with nobody's approval.
+
+_CLASSIFY = (
+    '{"skip": false, "domain": "billing", "topic": "refund-flow", '
+    '"purpose": "Issue refunds", "type": "feature", "tags": ["refunds"]}'
+)
+
+_WHAT = "Refunds money to a customer who asks for it, once someone approves. " * 8
+_HOW = "1. **Check.** The request is examined against the original payment. " * 8
+_TESTS = "| Given | When | Then |\n|---|---|---|\n| a paid order | a refund | money back |\n"
+
+# Every prose section here is over MIN_SECTION_CHARS, so the per-section ratio applies to it —
+# which is the point: the losses worth catching were thousands of characters, not a stray line.
+_BIG_DOC = (
+    f"# Billing — Refund Flow\n\n## What It Does\n{_WHAT}\n\n"
+    f"## How It Works\n{_HOW}\n\n## Acceptance Tests\n{_TESTS}"
+)
+
+
+def _sections(text: str) -> dict[str, str]:
+    return {title: "\n".join(lines) for title, lines in split_sections(text) if title}
+
+
+def test_a_regeneration_that_drops_a_section_is_refused_and_staged(tmp_repo, write_doc):
+    """f087a01's failure mode: three whole `##` sections gone, written without a word."""
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    before = doc.read_text()
+    provider = FakeProvider(
+        [_CLASSIFY, f"# Billing — Refund Flow\n\n## What It Does\n{_WHAT}\n\n## Acceptance Tests\n{_TESTS}"]
+    )
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert doc.read_text() == before  # the doc on disk is untouched, byte for byte
+    assert result.path == doc and not result.written
+    assert "`## How It Works`" in result.note
+    assert (tmp_repo / PENDING_DIR / "billing" / "refund-flow.md").exists()
+
+
+def test_a_regeneration_that_guts_a_section_it_kept_is_refused(tmp_repo, write_doc):
+    """eefb94b's failure mode, and the harder one: every heading survives, so only a per-section
+    measurement notices that the content under one of them is gone."""
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    before = doc.read_text()
+    provider = FakeProvider(
+        [_CLASSIFY, f"# Billing — Refund Flow\n\n## What It Does\n{_WHAT}\n\n"
+         f"## How It Works\n1. **Check.** It gets checked.\n\n## Acceptance Tests\n{_TESTS}"]
+    )
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert doc.read_text() == before
+    assert not result.written
+    assert "`## How It Works` keeps" in result.note
+
+
+def test_a_doc_with_no_sections_is_still_protected_by_the_whole_doc_ratio(tmp_repo, write_doc):
+    """The backstop for a rewrite that restructures the headings out from under the section check."""
+    doc = write_doc("billing/refund-flow.md", f"# Refunds\n\n{_WHAT}\n", {"type": "feature"})
+    provider = FakeProvider([_CLASSIFY, "# Refunds\n\nIt refunds.\n"])
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert not result.written
+    assert "the doc keeps" in result.note
+    assert _WHAT.strip() in doc.read_text()
+
+
+def test_a_section_update_leaves_every_other_section_byte_identical(tmp_repo, write_doc):
+    """The reason the update path asks for sections instead of a file: what the model doesn't
+    mention is copied through rather than re-emitted from its reading of it."""
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    was = _sections(doc.read_text())
+    new_how = "1. **Check.** The request is now examined against the refund policy as well. " * 8
+    provider = FakeProvider([_CLASSIFY, json.dumps({"sections": {"How It Works": new_how}})])
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert result.written
+    now = _sections(doc.read_text())
+    assert now["What It Does"] == was["What It Does"]
+    assert now["Acceptance Tests"] == was["Acceptance Tests"]
+    assert "refund policy" in now["How It Works"]
+
+
+def test_a_section_update_naming_an_unknown_heading_appends_it(tmp_repo, write_doc):
+    write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    provider = FakeProvider(
+        [_CLASSIFY, json.dumps({"sections": {"Outcomes": "| Result |\n|---|\n| Refunded |\n"}})]
+    )
+    text = sync_feature_doc(tmp_repo, _commit(), provider).path.read_text()
+
+    assert "## Outcomes" in text
+    assert text.index("## Acceptance Tests") < text.index("## Outcomes")  # appended, not spliced
+
+
+def test_a_doc_marked_authored_human_is_never_regenerated(tmp_repo, write_doc):
+    """The explicit opt-out. Checked before generating, so it costs nothing but the classification
+    call that identified the doc — and still linked, because a commit touching this feature is
+    exactly when its owner should look at it."""
+    doc = write_doc(
+        "billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["x"], "authored": "human"}
+    )
+    before = doc.read_text()
+    provider = FakeProvider([_CLASSIFY])  # a second call raises: none is allowed
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert doc.read_text() == before
+    assert result.path == doc and not result.written
+    assert "authored: human" in result.note
+    assert len(provider.prompts) == 1
+
+
+def test_the_authored_human_marker_is_read_loosely(tmp_repo, write_doc):
+    """It's hand-written frontmatter, so `Human` and a trailing space have to count. The line that
+    stops the hook is no use if the hook is fussy about how it was typed."""
+    write_doc("billing/refund-flow.md", "# Old\n", {"type": "feature", "authored": "Human "})
+    result = sync_feature_doc(tmp_repo, _commit(), FakeProvider([_CLASSIFY]))
+    assert not result.written
+
+
+def test_a_doc_naming_a_flag_this_cli_does_not_have_is_refused(tmp_repo):
+    """The `--single-page` class of error: a flag the model read in a source comment that says the
+    flag does *not* exist. argparse knows the real answer."""
+    provider = FakeProvider(
+        [_CLASSIFY, "# Billing — Refund Flow\n\n## What It Does\nPass `--not-a-real-flag` to skip.\n"]
+    )
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert not result.written
+    assert not result.path.exists()  # a brand-new doc: nothing reached specs/ at all
+    assert "`--not-a-real-flag`" in result.note
+    assert (tmp_repo / PENDING_DIR / "billing" / "refund-flow.md").exists()
+
+
+def test_a_doc_naming_a_real_flag_is_written(tmp_repo):
+    """The other half of the flag check: it has to let the true ones through."""
+    provider = FakeProvider(
+        [_CLASSIFY, "# Billing — Refund Flow\n\n## What It Does\nRun `specky doctor --json`.\n"]
+    )
+    assert sync_feature_doc(tmp_repo, _commit(), provider).written
+
+
+def test_lost_content_passes_an_honest_update():
+    """Across 33 real doc updates in this repo's history no section fell below 98% of its previous
+    size, which is the headroom MIN_KEPT_RATIO is set against."""
+    tightened = _BIG_DOC.replace("once someone approves. ", "once approved. ")
+    assert lost_content(_BIG_DOC, tightened) is None
+
+
+def test_lost_content_ignores_a_small_section():
+    """A short section shrinking is noise, not a rewrite — the losses worth stopping were
+    thousands of characters."""
+    before = f"# D\n\n## Flags\n`--json` prints JSON.\n\n## What It Does\n{_WHAT}\n"
+    after = f"# D\n\n## Flags\nNone.\n\n## What It Does\n{_WHAT}\n"
+    assert lost_content(before, after) is None
+
+
+def test_merge_sections_reproduces_a_doc_it_changes_nothing_in():
+    assert merge_sections(_BIG_DOC, {}) == _BIG_DOC.rstrip("\n") + "\n"
+
+
+def test_merge_sections_matches_a_heading_case_insensitively_and_strips_a_repeated_one():
+    merged = merge_sections(_BIG_DOC, {"how it works": "## How It Works\n1. **New.** Different.\n"})
+    assert merged.count("## How It Works") == 1
+    assert "1. **New.** Different." in merged
+    assert _WHAT.strip() in merged
 
 
 def test_backfill_tags_skips_already_tagged_and_meta_domains(tmp_repo, write_doc):

@@ -8,7 +8,7 @@ is the *same* content as the viewer rather than a second renderer's guess at it.
 
 Three shapes, one pass over the index:
 
-- `--single-page` (default): one `.specky/export/specky-docs.html` with a domain-grouped table of
+- No flag (the default): one `.specky/export/specky-docs.html` with a domain-grouped table of
   contents, every doc inlined, a print stylesheet and **no JavaScript at all**. No-JS is the point:
   it's what makes the file survive being emailed, opened from a network share, or fed to a PDF
   printer. It also means the viewer's glossary tooltips can't come along, so a glossary term

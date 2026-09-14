@@ -228,13 +228,13 @@ def test_regenerating_a_doc_keeps_its_hand_written_owner(tmp_repo, write_doc):
         "# Old\n",
         {"type": "feature", "tags": ["old"], "owner": "Payments team"},
     )
-    text = sync_feature_doc(tmp_repo, _fake_commit(), _classified()).read_text()
+    text = sync_feature_doc(tmp_repo, _fake_commit(), _classified()).path.read_text()
     assert "owner: Payments team" in text
     assert "tags: [refunds]" in text  # this run's classification still wins for the fields it owns
 
 
 def test_regeneration_never_invents_an_owner(tmp_repo):
-    text = sync_feature_doc(tmp_repo, _fake_commit(), _classified()).read_text()
+    text = sync_feature_doc(tmp_repo, _fake_commit(), _classified()).path.read_text()
     assert "owner:" not in text
 
 

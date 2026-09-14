@@ -84,6 +84,25 @@ def section(content: str, title: str) -> list[str]:
     return []
 
 
+def split_sections(content: str) -> list[tuple[str, list[str]]]:
+    """`content` as `(heading text, lines)` pairs, split on `##` headings only.
+
+    The first pair is always the preamble — frontmatter, `# Title`, any lead paragraph — under the
+    empty heading `""`. Each later pair keeps its own `##` line as `lines[0]`, so joining every
+    pair's lines back together reproduces `content` exactly. Deeper headings stay inside the `##`
+    section above them, which is the granularity generator.py replaces a section at: a `###` is
+    part of the argument its parent section is making, not a separate one.
+    """
+    sections: list[tuple[str, list[str]]] = [("", [])]
+    for line in content.splitlines():
+        match = _HEADING.match(line)
+        if match and len(match.group(1)) == 2:
+            sections.append((match.group(2).strip(), [line]))
+        else:
+            sections[-1][1].append(line)
+    return sections
+
+
 def _cells(line: str) -> list[str]:
     parts = [c.replace(r"\|", "|").strip() for c in _CELL_SPLIT.split(line.strip())]
     if parts and not parts[0]:

@@ -235,11 +235,15 @@ def _sync_one(
     print(f"{label}: wrote {history_path}")
     written = [history_path]
 
-    feature_doc_path = sync_feature_doc(repo_root, commit, provider, existing)
-    if feature_doc_path:
-        print(f"{label}: updated {feature_doc_path}")
-        written.append(feature_doc_path)
-        record_commit_link(repo_root, commit.sha, str(feature_doc_path.relative_to(repo_root)))
+    # A doc can be linked without being written — see generator.DocSync. `written` is what gets
+    # committed, so a refused or frozen doc stays out of it while the link, which answers "which
+    # doc covers this commit", is recorded either way.
+    result = sync_feature_doc(repo_root, commit, provider, existing)
+    if result:
+        print(f"{label}: {result.note}")
+        if result.written:
+            written.append(result.path)
+        record_commit_link(repo_root, commit.sha, str(result.path.relative_to(repo_root)))
     return written
 
 

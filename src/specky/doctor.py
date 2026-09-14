@@ -33,6 +33,7 @@ from pathlib import Path
 
 from specky import mermaid_tool
 from specky.commit_doc import HOOK_MARKER, _AUTO_COMMIT_MARKER, history_doc_for
+from specky.generator import PENDING_DIR
 
 OK, WARN, FAIL = "ok", "warn", "fail"
 
@@ -197,6 +198,29 @@ def _site(repo_root: Path) -> list[Check]:
     return [Check("site", OK, f"{pages} pages at {site / 'index.html'}")]
 
 
+def _pending(repo_root: Path) -> list[Check]:
+    """Doc updates the hook generated but refused to write (see generator.sync_feature_doc).
+
+    A `warn`, not a `fail`: nothing is broken and nothing was lost — a draft is sitting there
+    because writing it would have destroyed hand-written content or because it named a flag this
+    CLI doesn't have. It stays a warning until someone reads it, which is the whole point of
+    surfacing it here rather than in the hook output nobody scrolls back to.
+    """
+    pending_dir = repo_root / PENDING_DIR
+    drafts = sorted(p.relative_to(pending_dir).as_posix() for p in pending_dir.rglob("*.md"))
+    if not drafts:
+        return [Check("pending", OK, "no refused doc updates waiting")]
+    named = ", ".join(drafts[:3]) + (f" and {len(drafts) - 3} more" if len(drafts) > 3 else "")
+    return [
+        Check(
+            "pending",
+            WARN,
+            f"{len(drafts)} refused doc update(s) waiting in {PENDING_DIR}/ ({named}) — read the "
+            "draft against the doc it would have replaced, then keep it or delete it",
+        )
+    ]
+
+
 def _backlog(repo_root: Path) -> list[Check]:
     """Whether the hook is producing docs *now*, over a fixed window of recent commits."""
     history_dir = repo_root / "specs" / "history"
@@ -238,7 +262,7 @@ def run_checks() -> list[Check]:
     repo_root = Path(root.stdout.strip())
     checks.append(Check("repo", OK, str(repo_root)))
 
-    for section in (_config, _git_hook, _index, _site, _backlog):
+    for section in (_config, _git_hook, _index, _site, _pending, _backlog):
         try:
             checks += section(repo_root)
         except Exception as exc:  # a broken check must not hide the other checks' answers

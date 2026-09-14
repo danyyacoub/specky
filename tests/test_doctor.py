@@ -194,6 +194,36 @@ def test_a_rendered_site_reports_its_page_count(in_repo, write_doc):
     assert "2 pages" in checks[0].detail  # the doc plus index.html
 
 
+def _stage_draft(repo, rel: str = "billing/refund-flow.md") -> None:
+    path = repo / doctor.PENDING_DIR / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# a draft the hook refused to write\n")
+
+
+def test_a_repo_with_no_refused_drafts_says_so(in_repo):
+    checks = _by_section(doctor.run_checks())["pending"]
+    assert [c.status for c in checks] == [doctor.OK]
+
+
+def test_a_refused_draft_is_a_warning_that_names_it(in_repo):
+    """The hook prints its refusal once, into output nobody scrolls back to. This is where someone
+    finds out a doc is knowingly behind its code."""
+    _stage_draft(in_repo)
+
+    checks = _by_section(doctor.run_checks())["pending"]
+    assert [c.status for c in checks] == [doctor.WARN]
+    assert "billing/refund-flow.md" in checks[0].detail
+    assert doctor.worst(doctor.run_checks()) != doctor.FAIL  # a draft is never a failure
+
+
+def test_many_refused_drafts_are_summarised(in_repo):
+    for i in range(5):
+        _stage_draft(in_repo, f"billing/doc-{i}.md")
+
+    detail = _by_section(doctor.run_checks())["pending"][0].detail
+    assert "5 refused doc update(s)" in detail and "and 2 more" in detail
+
+
 def test_undocumented_recent_commits_are_reported(in_repo):
     checks = _by_section(doctor.run_checks())["docs"]
     assert [c.status for c in checks] == [doctor.WARN]
