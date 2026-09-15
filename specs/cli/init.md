@@ -1,43 +1,133 @@
 ---
 type: workflow
 tags: [cli, configuration]
+authored: human
 ---
 
-# CLI — Init
+# Cli — Init
 
 ## What It Does
 
-Configures specky's AI provider and writes `specky.toml` (which is gitignored). The command asks a series of questions about which provider to use, which model, where the API key lives in the environment, and where the docs root is. It can be run interactively on a terminal or scripted with flags for automated setups like CI, Dockerfiles, or cloud agents.
+`specky init` picks an AI provider, proves it works with one live call, and writes the result to
+`specky.toml`. It is the only command that writes that file, and `specky.toml` is gitignored — it
+names the *environment variable* holding the API key, never a key.
+
+Interactive by default, because the interview is the friendliest way to hand someone a working
+provider config. Every answer it asks for is also a flag, because anywhere specky is installed by a
+machine rather than a person — a Devin blueprint, a Dockerfile, a CI job priming a cache — has no
+terminal to answer on.
 
 ## How It Works
 
-1. **Gather provider details** — Ask or accept from flags which AI provider to use (`--provider`), which model (`--model`), and where the API key lives in the environment (`--api-key-env`). For compatible providers, optionally accept a base URL (`--base-url`).
+1. **Decide whether anyone is being asked** — `--yes` means "the defaults are fine", the same choice
+   the first prompt offers. Naming `--provider` also implies non-interactive: the interview exists to
+   find out which provider, and a caller that already said has stopped having a question to answer.
+   There is no partial interview — either every answer comes from flags and defaults, or every answer
+   comes from the terminal.
+2. **Refuse to interview a pipe** — Without either flag, the CLI checks `stdin.isatty()` and errors
+   naming `--yes` and `--provider` if it isn't a terminal. This is the whole reason the flags exist:
+   `input()` on a closed stdin raises `EOFError` *mid-interview*, after some questions have been
+   answered and before anything has been written, so the failure names neither the cause nor a fix.
+3. **Interview, or build the config from flags** — Interactively, the first prompt offers Anthropic
+   with the default model; declining it asks which of `anthropic` / `openai-compatible` / `command`,
+   then that provider's own fields. From flags, an unnamed provider defaults to `anthropic` with the
+   default model and `ANTHROPIC_API_KEY`.
+4. **Require a provider's fields before writing, naming all of them at once** — `openai-compatible`
+   needs `--base-url`, `--model` and `--api-key-env`; `command` needs `--command`. A missing one
+   raises listing *every* missing flag, so a scripted setup isn't fixed one round-trip at a time. It
+   happens before the file is written, so the failure isn't a `specky.toml` that only breaks on the
+   first commit.
+5. **Only ask about the docs root when there's a reason to** — The question appears when
+   `specs/` already holds files specky can't have written (any non-markdown file: a `specs/openapi.yaml`,
+   a `specs/src/lib.rs`), because generating into that directory mixes two unrelated trees together
+   and no command unpicks it afterwards. On the overwhelming majority of repos, where `specs/` is
+   free, this is silent. Non-interactively the collision is reported and *accepted* — refusing to
+   write a config would be worse than the mixed tree — with `--docs-root` named as the fix.
+6. **Reject a docs root that escapes the repo** — An absolute path or one containing `..` raises. The
+   absolute check reads the raw answer, not the tidied one, because stripping the slashes that turn
+   `documentation/` into `documentation` would also turn `/etc/specs` into the innocuous-looking
+   relative `etc/specs`.
+7. **Validate before writing** — Load the provider through the same `load_provider()` generation
+   uses and ask it to reply `ok`, so the credential is proven by the command whose job is to prove it
+   rather than by the first commit. `--no-validate` skips it: a snapshot build that bakes the config
+   in has no key in its environment yet and shouldn't fail — or bill — for that.
+8. **Write, and say what CI still needs** — Render the `[ai]` table, plus a `[docs]` table when a
+   non-default root was chosen. Because `specky.toml` is gitignored, a chosen root is also printed as
+   the `[tool.specky.docs]` block to commit to `pyproject.toml`: CI never sees the gitignored file,
+   and a `specky check` pointed at the wrong tree finds no docs and reports no coverage.
 
-2. **Set command and docs root** — Ask or accept which local command to run for fallback AI (`--command`), and where the docs root is in the repo if non-standard (`--docs-root`).
+```mermaid
+flowchart TD
+    A["specky init"] --> B{"--yes or --provider?"}
+    B -->|No| C{"stdin a terminal?"}
+    C -->|No| D["error: nobody to interview,<br/>names --yes / --provider"]
+    C -->|Yes| E["Interview: provider,<br/>then its fields"]
+    B -->|Yes| F["Build [ai] from flags,<br/>defaults for the rest"]
+    F --> G{"Provider's required<br/>flags all present?"}
+    G -->|No| H["error naming every<br/>missing flag at once"]
+    E --> I{"specs/ holds foreign files?"}
+    G -->|Yes| I
+    I -->|Yes, interactive| J["Ask for another root"]
+    I -->|Yes, from flags| K["Report it, keep specs/,<br/>name --docs-root"]
+    I -->|No| L
+    J --> M{"Root inside the repo?"}
+    M -->|No| N["error: absolute or .."]
+    M -->|Yes| L
+    K --> L{"--no-validate?"}
+    L -->|No| O["Live call: provider must<br/>answer 'ok'"]
+    L -->|Yes| P
+    O --> P["Write specky.toml"]
+    P --> Q{"Non-default docs root?"}
+    Q -->|Yes| R["Print the [tool.specky.docs]<br/>block to commit for CI"]
+```
 
-3. **Validate before writing** — Test the config against the live API (unless `--no-validate` is used), so a broken config fails before `specky.toml` exists rather than on the first commit.
+## Flags
 
-4. **Write or error** — If all required fields are provided or answered, write `specky.toml`. If any are missing and there is no terminal, error immediately and name every missing flag at once.
+| Flag | Purpose |
+|------|---------|
+| `--yes` | Take the defaults and ask nothing — Anthropic, the default model, `ANTHROPIC_API_KEY` |
+| `--provider` | `anthropic`, `openai-compatible` or `command`. Implies non-interactive |
+| `--model` | Model name. Defaults to the built-in one for `anthropic`; required for `openai-compatible` |
+| `--api-key-env` | *Name* of the environment variable holding the key, never the key itself |
+| `--base-url` | Endpoint for `openai-compatible` (e.g. `https://api.deepseek.com`) |
+| `--command` | Shell command for the `command` provider: reads the prompt on stdin, writes the completion to stdout |
+| `--docs-root` | Directory to generate docs into, instead of `specs/`. Must be inside the repo |
+| `--no-validate` | Skip the live provider call, for a build with no credential in its environment yet |
 
 ## Outcomes
 
-| Setup Context | Command | Behavior |
-|---|---|---|
-| Human on terminal | `uv run specky init` | Interactive interview, prompts for each field |
-| Human with partial answers | `uv run specky init --provider openai --model gpt-4` | Skips answered fields, prompts the rest |
-| Scripted with defaults | `uv run specky init --yes` | Takes all defaults, no prompts, validates config |
-| Scripted, validation off | `uv run specky init --yes --no-validate` | Takes defaults, skips API test, writes immediately |
-| Non-terminal, incomplete flags | `uv run specky init --provider openai` | Errors before writing; lists all missing required flags |
-| All conditions | (any path that completes) | `specky.toml` written to repo root |
+| Condition | Behavior |
+|-----------|----------|
+| No flags, on a terminal | The interview runs; the first prompt offers the default Anthropic provider |
+| No flags, stdin is not a terminal | Error naming `--yes` and `--provider`; nothing written, no `EOFError` from inside the interview |
+| `--yes` alone | Anthropic, default model, `ANTHROPIC_API_KEY`; validated and written with no prompt |
+| `--provider` given without `--yes` | Still fully non-interactive — no remaining question is asked from the terminal |
+| `--provider openai-compatible` missing some of `--base-url` / `--model` / `--api-key-env` | One error listing *all* the missing flags; no file written |
+| `--provider command` without `--command` | Error naming `--command`; no file written |
+| A provider name that isn't one of the three | Error quoting what was passed |
+| `specs/` is free | No docs-root question, no `[docs]` table |
+| `specs/` holds non-markdown files, interactively | The colliding files are named and another root is asked for |
+| The answer is empty or `specs` again | `specs/` is kept, with a line saying specky's docs will sit alongside what's there |
+| `specs/` holds non-markdown files, non-interactively | Reported and kept; `--docs-root` is named as the fix; the config is still written |
+| `--docs-root` is absolute or contains `..` | `ConfigError`; nothing written |
+| `--docs-root documentation/` | Trailing slash stripped; `[docs] root = "documentation"` written |
+| The provider call fails | The error is raised and `specky.toml` is *not* written — no half-configured repo |
+| `--no-validate` | No provider is constructed and no call is made; the file is written as given |
+| A non-default docs root was chosen | The `[tool.specky.docs]` block is printed, because CI can't read the gitignored `specky.toml` |
 
 ## Acceptance Tests
 
 | Given | When | Then |
-|---|---|---|
-| Terminal available, no flags | Run `uv run specky init` | Prompts for provider, model, API key env var, command, and docs root in sequence |
-| Terminal available, one flag | Run `uv run specky init --provider anthropic` | Prompts only the remaining fields (model, API key env var, command, docs root) |
-| Non-terminal, all required flags | Run `uv run specky init --yes --provider openai --model gpt-4 --api-key-env OPENAI_API_KEY --command none --docs-root specs` | Writes `specky.toml` without prompting |
-| Non-terminal, missing required flag | Run `uv run specky init --provider openai` | Errors and displays all missing required flags before any file is written |
-| Validation enabled, API reachable | Any complete setup | Config tested against API; `specky.toml` written only if test succeeds |
-| Validation enabled, API unreachable | Any complete setup with bad key | Validation fails; error shown; no file written |
-| Validation disabled | `uv run specky init --yes --no-validate` | Config written without testing the API |
+|-------|------|------|
+| A repo with no `specky.toml` | Run `init` with `--yes` | `[ai]` names `anthropic`, the default model and `ANTHROPIC_API_KEY`; no question is asked |
+| The same | Run `init --provider anthropic` with no `--yes` | It is still non-interactive — the interview's input function is never called |
+| `--provider openai-compatible` and only `--model` | Run `init` | The error names both `--base-url` and `--api-key-env`; `specky.toml` does not exist afterwards |
+| `--provider openai-compatible` with all three fields | Run `init` | The written file round-trips: provider, base URL, model and key env var all present |
+| `--provider command` with no `--command` | Run `init` | The error names `--command` |
+| `--no-validate` and a provider that would fail | Run `init` | No provider is constructed, nothing is generated, and the file is written |
+| A provider whose `generate` raises | Run `init` without `--no-validate` | The error propagates and no file is written |
+| `--docs-root documentation/` | Run `init` | The file contains a `[docs]` table with `root = "documentation"` |
+| `--docs-root /etc/specs`, `../outside` or `docs/../../outside` | Run `init` | `ConfigError` for each; nothing is written |
+| `specs/openapi.yaml` exists and no `--docs-root` is given | Run `init --yes` | The output names the colliding file and `--docs-root`; the config is written and no `[docs]` table is added |
+| stdin is not a terminal and neither `--yes` nor `--provider` is given | Run `specky init` | The CLI raises before the interview, and the message names `--yes` and `--provider` |
+| Any flag added to `init` | Compare against `known_flags()` | It is listed, so `generator.ungrounded_flags` doesn't report a doc that mentions it as invented |
