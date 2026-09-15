@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "specky",
+  "description": "specky as a single-plugin marketplace, so `claude plugin marketplace add /path/to/specky` works against a checkout.",
+  "owner": {
+    "name": "dany"
+  },
+  "plugins": [
+    {
+      "name": "specky",
+      "description": "Generates and maintains functional documentation in place, indexes it and commit history in SQLite, and renders a searchable HTML viewer for non-technical stakeholders.",
+      "source": "./",
+      "category": "documentation"
+    }
+  ]
+}
