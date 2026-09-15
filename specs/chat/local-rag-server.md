@@ -1,6 +1,6 @@
 ---
 type: feature
-tags: [documentation, search, chat]
+tags: [chat, search, documentation]
 ---
 
 # Chat — Local RAG Server
