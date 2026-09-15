@@ -18,8 +18,16 @@ RECORD = "\x01"
 
 
 def run(repo_root: Path, args: list[str], stdin: str | None = None) -> str:
+    # `errors="replace"`: commit subjects and paths are bytes specky didn't write, and one commit
+    # authored in a legacy encoding shouldn't abort a whole history walk.
     return subprocess.run(
-        ["git", *args], cwd=repo_root, input=stdin, capture_output=True, text=True, check=True
+        ["git", *args],
+        cwd=repo_root,
+        input=stdin,
+        capture_output=True,
+        text=True,
+        errors="replace",
+        check=True,
     ).stdout
 
 

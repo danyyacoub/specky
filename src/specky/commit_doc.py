@@ -155,11 +155,21 @@ def _commit_info(rev: str = "HEAD", with_diff: bool = True) -> Commit:
         ["git", "log", "-1", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%B", rev],
         capture_output=True,
         text=True,
+        errors="replace",
         check=True,
     ).stdout.split("\x1f", 3)
+    # `errors="replace"` and not the default strict: a diff carries file bytes verbatim, and git
+    # only omits content it detects as binary. A file with no early NUL but non-UTF-8 bytes — a
+    # PDF whose header is `%\x93\x8c\x8b\x9e`, a source file saved in CP1252 — is emitted as text
+    # and used to abort the whole run on a UnicodeDecodeError. The diff is truncated to
+    # DIFF_TRUNCATE_CHARS for the prompt anyway, so a U+FFFD in it costs nothing.
     diff = (
         subprocess.run(
-            ["git", "show", "--format=", sha], capture_output=True, text=True, check=True
+            ["git", "show", "--format=", sha],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=True,
         ).stdout
         if with_diff
         else ""
@@ -302,7 +312,9 @@ def pending_commits(
     else:
         args += tip
 
-    log = subprocess.run(args, cwd=repo_root, capture_output=True, text=True, check=True).stdout
+    log = subprocess.run(
+        args, cwd=repo_root, capture_output=True, text=True, errors="replace", check=True
+    ).stdout
     pending = []
     for line in log.splitlines():
         sha, _, subject = line.partition("\x1f")

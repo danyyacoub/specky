@@ -317,3 +317,22 @@ def test_nothing_to_do_says_so(in_repo, monkeypatch, capsys):
 
     assert commit_doc.sync() == []
     assert "already up to date" in capsys.readouterr().out
+
+
+def test_a_non_utf8_file_in_the_diff_does_not_abort_the_run(in_repo, monkeypatch):
+    """git only omits content it detects as binary. A file with no early NUL but non-UTF-8 bytes
+    is emitted as text, so the diff has to be decoded leniently or one such file takes the whole
+    run down — a ReportLab PDF (`%\\x93\\x8c\\x8b\\x9e` right after `%PDF-1.4`) is the common case.
+    """
+    (in_repo / "doc.pdf").write_bytes(b"%PDF-1.4\n%\x93\x8c\x8b\x9e ReportLab\n" + b"x" * 200)
+    git(in_repo, "add", "-A")
+    git(in_repo, "commit", "-q", "-m", "add a pdf git thinks is text")
+    sha = git(in_repo, "rev-parse", "HEAD").strip()
+
+    commit = commit_doc._commit_info(sha)
+    assert "�" in commit.diff  # decoded, with the undecodable bytes replaced
+
+    _use_provider(monkeypatch, RoutingProvider())
+    commit_doc.sync()
+
+    assert sha[:8] in _history(in_repo)  # the run reached this commit instead of dying on it

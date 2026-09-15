@@ -198,8 +198,10 @@ def _documented(pairs: list[tuple[str, int]], touched_docs: list[str]) -> bool:
 
 
 def _git(repo_root: Path, *args: str) -> str:
+    # `errors="replace"`: these read diffs and paths, i.e. bytes specky didn't write. A CI gate
+    # must not fail on a non-UTF-8 file in the range (see _commit_info in commit_doc.py).
     return subprocess.run(
-        ["git", *args], cwd=repo_root, capture_output=True, text=True, check=True
+        ["git", *args], cwd=repo_root, capture_output=True, text=True, errors="replace", check=True
     ).stdout
 
 
