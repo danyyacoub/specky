@@ -40,7 +40,14 @@ never been set up and can be dropped into CI as-is. Exit 1 means something needs
    every directory that was searched and point at `specky setup-diagrams`, since the failure mode
    otherwise is invisible: diagrams silently stay fenced text.
 4. **Repo** — Resolve the repository root with `git rev-parse --show-toplevel`. Outside a repo this is
-   a `fail` and every later check is skipped rather than reported against the wrong directory.
+   a `fail` and every later check is skipped rather than reported against the wrong directory. Then
+   ask `git rev-parse --is-shallow-repository`, and `warn` if it is. A shallow clone is the one repo
+   state that makes every check below it *lie* rather than fail: the commits under the clone depth
+   aren't undocumented, they're absent from `git log`, so the backlog probe reports a clean bill of
+   health, `specky sync` finds nothing to backfill and `specky index` records a fraction of the
+   history. CI runners and some cloud coding-agent VMs clone shallow by default, which is exactly
+   where nobody is reading the output. Silent on a normal clone — an `[ok] not shallow` row would be
+   noise on every developer machine.
 5. **Config** — If `specky.toml` is absent, `warn` and point at `specky init`. Otherwise parse it and
    build a provider through `load_provider_from_toml()` — the same construction path generation uses,
    so this check can't drift from what the hook will actually do. Report the configured provider,
@@ -49,7 +56,9 @@ never been set up and can be dropped into CI as-is. Exit 1 means something needs
 6. **Git hook** — A missing `post-commit` hook is a `warn`. A hook that exists but has no specky
    marker is a `fail`: `install-git-hook` refuses to overwrite someone else's hook, so this state
    needs a human to merge the two. A hook that isn't executable is also a `fail`, because git skips
-   it without a word, which looks exactly like specky being broken.
+   it without a word, which looks exactly like specky being broken. `SPECKY_DISABLE_HOOK` set in the
+   environment is reported first, as a `warn`, because it makes every row under it moot — all three
+   hooks can be installed and correct and still document nothing.
 7. **Index** — Open `.specky/index.db` read-only, report doc and commit counts, and `warn` if
    `journal_mode` isn't `wal` (that's the reason a commit landing during `specky serve` could hit a
    locked database). A file that's missing its tables is a `fail` pointing at `specky index`.
@@ -75,7 +84,10 @@ flowchart TD
     N --> C["Diagrams: resolve mermaid renderer"]
     C --> D{"Inside a git repo?"}
     D -->|No| E["fail: not a git repository<br/>skip remaining checks"]
-    D -->|Yes| F["Config: specky.toml + provider<br/>credential presence only"]
+    D -->|Yes| O{"Shallow clone?"}
+    O -->|Yes| Q["warn: history below the clone<br/>depth is invisible"]
+    O -->|No| F
+    Q --> F["Config: specky.toml + provider<br/>credential presence only"]
     F --> G["Git hook: installed, ours, executable"]
     G --> H["Index: counts + journal_mode"]
     H --> I["Site: page count"]
@@ -106,6 +118,8 @@ flowchart TD
 | Credential env var is set | `[ok]` saying it is set — the value is never printed, in any mode |
 | A foreign `post-commit` hook is installed | `[fail]`, since `install-git-hook` won't overwrite it |
 | specky's hook is installed but not executable | `[fail]` — git silently never runs it |
+| `SPECKY_DISABLE_HOOK` is set | `[warn]` first in the hook section — every fire returns without documenting anything |
+| The repo is a shallow clone | `[warn]` naming `git fetch --unshallow`; the checks below it can only see the commits that were cloned |
 | Index exists but has no tables | `[fail]` pointing at `specky index`; exit 1 |
 | Index isn't in WAL mode | `[warn]` — reads and writes can collide; re-run `specky index` |
 | Every runtime dependency imports | One `[ok]` row reporting how many were probed |
@@ -135,6 +149,9 @@ flowchart TD
 | A refused draft is surfaced | One draft under `.specky/pending/` | Run `specky doctor` | The pending section is `warn` naming that doc; nothing is a `fail` |
 | Many refused drafts are summarised | Five drafts under `.specky/pending/` | Run `specky doctor` | The count is reported with three named and the rest as "and N more" |
 | Backlog probe is bounded | Any repo | Run `specky doctor` | The `git log` call is capped at 20 commits — history is never fully walked |
+| A shallow clone is called out | A `git clone --depth 1` of a repo with several commits | Run `specky doctor` | The repo section has a second row, `warn`, naming `git fetch --unshallow` |
+| A normal clone says nothing about depth | A full clone | Run `specky doctor` | The repo section is exactly one `ok` row |
+| Disabled hooks are reported before the hooks themselves | All three hooks installed and `SPECKY_DISABLE_HOOK=1` | Run `specky doctor` | The first git-hook row is a `warn` naming the variable; the three `ok` rows follow it |
 | specky's own commits don't count | A repo whose newest commit is a `docs: sync specky docs [skip specky]` commit | Run `specky doctor` | That commit isn't counted as an undocumented one |
 | Machine-readable output | Any repo | Run `specky doctor --json` | Valid JSON array of `{section, status, detail}` objects, statuses drawn from ok/warn/fail |
 | Outside a repo | Current directory isn't a git repo | Run `specky doctor` | A `fail` row for the repo check; config/hook/index/site rows are absent; exit 1 |

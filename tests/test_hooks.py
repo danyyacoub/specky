@@ -233,6 +233,40 @@ class TestCatchUp:
         assert len(_history(in_repo)) == commit_doc.HOOK_CATCHUP_MAX
         assert "still undocumented — run `specky sync`" in capsys.readouterr().out
 
+    def test_the_disable_env_var_stops_a_fire_before_it_spends_anything(
+        self, in_repo: Path, monkeypatch, capsys
+    ):
+        """The opt-out for a checkout that didn't choose its own hooks: a repo that commits them and
+        sets `core.hooksPath`, or a cloud agent's VM whose commits belong in a pull request rather
+        than in a doc-sync commit nobody asked for. Checked before the provider is even built."""
+        _use_provider(
+            monkeypatch, RoutingProvider()
+        )  # would document three commits if it got that far
+        for i in range(3):
+            _commit(in_repo, f"commit {i}")
+        monkeypatch.setenv(commit_doc.DISABLE_HOOK_ENV, "1")
+
+        commit_doc.main()
+
+        assert _history(in_repo) == set()
+        # One line, not silence: "the hook is installed and no docs appear" is specky's hardest
+        # failure to diagnose, so the reason lands in the same output the commit did.
+        assert commit_doc.DISABLE_HOOK_ENV in capsys.readouterr().out
+
+    @pytest.mark.parametrize("value", ["", "0", "false", "no", "off", "FALSE"])
+    def test_values_that_read_as_off_leave_the_hook_alone(
+        self, in_repo: Path, monkeypatch, value: str
+    ):
+        """`SPECKY_DISABLE_HOOK=0` is the obvious way to write "no", and a bare `is set` test would
+        make it mean yes."""
+        _use_provider(monkeypatch, RoutingProvider())
+        sha = _commit(in_repo, "a commit")
+        monkeypatch.setenv(commit_doc.DISABLE_HOOK_ENV, value)
+
+        commit_doc.main()
+
+        assert sha[:8] in _history(in_repo)
+
     def test_the_backlog_walk_is_bounded_by_depth_not_by_repo_size(self, in_repo: Path):
         for i in range(5):
             _commit(in_repo, f"commit {i}")

@@ -27,6 +27,7 @@ firing doesn't recurse.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -70,6 +71,22 @@ HOOKS = {
 }
 
 HOOK_MARKER = "specky commit-doc"
+
+# Set this in the environment and every hook fire returns immediately. Uninstalling the hook is the
+# better answer when you control the hooks directory — but you often don't: a repo that commits its
+# own hooks and points `core.hooksPath` at them (the husky-shaped setup) hands specky's hooks to
+# every clone, including ones with no provider key and no business spending on docs. A cloud coding
+# agent's VM is the case this was added for: its commits belong in the pull request it opens, and a
+# doc commit nobody asked for landing in that branch is a surprise, not a feature.
+DISABLE_HOOK_ENV = "SPECKY_DISABLE_HOOK"
+
+# Values that read as "off" rather than "set". Without them `SPECKY_DISABLE_HOOK=0` — the obvious
+# way to write "no" — would disable the hook.
+_FALSEY = frozenset({"", "0", "false", "no", "off"})
+
+
+def hook_disabled() -> bool:
+    return os.environ.get(DISABLE_HOOK_ENV, "").strip().lower() not in _FALSEY
 
 # Prefix for the follow-up commit `main()` makes for whatever it writes under specs/. Checked
 # at the top of `main()` so that commit's own post-commit firing recognizes itself and returns
@@ -752,6 +769,12 @@ def main(rewritten: bool = False) -> None:
     config, provider down, unparseable response — is a printed line and a clean exit. The installed
     hook's `|| true` is a second belt; this is the actual guarantee.
     """
+    if hook_disabled():
+        # One line rather than silence: "the hook is installed and no docs appear" is the hardest
+        # specky failure to diagnose, and this makes the reason show up in the same output the
+        # commit did.
+        print(f"specky commit-doc: skipping, {DISABLE_HOOK_ENV} is set")
+        return
     try:
         repo_root = _repo_root()
         renames: list[tuple[Path, Path]] = []

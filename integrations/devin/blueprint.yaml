@@ -1,0 +1,59 @@
+# Copy to `.devin/blueprint.yaml` in the repo you want documented, merging it into one you already
+# have, then sync it from the Devin UI or the API. See ./README.md.
+#
+# This is the read-only setup: Devin queries and hand-edits docs, and `specky check` on the pull
+# request is the gate. Nothing here needs an API key, because the whole read side of specky is
+# offline — see README.md#write-mode for the version that generates docs in the VM.
+
+initialize:
+  - name: "Install specky"
+    run: |
+      # uv, then specky as a uv tool: the CLI has to work from a plain non-login shell (git hooks
+      # run from one), so it goes on PATH rather than into a project .venv.
+      command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+      . "$HOME/.local/bin/env" 2>/dev/null || true
+      # Until specky is on PyPI: uv tool install git+https://github.com/danyyacoub/specky
+      uv tool install specky
+      echo 'export PATH="$HOME/.local/bin:$PATH"' >> $ENVRC
+
+  - name: "Keep specky's git hooks quiet"
+    run: |
+      # Read-only mode: docs are written by a human (or by the docs-sync job on the default branch),
+      # never by this VM. Uninstalling the hook would be the better answer if the VM owned its own
+      # hooks directory — but a repo that commits its hooks and sets `core.hooksPath` hands them to
+      # every clone, and then this variable is the only opt-out. Each fire prints one line and
+      # returns.
+      echo 'export SPECKY_DISABLE_HOOK=1' >> $ENVRC
+
+maintenance:
+  - name: "Index the docs and git history"
+    run: |
+      # A shallow clone is the repo state that makes specky lie rather than fail: `git log` simply
+      # doesn't contain the commits below the clone depth, so `specky index` records a fraction of
+      # the history and `specky sync` finds nothing to backfill. `|| true` because a full clone
+      # makes this a no-op error.
+      git fetch --unshallow 2>/dev/null || true
+      # Writes .specky/index.db, which is what `specky search` and the MCP server both read. Without
+      # it every MCP tool returns nothing, which reads identically to "nothing is documented".
+      specky index
+
+knowledge:
+  - name: docs
+    contents: |
+      Functional docs live in `specs/<domain>/<topic>.md`, committed alongside the code, and they
+      are the product's documentation — not notes. `specs/MODULES.md` is the index and
+      `specs/GLOSSARY.md` the shared vocabulary; keep both current when adding or moving a doc.
+      Never create `specs/<domain>/README.md` — the topic is the filename.
+
+      `specs/history/` is one generated micro-doc per commit. Don't write or edit those by hand.
+
+      Query the docs:
+        specky search "<query>"     # keyword search over the index
+        specky index                # rebuild the index after editing specs/ (offline, no API key)
+
+      Before opening a pull request:
+        specky check --base origin/main    # fails if changed code has a doc this branch left stale
+        specky pr-comment --base origin/main   # markdown summary of the doc changes, for the PR body
+
+      Both are offline and free to run. `specky check --advisory` prints the same report and always
+      exits 0 if you want to read it without failing anything.

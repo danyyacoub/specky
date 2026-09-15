@@ -20,14 +20,36 @@ import argparse
 import sys
 from pathlib import Path
 
+# The one module-level specky import, for `--docs-root`'s help text: `paths` imports nothing from
+# specky and nothing outside the stdlib, and `specs` is never spelled out anywhere but there.
+from specky.paths import DEFAULT_DOCS_ROOT
+
 
 def _init(args: argparse.Namespace) -> None:
     from specky.db import repo_root
-    from specky.setup_wizard import run_init
+    from specky.setup_wizard import InitOptions, run_init
 
+    options = InitOptions(
+        provider=args.provider,
+        model=args.model,
+        api_key_env=args.api_key_env,
+        base_url=args.base_url,
+        command=args.provider_command,
+        docs_root=args.docs_root,
+        assume_yes=args.yes,
+        validate=not args.no_validate,
+    )
+    # Caught here rather than as the `EOFError` `input()` would raise a question or two in: a setup
+    # script's log should say which flag it was missing, not name a builtin.
+    if not options.non_interactive and not sys.stdin.isatty():
+        raise ValueError(
+            "stdin is not a terminal, so there's nobody to interview. Pass --yes to take the "
+            "defaults, or --provider (with --model/--api-key-env/--base-url/--command) to answer "
+            "up front."
+        )
     # The repo root, not the cwd: specky.toml is looked for beside `.git` by every reader of it, so
     # `specky init` run from a subdirectory has to write it there too.
-    run_init(repo_root() / "specky.toml")
+    run_init(repo_root() / "specky.toml", options=options)
 
 
 def _index(args: argparse.Namespace) -> None:
@@ -266,7 +288,42 @@ def build_parser() -> argparse.ArgumentParser:
         sub.set_defaults(func=func)
         return sub
 
-    command("init", "Choose/configure an AI provider, writes specky.toml", _init)
+    init_cmd = command("init", "Choose/configure an AI provider, writes specky.toml", _init)
+    # The interview is the default, but every answer it asks for is also a flag, so a machine can
+    # set specky up: a Devin blueprint step, a Dockerfile, a CI job. See `InitOptions`.
+    init_cmd.add_argument(
+        "--yes",
+        action="store_true",
+        help="Don't ask anything; take the defaults for whatever no flag names",
+    )
+    init_cmd.add_argument(
+        "--provider",
+        choices=["anthropic", "openai-compatible", "command"],
+        help="Answer the provider question up front (implies --yes for the rest)",
+    )
+    init_cmd.add_argument("--model", help="Model name, for anthropic and openai-compatible")
+    init_cmd.add_argument(
+        "--api-key-env",
+        metavar="VAR",
+        help="Name of the env var holding the API key — never the key itself",
+    )
+    init_cmd.add_argument("--base-url", help="Endpoint, for --provider openai-compatible")
+    init_cmd.add_argument(
+        "--command",
+        dest="provider_command",
+        metavar="CMD",
+        help="Command reading the prompt on stdin, for --provider command",
+    )
+    init_cmd.add_argument(
+        "--docs-root",
+        metavar="NAME",
+        help=f"Generate docs into NAME/ instead of {DEFAULT_DOCS_ROOT}/, writing `[docs] root`",
+    )
+    init_cmd.add_argument(
+        "--no-validate",
+        action="store_true",
+        help="Skip the test call that proves the provider works (no key needed, none spent)",
+    )
     command(
         "doctor",
         "Check this repo's specky setup — toolchain, config, hook, index, site",

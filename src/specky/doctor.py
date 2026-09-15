@@ -35,10 +35,12 @@ from pathlib import Path
 
 from specky import mermaid_tool, paths
 from specky.commit_doc import (
+    DISABLE_HOOK_ENV,
     HOOK_MARKER,
     HOOKS,
     _AUTO_COMMIT_MARKER,
     history_doc_for,
+    hook_disabled,
     hooks_dir,
 )
 from specky.generator import PENDING_DIR
@@ -212,6 +214,31 @@ def _config(repo_root: Path) -> list[Check]:
     return checks
 
 
+def _history(repo_root: Path) -> list[Check]:
+    """Whether git history is all here, because most of specky assumes it is.
+
+    A shallow clone is the one repo state that makes every other check lie: `pending_commits()`
+    walks `git log`, so the commits cut off by the clone depth simply aren't there — the backlog
+    probe below reports a clean bill of health, `specky sync` finds nothing to backfill, and
+    `specky index` records a fraction of the history. CI runners default to shallow (that's why the
+    workflows here set `fetch-depth: 0`) and so do some cloud coding-agent VMs, which is exactly
+    where nobody is watching the output.
+
+    Silent on a normal clone: a `[ok] not shallow` row would be noise on every machine a developer
+    ever runs this on.
+    """
+    if _run(["git", "rev-parse", "--is-shallow-repository"], cwd=repo_root).stdout.strip() != "true":
+        return []
+    return [
+        Check(
+            "repo",
+            WARN,
+            "shallow clone — the commits below the clone depth are invisible to `specky sync`, "
+            "`specky index` and the backlog check below. Run `git fetch --unshallow`",
+        )
+    ]
+
+
 def _git_hook(repo_root: Path) -> list[Check]:
     """All three hooks, in the directory git actually runs them from.
 
@@ -223,6 +250,17 @@ def _git_hook(repo_root: Path) -> list[Check]:
     hooks_path = hooks_dir(repo_root)
     checks = []
     missing = []
+    if hook_disabled():
+        # First, because it makes every row under it moot: the hooks can all be installed and
+        # correct and still document nothing.
+        checks.append(
+            Check(
+                "git hook",
+                WARN,
+                f"{DISABLE_HOOK_ENV} is set in this environment, so every hook fire returns "
+                "without documenting anything",
+            )
+        )
     for name in HOOKS:
         hook = hooks_path / name
         if not hook.is_file():
@@ -358,7 +396,8 @@ def run_checks() -> list[Check]:
     repo_root = Path(root.stdout.strip())
     checks.append(Check("repo", OK, str(repo_root)))
 
-    for section in (_config, _git_hook, _index, _site, _pending, _backlog):
+    # `_history` first so its row lands under the `== repo ==` header the line above just opened.
+    for section in (_history, _config, _git_hook, _index, _site, _pending, _backlog):
         try:
             checks += section(repo_root)
         except Exception as exc:  # a broken check must not hide the other checks' answers

@@ -29,7 +29,13 @@ are caught by the next fire's catch-up, by `specky sync`, or by the CI job.
 
 1. **Configure AI provider** — Run `specky init` and choose your AI backend (Anthropic,
    OpenAI-compatible — e.g. DeepSeek — or a local command). Specky validates the choice with a test
-   call before saving it to specky.toml.
+   call before saving it to specky.toml. Every answer the interview asks for is also a flag
+   (`--yes` for the defaults, `--provider`/`--model`/`--api-key-env`/`--base-url`/`--command`,
+   `--docs-root`, `--no-validate` to skip the test call), because a setup script has no terminal to
+   answer on: without them `input()` raises `EOFError` mid-interview, after some answers have been
+   given and before anything has been written. A flag a chosen provider needs and didn't get is an
+   error *before* the file is written, rather than a specky.toml that only breaks on the first
+   commit.
 
 2. **Install git hooks** — `specky install-git-hook` writes `post-commit`, `post-merge` and
    `post-rewrite`, all calling `specky commit-doc` (`post-rewrite` adds `--rewritten`), so a doc gets
@@ -37,7 +43,11 @@ are caught by the next fire's catch-up, by `specky sync`, or by the CI job.
    actually runs hooks from: `core.hooksPath` when it's set (pre-commit, husky and lefthook all set
    it), else the common git dir, so a linked `git worktree` (where `.git` is a *file*) works too. A
    hook file specky didn't write is never overwritten, and one foreign hook aborts the whole install
-   rather than leaving half the set in place.
+   rather than leaving half the set in place. `SPECKY_DISABLE_HOOK` set in the environment turns every
+   fire into one printed line and a return, without uninstalling anything — the opt-out for a checkout
+   that didn't choose its own hooks. A repo that commits its hooks and points `core.hooksPath` at them
+   hands specky's to every clone, and a cloud coding agent's throwaway VM wants its commits in the
+   pull request it opens rather than in a doc-sync commit nobody asked for.
 
 3. **Find `specky` even from a login-less shell** — The installed script tries `specky` on `PATH`,
    then falls back to the absolute path of the `specky` that installed it. GUI git clients
@@ -126,6 +136,7 @@ flowchart TD
 | **Nothing committed** | The regeneration is byte-for-byte identical to what's on disk | No commit is created; HEAD is unchanged |
 | **Second run skipped** | Another specky run holds `.specky/hook.lock` | Prints and exits 0; nothing is written; the backlog stays pending |
 | **Hook skipped** | `specky install-git-hook` not yet run | Commits proceed normally; no summary generated |
+| **Hook opted out** | `SPECKY_DISABLE_HOOK` is set to anything but `0`/`false`/`no`/`off`/empty | The fire prints one line naming the variable and returns before building a provider; nothing is written, nothing is spent |
 | **Generation fails** | AI provider misconfigured or unreachable | Commit succeeds; summary is skipped; the reason is printed |
 | **Hook not overwritten** | A `post-commit`/`post-merge`/`post-rewrite` from another tool exists | `install-git-hook` installs none of the three and says which file blocked it |
 
@@ -137,6 +148,8 @@ flowchart TD
 | Three commits landed with no hook installed, then the hook is installed | Any hook fires | All three are documented in one fire; documenting `HEAD` alone would have left the first two undocumented forever |
 | `HOOK_CATCHUP_MAX + 3` commits are pending | A hook fires | Exactly `HOOK_CATCHUP_MAX` docs are written and the output says the rest are still undocumented |
 | A repo with 5 commits | `pending_commits(depth=2)` | Two commits are returned; `depth=500` returns all of them rather than failing on a short history |
+| Three pending commits, a working provider, and `SPECKY_DISABLE_HOOK=1` | A hook fires | No history doc is written and the output names the variable — the check happens before the provider is built |
+| `SPECKY_DISABLE_HOOK` set to `0`, `false`, `no`, `off` or the empty string | A hook fires | The commit is documented as normal; the obvious way to write "no" doesn't mean "yes" |
 | A repo setting `core.hooksPath = .githooks` | Run `specky install-git-hook` | All three hooks are written to `.githooks/`, and nothing is written to `.git/hooks/` |
 | A linked worktree created by `git worktree add` | Run `specky install-git-hook` from inside it | The hooks land in the common git dir, shared by every worktree |
 | A `post-merge` from another tool exists | Run `specky install-git-hook` | It raises, the foreign file is untouched, and no `post-commit` is written either |

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from specky import cli, doctor
-from specky.commit_doc import HOOKS, install_git_hook
+from specky.commit_doc import DISABLE_HOOK_ENV, HOOKS, install_git_hook
 
 from conftest import git
 
@@ -65,6 +65,29 @@ def test_an_unconfigured_repo_only_warns(in_repo):
 def test_the_repo_root_is_reported(in_repo):
     root = _by_section(doctor.run_checks())["repo"][0]
     assert root.status == doctor.OK and root.detail == str(in_repo)
+
+
+def test_a_normal_clone_says_nothing_about_its_depth(in_repo):
+    """An `[ok] not shallow` row would be noise on every machine a developer runs this on."""
+    assert _statuses(doctor.run_checks(), "repo") == [doctor.OK]
+
+
+def test_a_shallow_clone_is_warned_about(tmp_path, monkeypatch, in_repo):
+    """The one repo state that makes every check below it lie rather than fail: the commits under
+    the clone depth aren't undocumented, they're absent, so the backlog probe reports a clean bill
+    of health and `specky sync` finds nothing to backfill."""
+    for i in range(3):
+        (in_repo / f"{i}.txt").write_text("x")
+        git(in_repo, "add", "-A")
+        git(in_repo, "commit", "-q", "-m", f"commit {i}")
+    shallow = tmp_path / "shallow"
+    git(tmp_path, "clone", "-q", "--depth", "1", in_repo.as_uri(), str(shallow))
+    monkeypatch.chdir(shallow)
+
+    repo_checks = _by_section(doctor.run_checks())["repo"]
+
+    assert [c.status for c in repo_checks] == [doctor.OK, doctor.WARN]
+    assert "--unshallow" in repo_checks[1].detail
 
 
 def test_outside_a_git_repo_it_fails_and_stops(tmp_path, monkeypatch):
@@ -209,6 +232,18 @@ def test_a_half_installed_set_warns_about_the_missing_hooks(in_repo):
     assert [c.status for c in checks] == [doctor.OK, doctor.WARN]
     assert "post-merge, post-rewrite" in checks[1].detail
     assert "install-git-hook" in checks[1].detail
+
+
+def test_hooks_disabled_by_the_environment_are_reported_first(in_repo, monkeypatch):
+    """Otherwise this is the report where everything is `ok` and no docs exist: three correctly
+    installed hooks, each returning immediately."""
+    _install_hook(in_repo)
+    monkeypatch.setenv(DISABLE_HOOK_ENV, "1")
+
+    checks = _by_section(doctor.run_checks())["git hook"]
+    assert checks[0].status == doctor.WARN
+    assert DISABLE_HOOK_ENV in checks[0].detail
+    assert [c.status for c in checks[1:]] == [doctor.OK] * len(HOOKS)
 
 
 def test_someone_elses_post_commit_hook_is_a_failure(in_repo):

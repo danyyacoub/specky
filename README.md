@@ -11,7 +11,9 @@ Nothing is generated into a wiki you'll forget about, and nothing needs a build 
 viewer is a folder of HTML you can double-click.
 
 Works as a Claude Code plugin (first-class) and, through a shared `SKILL.md` + MCP config, with
-opencode and Kiro.
+[opencode](integrations/opencode/README.md) and [Kiro](integrations/kiro/README.md) — and with
+[Devin](integrations/devin/README.md), which isn't a plugin host at all, so the same two pieces land
+on its blueprint, its `AGENTS.md` and a playbook instead.
 
 ## Install
 
@@ -34,6 +36,12 @@ claude plugin marketplace add /path/to/specky
 claude plugin install specky
 ```
 
+Any other agent needs the MCP server and the `document-domain` skill wired up by hand, which is a
+config file each: see [integrations/](integrations/) for
+[opencode](integrations/opencode/README.md), [Kiro](integrations/kiro/README.md) and
+[Devin](integrations/devin/README.md). Everything below this line is plain CLI and identical
+everywhere.
+
 ## Configure
 
 In the repo you want documented:
@@ -48,10 +56,30 @@ arbitrary local command — including the `claude` CLI in print mode, if you'd r
 second API key. It writes `specky.toml`, which is gitignored: it can hold the name of an API-key
 env var, never a key.
 
+The interview is for people; every answer is also a flag, for a Dockerfile, a CI job or a cloud
+agent's VM setting specky up with no terminal to answer on:
+
+```bash
+specky init --yes                          # take the defaults, ask nothing
+specky init --yes --no-validate            # ...and skip the live test call (no key needed)
+specky init --provider openai-compatible --base-url https://api.deepseek.com \
+            --model deepseek-chat --api-key-env DEEPSEEK_API_KEY
+```
+
+`--provider` implies `--yes`, `--docs-root NAME` writes `[docs] root`, and a missing flag is an error
+before the file is written rather than a `specky.toml` that only breaks on the first commit. Without
+one of these, `init` on a non-terminal stdin says so instead of failing halfway through the
+interview.
+
 `install-git-hook` writes three hooks — `post-commit`, `post-merge` and `post-rewrite` — into
 wherever git actually runs hooks from (`core.hooksPath` if pre-commit/husky/lefthook set it, and the
 shared common dir in a `git worktree`). One hook isn't enough: `post-commit` fires for `git commit`
 only. A hook file specky didn't write is never overwritten.
+
+`SPECKY_DISABLE_HOOK=1` in the environment makes every fire print one line and return. Uninstalling
+is the better answer when you own the hooks directory — but a repo that commits its own hooks and
+points `core.hooksPath` at them hands specky's to every clone, and a throwaway VM with no provider
+key (or no business spending on docs) needs a way out that isn't a commit.
 
 If `specs/` already means something else in your repo — OpenAPI documents, a Rust `specs` crate, an
 ECS module — `specky init` notices and offers another name, writing `[docs] root` for you. You can
