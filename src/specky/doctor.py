@@ -14,13 +14,15 @@ Two rules shape the implementation:
   `specky.toml` is set, never any part of its value.
 
 `fail` is reserved for "specky cannot work here, and won't fix itself": no git, unparseable config,
-a foreign post-commit hook that `install-git-hook` refuses to overwrite. Everything a plain command
-would fix — no config, no index, no rendered site — is a `warn`, so `specky doctor` exits 0 on a
-fresh repo and can be dropped into CI as-is.
+a foreign post-commit hook that `install-git-hook` refuses to overwrite, one of specky's own
+dependencies missing from the environment its entry point runs in. Everything a plain command would
+fix — no config, no index, no rendered site — is a `warn`, so `specky doctor` exits 0 on a fresh
+repo and can be dropped into CI as-is.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shlex
 import shutil
@@ -93,6 +95,64 @@ def _toolchain() -> list[Check]:
         else Check("toolchain", WARN, "node not found — only needed to render ```mermaid``` diagrams")
     )
     return checks
+
+
+# specky's own runtime dependencies, each with what stops working when it's absent. Probed by
+# import name rather than distribution name, because an install can record a dependency it can't
+# import; `test_every_declared_dependency_is_probed` keeps the list level with pyproject.toml's.
+RUNTIME_IMPORTS: tuple[tuple[str, str], ...] = (
+    ("markdown", "`render-html`, `export` and `serve`"),
+    ("jinja2", "`render-html`, `export` and `serve`"),
+    ("mcp", "the `specky-mcp` server"),
+    ("anthropic", "the `anthropic` provider"),
+    ("httpx", "the `openai-compatible` provider"),
+)
+
+
+def _reinstall_hint() -> str:
+    """The repair command for *this* install, complete enough to paste.
+
+    An editable install runs straight out of a checkout, so the path is right here in `__file__` and
+    worth printing — the person reading this is being told to re-run an install whose path they may
+    not remember typing.
+    """
+    checkout = Path(__file__).resolve().parents[2]
+    if (checkout / "pyproject.toml").exists():
+        return f"uv tool install --editable {checkout} --force"
+    return "uv tool install specky --force"
+
+
+def _imports() -> list[Check]:
+    """Whether specky's own dependencies import in the interpreter its commands will run under.
+
+    Not paranoia about a bad wheel: `uv tool install --editable` resolves dependencies *once*, so a
+    dependency added to pyproject.toml afterwards is simply absent from the installed tool while the
+    code that imports it ships from the checkout on every run. That is how `markdown` went missing
+    for a whole afternoon while `specky doctor` reported the toolchain healthy and `render-html`
+    died on `No module named 'markdown'`.
+
+    A `fail`, not a `warn`: no specky command repairs this, only re-installing does.
+    """
+    missing: list[tuple[str, str]] = []
+    for module, breaks in RUNTIME_IMPORTS:
+        try:
+            found = importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):  # a parent that isn't importable either, or a stale entry
+            found = False
+        if not found:
+            missing.append((module, breaks))
+
+    if not missing:
+        return [Check("deps", OK, f"all {len(RUNTIME_IMPORTS)} runtime dependencies importable")]
+    return [
+        Check(
+            "deps",
+            FAIL,
+            f"{module} is not importable, so {breaks} cannot run — repair this install with "
+            f"`{_reinstall_hint()}`",
+        )
+        for module, breaks in missing
+    ]
 
 
 def _diagrams() -> list[Check]:
@@ -290,7 +350,7 @@ def _backlog(repo_root: Path) -> list[Check]:
 def run_checks() -> list[Check]:
     """Every check, in report order. Never raises: a failed check is a `fail` row, not a traceback,
     because this is the command someone runs *when* things are already broken."""
-    checks = _toolchain() + _diagrams()
+    checks = _toolchain() + _imports() + _diagrams()
 
     root = _run(["git", "rev-parse", "--show-toplevel"])
     if root.returncode != 0:

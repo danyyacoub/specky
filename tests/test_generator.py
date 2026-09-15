@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from specky import generator
 from specky.commit_doc import Commit
 from specky.generator import (
@@ -181,6 +183,52 @@ def test_update_modules_index_reuses_an_existing_section(tmp_repo):
     assert text.index("billing/b.md") < text.index("## Search")
 
 
+def test_a_hand_written_heading_variant_is_reused_not_duplicated(tmp_repo):
+    """Found on a real repo: a hand-written `## N-Way Match` gained a `## Nway Match` twin the first
+    time specky indexed a doc for that domain, because the heading match was exact string equality.
+    Punctuation and spacing don't make it a different domain."""
+    modules = tmp_repo / "specs" / "MODULES.md"
+    modules.write_text(
+        "# Modules\n\n## N-Way Match\n\n| Doc | Purpose |\n|---|---|\n"
+        "| [nway-match/document-match.md](nway-match/document-match.md) | Match docs |\n"
+    )
+    update_modules_index(tmp_repo, "nway-match", "nway-match/price-match.md", "Match prices")
+
+    text = modules.read_text()
+    assert "## Nway Match" not in text
+    assert text.count("## N-Way Match") == 1
+    assert "| [nway-match/price-match.md](nway-match/price-match.md) | Match prices |" in text
+
+
+def test_a_doc_already_linked_under_another_section_is_not_indexed_twice(tmp_repo):
+    """The other half of the same duplicate: the row was already there, under a heading no
+    normalization will ever match, so the section lookup missed it and appended a second one. A doc
+    linked anywhere in the file is indexed, wherever a human chose to file it."""
+    modules = tmp_repo / "specs" / "MODULES.md"
+    modules.write_text(
+        "# Modules\n\n## Matching (hand-written)\n\n| Doc | Purpose |\n|---|---|\n"
+        "| [nway-match/document-match.md](nway-match/document-match.md) | Match docs |\n"
+    )
+    before = modules.read_text()
+
+    update_modules_index(tmp_repo, "nway-match", "nway-match/document-match.md", "Match docs")
+    assert modules.read_text() == before
+
+
+def test_docs_and_documents_stay_separate_sections(tmp_repo):
+    """Normalizing drops punctuation, not letters. Prefix matching would file every `documents/` doc
+    under `## Docs`, which are two real domains in this repo's own tree."""
+    modules = tmp_repo / "specs" / "MODULES.md"
+    modules.write_text(
+        "# Modules\n\n## Docs\n\n| Doc | Purpose |\n|---|---|\n| [docs/a.md](docs/a.md) | A |\n"
+    )
+    update_modules_index(tmp_repo, "documents", "documents/b.md", "B")
+
+    text = modules.read_text()
+    assert text.count("## Docs") == 1 and text.count("## Documents") == 1
+    assert text.index("docs/a.md") < text.index("## Documents")
+
+
 def test_update_modules_index_replaces_a_placeholder_row(tmp_repo):
     modules = tmp_repo / "specs" / "MODULES.md"
     modules.write_text(
@@ -337,6 +385,60 @@ def test_a_section_update_leaves_every_other_section_byte_identical(tmp_repo, wr
     assert now["What It Does"] == was["What It Does"]
     assert now["Acceptance Tests"] == was["Acceptance Tests"]
     assert "refund policy" in now["How It Works"]
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        pytest.param("}", id="one closing brace too many"),
+        pytest.param("\n\nThose are the sections I changed.", id="trailing commentary"),
+        pytest.param("\n```", id="an unopened closing fence"),
+    ],
+)
+def test_a_section_envelope_with_trailing_junk_is_still_spliced(tmp_repo, write_doc, suffix):
+    """DeepSeek closed a 4kB envelope with `}}}` against a real repo. `json.loads` refuses trailing
+    data, so the whole splice was read as a replacement body — `lost_content` caught it there, but
+    only because the doc had sections to lose: a short doc would have had the envelope's own source
+    written into it as content."""
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    was = _sections(doc.read_text())
+    new_how = "1. **Check.** The request is now examined against the refund policy as well. " * 8
+    envelope = json.dumps({"sections": {"How It Works": new_how}})
+    provider = FakeProvider([_CLASSIFY, envelope + suffix])
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert result.written
+    now = _sections(doc.read_text())
+    assert '"sections"' not in doc.read_text()
+    assert now["What It Does"] == was["What It Does"]
+    assert now["Acceptance Tests"] == was["Acceptance Tests"]
+    assert "refund policy" in now["How It Works"]
+
+
+def test_a_section_update_wrapped_in_echoed_frontmatter_is_still_spliced(tmp_repo, write_doc):
+    """The doc handed to the model starts with a frontmatter block, and `generate_feature_doc`
+    already strips the echo of one from a whole-body response; the envelope path strips it too,
+    rather than reading the block as the reason the JSON didn't parse."""
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    new_how = "1. **Check.** The request is now examined against the refund policy as well. " * 8
+    envelope = json.dumps({"sections": {"How It Works": new_how}})
+    provider = FakeProvider([_CLASSIFY, f"---\ntype: feature\ntags: [refunds]\n---\n\n{envelope}"])
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert result.written
+    assert '"sections"' not in doc.read_text()
+    assert "refund policy" in _sections(doc.read_text())["How It Works"]
+
+
+def test_a_classification_with_trailing_junk_still_names_its_doc(tmp_repo, write_doc):
+    """Same brace off the classification call: the fallback there is a silently skipped commit."""
+    write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    new_how = "1. **Check.** The request is now examined against the refund policy as well. " * 8
+    envelope = json.dumps({"sections": {"How It Works": new_how}})
+    result = sync_feature_doc(tmp_repo, _commit(), FakeProvider([_CLASSIFY + "}", envelope]))
+
+    assert result.written
+    assert result.path.name == "refund-flow.md"
 
 
 def test_a_section_update_naming_an_unknown_heading_appends_it(tmp_repo, write_doc):

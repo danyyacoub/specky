@@ -45,6 +45,35 @@ def _history(repo: Path) -> set[str]:
     return {p.stem for p in paths.history_dir(repo).glob("*.md")}
 
 
+def _reject_commits(repo: Path) -> None:
+    """A `pre-commit` hook that turns down every commit, as a lint gate does for a failing one."""
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+
+
+class _SplicingProvider(RoutingProvider):
+    """A provider that answers the section-update prompt with a `{"sections": ...}` envelope.
+
+    `RoutingProvider` routes on "Respond with ONLY a JSON object", which the section-update prompt
+    carries as well as the classification one — so a plain one answers an update with its
+    classification, the doc is read as a whole-body replacement, and the content-loss gate refuses
+    it. Splitting on the section list is what lets a test exercise an actual splice.
+    """
+
+    def __init__(self, sections: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._sections = sections
+
+    def generate(self, prompt: str) -> str:
+        if "Sections in the doc right now:" not in prompt:
+            return super().generate(prompt)
+        with self._lock:
+            self.prompts.append(prompt)
+        return self._sections
+
+
 @pytest.fixture
 def in_repo(tmp_repo: Path, monkeypatch) -> Path:
     """The hook entry point resolves the repo from the process cwd, as a real hook fire does."""
@@ -271,6 +300,49 @@ class TestTheFollowUpCommit:
         assert "sentence when a commit landed" in draft.read_text()
         assert " M specs/billing/half-written.md" in git(in_repo, "status", "--porcelain")
 
+    def test_an_uncommitted_edit_rides_along_in_a_doc_this_fire_rewrites(
+        self, in_repo: Path, monkeypatch
+    ):
+        """The limit of the protection above: it keeps whole *files* out, not *edits*.
+
+        `git add -- <path>` stages that file's entire working-tree content, so a doc the fire
+        rewrites is committed as it stands — the human's uncommitted edits in it included, under
+        specky's marker message. Observed on a trial repo where `specky tag` had left frontmatter
+        uncommitted in 43 docs: the three the next fire updated had that frontmatter committed for
+        them, and the rest stayed dirty. Asserted rather than fixed, because git offers nothing
+        narrower to stage; see the doc's "What Staging By Path Cannot Do".
+        """
+        _use_provider(
+            monkeypatch,
+            _SplicingProvider(
+                # Only `## What It Does`, so the splice carries the section the human was editing
+                # through untouched — a whole-body answer would replace it and never reach the
+                # commit, which would test the content-loss gate instead of this.
+                sections='{"sections": {"What It Does": "Refunds, restated by specky.\\n"}}',
+                classification='{"skip": false, "domain": "billing", "topic": "refund-flow", '
+                '"purpose": "Issue refunds", "type": "workflow", "tags": ["refunds"]}',
+            ),
+        )
+        rewritten = in_repo / "specs" / "billing" / "refund-flow.md"
+        untouched = in_repo / "specs" / "search" / "indexing.md"
+        for doc in (rewritten, untouched):
+            doc.parent.mkdir(parents=True)
+            doc.write_text("# Doc\n\n## What It Does\nThings.\n\n## How It Works\nSomehow.\n")
+        _commit(in_repo, "real work")  # both docs land committed and clean
+
+        for doc in (rewritten, untouched):
+            doc.write_text(doc.read_text().replace("Somehow.", "Somehow, and a human said so.\n"))
+
+        commit_doc.main()
+
+        committed = git(in_repo, "show", "--name-only", "--format=", "HEAD").split()
+        assert "specs/billing/refund-flow.md" in committed
+        # The human's sentence is in specky's commit, not merely still on disk.
+        assert "a human said so" in git(in_repo, "show", "HEAD:specs/billing/refund-flow.md")
+
+        assert "specs/search/indexing.md" not in committed
+        assert " M specs/search/indexing.md" in git(in_repo, "status", "--porcelain")
+
     def test_unrelated_staged_work_stays_staged(self, in_repo: Path, monkeypatch):
         _use_provider(monkeypatch, RoutingProvider())
         _commit(in_repo, "real work")
@@ -297,6 +369,39 @@ class TestTheFollowUpCommit:
         assert git(in_repo, "log", "-1", "--format=%s").strip() == "real work"  # …not committed
         out = capsys.readouterr().out
         assert "left uncommitted" in out and state in out
+
+    def test_a_rejected_doc_commit_leaves_nothing_staged(self, in_repo: Path, monkeypatch, capsys):
+        """A pre-commit gate that rejects the doc commit must not cost the developer their next one.
+
+        The docs are staged into the real index before the commit, so a rejection used to leave them
+        there — and the developer's next `git commit` swept specky's docs into their feature commit
+        under their name. Reproduced against the pre-commit framework's `end-of-file-fixer`, which
+        matches `.md` and so hits every doc commit on a repo that runs it.
+        """
+        _use_provider(monkeypatch, RoutingProvider())
+        _commit(in_repo, "real work")  # lands first: the gate below would reject this one too
+        _reject_commits(in_repo)
+
+        commit_doc.main()
+
+        assert "not committed" in capsys.readouterr().out
+        assert _history(in_repo)  # the docs are on disk, waiting for the ledger's retry…
+        assert git(in_repo, "diff", "--cached", "--name-only") == ""  # …and not in anyone's index
+
+    def test_a_rejected_doc_commit_keeps_the_humans_own_staged_work(
+        self, in_repo: Path, monkeypatch
+    ):
+        # The un-staging is scoped to what specky staged: a rollback wide enough to catch a path the
+        # human had staged themselves would be its own version of the same theft.
+        _use_provider(monkeypatch, RoutingProvider())
+        _commit(in_repo, "real work")
+        _reject_commits(in_repo)
+        (in_repo / "src.py").write_text("def next_thing(): ...\n")
+        git(in_repo, "add", "src.py")
+
+        commit_doc.main()
+
+        assert "A  src.py" in git(in_repo, "status", "--porcelain")
 
     def test_a_byte_for_byte_identical_regeneration_makes_no_commit(self, in_repo: Path, monkeypatch):
         _use_provider(monkeypatch, RoutingProvider())

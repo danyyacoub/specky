@@ -8,7 +8,9 @@ Two properties matter more than the individual messages, and both are asserted b
 """
 
 import json
+import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -73,6 +75,70 @@ def test_outside_a_git_repo_it_fails_and_stops(tmp_path, monkeypatch):
     assert _statuses(checks, "repo") == [doctor.FAIL]
     # The repo-dependent checks are skipped rather than reported wrongly.
     assert "config" not in _by_section(checks)
+
+
+# --- specky's own dependencies -----------------------------------------------------------
+
+
+def test_a_healthy_install_reports_its_dependencies_importable(in_repo):
+    checks = _by_section(doctor.run_checks())["deps"]
+    assert [c.status for c in checks] == [doctor.OK]
+    assert str(len(doctor.RUNTIME_IMPORTS)) in checks[0].detail
+
+
+def test_a_dependency_missing_from_the_environment_fails(in_repo, monkeypatch):
+    """The repro this check exists for: `markdown>=3.6` was added to pyproject.toml after an
+    `uv tool install --editable`, which never re-resolves, so the installed tool had no markdown.
+    Every other check passed and `specky render-html` died on `No module named 'markdown'`."""
+    real_find_spec = doctor.importlib.util.find_spec
+    monkeypatch.setattr(
+        doctor.importlib.util,
+        "find_spec",
+        lambda name, *a, **kw: None if name == "markdown" else real_find_spec(name, *a, **kw),
+    )
+    checks = _by_section(doctor.run_checks())["deps"]
+
+    assert [c.status for c in checks] == [doctor.FAIL]
+    assert "markdown" in checks[0].detail
+    assert "render-html" in checks[0].detail
+    assert "uv tool install" in checks[0].detail and "--force" in checks[0].detail
+    assert doctor.worst(doctor.run_checks()) == doctor.FAIL
+
+
+def test_a_dependency_whose_parent_is_gone_is_reported_not_raised(in_repo, monkeypatch):
+    """`find_spec` raises rather than returning None when a parent package is itself unimportable.
+    This is the command people run when the install is already broken; it may not traceback."""
+
+    def explode(name, *a, **kw):
+        raise ImportError(f"no parent for {name}")
+
+    monkeypatch.setattr(doctor.importlib.util, "find_spec", explode)
+    checks = _by_section(doctor.run_checks())["deps"]
+
+    assert {c.status for c in checks} == {doctor.FAIL}
+    assert len(checks) == len(doctor.RUNTIME_IMPORTS)
+
+
+def test_every_declared_dependency_is_probed():
+    """The list in doctor.py going stale is the same bug one level up — a dependency added to
+    pyproject.toml that nothing checks for. Compared against the installed metadata, not the file,
+    so it holds however specky was installed."""
+    from importlib.metadata import requires
+
+    declared = {
+        re.split(r"[<>=!~\[; ]", requirement)[0].lower().replace("-", "_")
+        for requirement in requires("specky") or []
+    }
+    probed = {module for module, _ in doctor.RUNTIME_IMPORTS}
+
+    assert declared and declared <= probed, f"unprobed dependencies: {sorted(declared - probed)}"
+
+
+def test_the_reinstall_hint_names_this_checkout():
+    """An editable install runs out of the checkout, so `--editable` has a path worth printing."""
+    hint = doctor._reinstall_hint()
+    assert hint.startswith("uv tool install")
+    assert str(Path(doctor.__file__).resolve().parents[2]) in hint
 
 
 # --- config ------------------------------------------------------------------------------

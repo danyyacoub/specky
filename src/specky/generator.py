@@ -142,6 +142,24 @@ def _strip_code_fence(text: str) -> str:
     return match.group(1) if match else text.strip()
 
 
+def _leading_json_object(text: str) -> dict | None:
+    """The JSON object `text` starts with, ignoring anything after it — or None if it starts with
+    something else.
+
+    Every JSON answer specky asks a model for goes through here rather than `json.loads`, which
+    refuses trailing data. A model that gets the object right and then adds to it is the common
+    failure: one closing brace too many on a 4kB `{"sections": ...}` envelope was enough to lose a
+    whole section splice against a real repo, and the fallbacks are quiet — a dropped splice becomes
+    a whole-doc rewrite that `lost_content` refuses, a dropped classification becomes a skipped
+    commit, a dropped tag response leaves the doc untagged. None of those look like a parse error.
+    """
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text.lstrip())
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _doc_title(body: str, fallback: str) -> str:
     return next((line.lstrip("#").strip() for line in body.splitlines() if line.startswith("#")), fallback)
 
@@ -223,9 +241,8 @@ def classify_change(
         existing_docs=existing.docs_block(),
     )
     raw = _strip_code_fence(provider.generate(prompt))
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
+    data = _leading_json_object(raw)
+    if data is None:
         return Classification(skip=True, reason=f"could not parse classification response: {raw!r}")
 
     if data.get("skip"):
@@ -381,16 +398,14 @@ def update_feature_doc(
             section_list="\n".join(f"- {title}" for title in titles) or "(no sections yet)"
         )
     )
-    raw = _strip_code_fence(provider.generate(prompt))
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        parsed = None
-    if isinstance(parsed, dict) and isinstance(parsed.get("sections"), dict):
+    # Frontmatter off first, so an echo of the block the doc it was shown starts with doesn't hide
+    # the envelope behind it; the whole-body fallback below wants it gone either way.
+    _, raw = frontmatter.parse(_strip_code_fence(provider.generate(prompt)))
+    parsed = _leading_json_object(raw)
+    if parsed is not None and isinstance(parsed.get("sections"), dict):
         return merge_sections(existing_content, parsed["sections"])
-    # Not the JSON contract: read it as a whole replacement body, frontmatter echo and all.
-    _, body = frontmatter.parse(raw)
-    return body + "\n"
+    # Not the JSON contract: read it as a whole replacement body.
+    return raw + "\n"
 
 
 def generate_feature_doc(
@@ -420,11 +435,37 @@ def generate_feature_doc(
     return body + "\n"
 
 
+def _index_section_key(heading: str) -> str:
+    """A MODULES.md heading reduced to what identifies its domain: letters and digits, lowercased.
+
+    Punctuation and spacing are the entire difference between the heading a human wrote and the one
+    specky generates for the same domain — `## N-Way Match` and `## Nway Match` are one section, and
+    treating them as two is what put a duplicate index section in a real repo.
+
+    Deliberately not prefix or fuzzy matching: `docs` and `documents` are separate domains in this
+    repo's own tree, and collapsing them would file one domain's docs under the other's heading.
+    """
+    return re.sub(r"[^a-z0-9]", "", heading.lower())
+
+
 def update_modules_index(repo_root: Path, domain: str, doc_rel_path: str, purpose: str) -> None:
     """Best-effort MODULES.md sync: adds a row for doc_rel_path under a '## {Domain}' section,
-    creating the section if needed. Known limitation: only recognizes a section whose heading is
-    exactly '## {Domain Title}' — a hand-written heading with extra text won't be matched, so this
-    may create a duplicate section rather than reusing it."""
+    creating the section if needed.
+
+    Two rules keep it from duplicating what a hand-written index already says, because this runs
+    unattended on every commit and the file it edits is one a human also edits:
+
+    - A heading is matched on letters and digits only (`_index_section_key`), so an existing
+      `## N-Way Match` is reused for domain `nway-match` instead of gaining a `## Nway Match` twin.
+    - A doc already linked *anywhere* in the file is left alone, whatever section it sits under.
+      Scanning only the matched section's own table is what let that twin carry a second row for a
+      doc the file already indexed.
+
+    Known limitation: matching is still equality, just on the normalized form. A heading carrying
+    extra words — `## Billing (legacy)` — is a different key and won't be matched, so a second
+    section can still appear for it. That's the deliberate trade: the only cheap way to catch it is
+    prefix matching, which merges domains that are genuinely distinct.
+    """
     modules_path = paths.modules_index(repo_root)
     heading = f"## {domain.replace('-', ' ').title()}"
     link_target = f"({doc_rel_path})"
@@ -433,9 +474,21 @@ def update_modules_index(repo_root: Path, domain: str, doc_rel_path: str, purpos
         modules_path.parent.mkdir(parents=True, exist_ok=True)
         modules_path.write_text("# Modules\n")
 
-    lines = modules_path.read_text().splitlines()
+    text = modules_path.read_text()
+    if link_target in text:
+        return  # already indexed somewhere in this file, under whatever heading
 
-    heading_idx = next((i for i, line in enumerate(lines) if line.strip() == heading), None)
+    lines = text.splitlines()
+
+    wanted = _index_section_key(heading)
+    heading_idx = next(
+        (
+            i
+            for i, line in enumerate(lines)
+            if line.strip().startswith("## ") and _index_section_key(line.strip()) == wanted
+        ),
+        None,
+    )
 
     if heading_idx is None:
         if lines and lines[-1].strip():
@@ -459,10 +512,6 @@ def update_modules_index(repo_root: Path, domain: str, doc_rel_path: str, purpos
     if table_start is None:
         lines[heading_idx + 1 : heading_idx + 1] = ["", "| Doc | Purpose |", "|---|---|"]
         table_end = heading_idx + 4
-
-    for i in range(table_start or table_end, table_end):
-        if link_target in lines[i]:
-            return  # already indexed, nothing to do
 
     placeholder_idx = next(
         (i for i in range(table_start or table_end, table_end) if "_(none yet)_" in lines[i]), None
@@ -619,10 +668,8 @@ def backfill_tags(repo_root: Path, provider: Provider) -> list[Path]:
         prompt = TAG_PROMPT.format(
             title=title, content=body[:DIFF_TRUNCATE_CHARS], existing_tags=existing.tags_line()
         )
-        raw = _strip_code_fence(provider.generate(prompt))
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
+        data = _leading_json_object(_strip_code_fence(provider.generate(prompt)))
+        if data is None:
             continue
 
         doc_type, tags = _parse_type_and_tags(data)
