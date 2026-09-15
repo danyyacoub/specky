@@ -47,6 +47,7 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | [chat/ask-widget-scoping.md](chat/ask-widget-scoping.md) | Chat input autocompletes domain/feature references to narrow AI retrieval and enable HTML responses |
 | [chat/serve-access-control.md](chat/serve-access-control.md) | Serve the viewer and chat from one port, with a configurable origin allowlist and optional token |
 | [chat/ask-widget-conversation.md](chat/ask-widget-conversation.md) | Ask widget maintains session-based conversation history for follow-up questions |
+| [chat/ask-panel-dock.md](chat/ask-panel-dock.md) | Ask panel as full-height dock with answer rendering and intent steering |
 
 ## Search
 
