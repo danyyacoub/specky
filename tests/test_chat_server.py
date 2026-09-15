@@ -15,6 +15,7 @@ from specky.chat_server import (
     _build_prompt,
     _extract_html_snippet,
     _parse_scope,
+    _topic_match,
     answer_question,
     retrieve_context,
 )
@@ -114,6 +115,108 @@ def test_retrieve_context_honours_the_limit(indexed_repo):
     assert len(retrieve_context(indexed_repo, "refund", limit=1)) == 1
 
 
+def test_the_words_a_question_is_made_of_do_not_decide_the_ranking(tmp_repo, write_doc):
+    """"how is X implemented" used to rank the doc mentioning "how" and "is" the most often, which
+    on a real tree meant MODULES.md and GLOSSARY.md — every question's top hits."""
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\nHow a refund is issued and how it is settled.\n",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    write_doc(
+        "MODULES.md",
+        "# Modules\n\nHow this is laid out: how it is built, what is where, how to use it.\n",
+        {},
+    )
+    run_index(tmp_repo)
+    context = retrieve_context(tmp_repo, "how is a refund implemented")
+    assert [c["source"] for c in context] == ["specs/billing/refund-flow.md"]
+
+
+def test_a_question_of_nothing_but_question_words_still_searches():
+    """Stripping must never empty the query — a vague question gets vague hits, not none."""
+    assert _topic_match("how is a refund implemented") == db.fts_match_query("refund implemented")
+    assert _topic_match("what does this do") == db.fts_match_query("what does this do")
+
+
+def test_the_docs_own_topic_outranks_a_passing_mention_of_it(tmp_repo, write_doc):
+    """A term in the file name or the title is the reader naming the topic. The same term inside a
+    long body is often a cross-reference, so the short columns are weighted up."""
+    write_doc(
+        "chat/chat-attachments.md",
+        "# Chat — Attachments\n\nWhat a customer may upload into a conversation.\n",
+        {"type": "feature", "tags": ["chat"]},
+    )
+    write_doc(
+        "billing/invoices.md",
+        "# Billing — Invoices\n\n" + ("An invoice may carry attachments. " * 60),
+        {"type": "feature", "tags": ["billing"]},
+    )
+    run_index(tmp_repo)
+    context = retrieve_context(tmp_repo, "how do chat attachments work")
+    assert context[0]["source"] == "specs/chat/chat-attachments.md"
+
+
+def test_retrieve_context_sends_the_whole_doc_not_a_snippet(indexed_repo):
+    """The index locates the doc; the doc itself is the grounding. An excerpt around the match
+    is enough to rank a doc and not enough to answer from it."""
+    entry = next(
+        c for c in retrieve_context(indexed_repo, "refund")
+        if c["source"] == "specs/billing/refund-flow.md"
+    )
+    assert entry["kind"] == "doc"
+    assert entry["text"] == "# Billing — Refund Flow\n\nA refund returns money to the customer.\n"
+
+
+def test_an_oversized_doc_is_truncated_and_says_so(indexed_repo, write_doc, monkeypatch):
+    write_doc("billing/refund-long.md", "# Long\n\n" + "refund " * 4000, {"tags": ["refunds"]})
+    run_index(indexed_repo)
+    monkeypatch.setattr(chat_server, "DOC_CHARS_MAX", 500)
+
+    entry = next(
+        c for c in retrieve_context(indexed_repo, "refund")
+        if c["source"] == "specs/billing/refund-long.md"
+    )
+    assert len(entry["text"]) < 600
+    assert "truncated" in entry["text"]
+
+
+def test_docs_past_the_budget_fall_back_to_their_excerpt(indexed_repo, monkeypatch):
+    """Degrading to the old behaviour is the right failure: the doc is still named and citable,
+    so the answer can point at it instead of pretending it wasn't found."""
+    monkeypatch.setattr(chat_server, "CONTEXT_CHARS_MAX", 80)
+
+    kinds = [c["kind"] for c in retrieve_context(indexed_repo, "refund")]
+    assert kinds.count("doc") == 1  # the best-ranked hit
+    assert kinds.count("excerpt") == 1
+
+
+def test_the_best_ranked_doc_is_sent_whole_even_when_it_alone_exceeds_the_budget(
+    indexed_repo, monkeypatch
+):
+    monkeypatch.setattr(chat_server, "CONTEXT_CHARS_MAX", 1)
+
+    first = retrieve_context(indexed_repo, "refund")[0]
+    assert first["kind"] == "doc"
+    assert "returns money" in first["text"] or "every refund" in first["text"]
+
+
+def test_a_commit_summary_is_sent_whole(indexed_repo):
+    conn = db.connect(indexed_repo)
+    sha = conn.execute("SELECT sha FROM commits").fetchone()[0]
+    summary = "Set up the refund tables. " + "It also reworks the ledger. " * 20
+    conn.execute(
+        "INSERT INTO micro_docs (sha, summary, created_at) VALUES (?, ?, ?)",
+        (sha, summary, "2026-01-01"),
+    )
+    conn.commit()
+    conn.close()
+    run_index(indexed_repo)
+
+    entry = next(c for c in retrieve_context(indexed_repo, "refund") if c["source"] == sha[:8])
+    assert entry["text"] == summary
+
+
 def test_retrieve_context_includes_commits_with_a_micro_doc_summary(indexed_repo):
     """A commit only carries retrievable text once `specky commit-doc` has written its
     micro_doc summary; index_commits copies that into commits_fts."""
@@ -142,6 +245,22 @@ def test_build_prompt_labels_each_context_block():
     prompt = _build_prompt("q", [{"source": "specs/a.md", "label": "A", "text": "body"}])
     assert "[specs/a.md] A\nbody" in prompt
     assert prompt.rstrip().endswith("Question: q\nAnswer:")
+
+
+def test_build_prompt_marks_a_block_that_is_only_an_excerpt():
+    """The model has to be able to tell "here is the doc" from "here is a fragment of one", or it
+    answers from the fragment."""
+    prompt = _build_prompt(
+        "q", [{"source": "specs/a.md", "label": "A", "text": "…bit…", "kind": "excerpt"}]
+    )
+    assert "[specs/a.md] A (matching excerpt only — this doc was not included in full)" in prompt
+
+
+def test_build_prompt_does_not_mark_a_whole_doc():
+    prompt = _build_prompt(
+        "q", [{"source": "specs/a.md", "label": "A", "text": "body", "kind": "doc"}]
+    )
+    assert "excerpt only" not in prompt
 
 
 def test_answer_question_scopes_retrieval_and_reports_sources(indexed_repo, monkeypatch):

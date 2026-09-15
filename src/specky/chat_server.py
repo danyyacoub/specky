@@ -3,9 +3,10 @@ optional HTTP server.
 
 The generated site is a plain file:// page — it can't safely hold an API key or query
 SQLite directly. `specky serve` runs a small local HTTP server instead: the chat widget
-POSTs a question to it, it pulls grounding context out of the same FTS5 index `specky
-search` uses, and calls the AI provider configured by `specky init`. Browsing and static
-search keep working with the server off; the widget just reports that chat is offline.
+POSTs a question to it, it uses the same FTS5 index `specky search` uses to work out
+*which* docs the question is about, sends those docs to the AI provider configured by
+`specky init` in full, and returns the grounded answer. Browsing and static search keep
+working with the server off; the widget just reports that chat is offline.
 
 The same process also serves `.specky/site/`, so `http://<host>:<port>/` is a working
 viewer whose chat calls are same-origin. That's the path a deployed site takes; a
@@ -73,11 +74,37 @@ MAX_SESSIONS = 64
 # junk and answer statelessly rather than storing a key of arbitrary size.
 SESSION_ID_MAX = 64
 
+# FTS5 decides WHICH docs a question is about; the provider then gets those docs WHOLE. The
+# index's `snippet()` output is ~40 tokens around one match — enough to rank a doc, nowhere
+# near enough to answer from it, and the widget's own worst answers were the honest
+# consequence: "the docs mention payment settlement but its contents are not in the context".
+# A doc is the unit a specky answer is grounded in, so a doc is what gets sent.
+#
+# Total characters of doc bodies in one prompt. ~15k tokens: large enough for the handful of
+# docs a question spans, small enough that a reader asking ten questions isn't paying for the
+# whole specs/ tree ten times.
+CONTEXT_CHARS_MAX = 60_000
+# Ranked hits taken from the index per question. Docs get more room than commits because the docs
+# are the answer and the commits are the corroboration — and because the character budget, not
+# this count, is what bounds the prompt: a hit past the budget costs an excerpt, not a whole doc.
+# Being generous here is how the doc that actually answers the question survives a near-tie in
+# the ranking, which is the normal case on a small specs/ tree.
+DOC_HITS = 8
+COMMIT_HITS = 5
+# One doc's share of that budget, so a single outsized doc can't crowd out the others that
+# would have answered the question. Past it the body is truncated, and said to be.
+DOC_CHARS_MAX = 24_000
+# A commit's micro-doc summary is already a summary, so it's sent whole up to this bound
+# rather than excerpted — but it's a paragraph, not a doc, and gets a paragraph's budget.
+COMMIT_CHARS_MAX = 2_000
+
 _SYSTEM_PROMPT = (
     "You are a documentation assistant for this codebase. Answer the user's question "
-    "using ONLY the context below — doc excerpts and commit summaries pulled from the "
-    "project's specs/ tree and git history. Cite the doc path or commit sha each part "
-    "of your answer is drawn from. If the context doesn't contain the answer, say you "
+    "using ONLY the context below — whole docs from the project's specs/ tree, plus "
+    "commit summaries from its git history. Cite the doc path or commit sha each part "
+    "of your answer is drawn from. A block marked as an excerpt is a search hit from a "
+    "doc that was too long to include in full: name that doc as worth reading rather "
+    "than answering from the fragment. If the context doesn't contain the answer, say you "
     "couldn't find it in the docs — don't guess or use outside knowledge. If a table, "
     "diagram, or code sample would make the answer clearer, you may add ONE fenced "
     "```html block after your prose with a small, self-contained snippet (inline styles "
@@ -168,10 +195,58 @@ def _extract_html_snippet(raw: str) -> tuple[str, str | None]:
     return prose, match.group(1).strip()
 
 
+def _truncate(text: str, cap: int) -> str:
+    """A body over its share of the budget, cut with the cut declared. Silent truncation is
+    worse than none: the model would answer from half a doc believing it had the whole one."""
+    if len(text) <= cap:
+        return text
+    return text[:cap].rstrip() + f"\n\n…[truncated — {cap} of {len(text)} characters shown]"
+
+
+def _doc_bodies(conn, paths: Sequence[str]) -> dict[str, str]:
+    """The indexed body of each doc, keyed by path. `documents.content` is the markdown with the
+    frontmatter stripped, which is exactly what a reader would open the page to."""
+    if not paths:
+        return {}
+    placeholders = ",".join("?" * len(paths))
+    rows = conn.execute(
+        f"SELECT path, content FROM documents WHERE path IN ({placeholders})", tuple(paths)
+    ).fetchall()
+    return {path: content for path, content in rows}
+
+
+# The words a question is made of rather than the words it is about. Stripped before ranking,
+# and only here: `fts_match_query()` is shared with `specky search`, where the reader typed the
+# terms deliberately. A question doesn't work that way — "how is payment implemented" ORs to five
+# terms, three of which are in every doc in the repo, so bm25 scored 30 docs within a rounding
+# error of each other and the top five came back as MODULES.md, GLOSSARY.md and PRODUCT.md while
+# the doc named payment-settlement-and-renewal.md ranked ninth.
+_QUESTION_WORDS = frozenset(
+    """a about an and any are as at be been but by can did do does for from get had has have how i
+    if in into is it its me my no not of on or our should so than that the their them then there
+    these they this to use used was we what when where which who why will with would you
+    your""".split()
+)
+# Column order in documents_fts is (path, domain, title, content, tags). A term in the file name or
+# the heading is the reader having named the topic; the same term buried in a long body is often
+# just a cross-reference. Weighting the short columns up is what pulls a domain's own doc above the
+# index pages that mention every term in the repo once.
+_DOC_RANK = "bm25(documents_fts, 8.0, 2.0, 8.0, 1.0, 4.0)"
+
+
+def _topic_match(question: str) -> str | None:
+    """The FTS5 expression for a question: the words naming a topic, not the ones asking about it.
+    Falls back to the whole question when stripping leaves nothing ("how does this work")."""
+    topical = " ".join(
+        word for word in re.findall(r"\w+", question) if word.lower() not in _QUESTION_WORDS
+    )
+    return fts_match_query(topical) or fts_match_query(question)
+
+
 def retrieve_context(
-    repo_root: Path, question: str, scope: dict | None = None, limit: int = 5
+    repo_root: Path, question: str, scope: dict | None = None, limit: int = DOC_HITS
 ) -> list[dict]:
-    match = fts_match_query(question)
+    match = _topic_match(question)
     if match is None:
         return []
 
@@ -179,39 +254,63 @@ def retrieve_context(
     try:
         doc_rows = conn.execute(
             "SELECT path, domain, title, snippet(documents_fts, 3, '', '', '…', 40) "
-            "FROM documents_fts WHERE documents_fts MATCH ? ORDER BY rank LIMIT 50",
+            f"FROM documents_fts WHERE documents_fts MATCH ? ORDER BY {_DOC_RANK} LIMIT 50",
             (match,),
         ).fetchall()
         commit_rows = conn.execute(
-            "SELECT sha, message, snippet(commits_fts, 2, '', '', '…', 40) "
-            "FROM commits_fts WHERE commits_fts MATCH ? ORDER BY rank LIMIT ?",
-            (match, limit),
+            "SELECT sha, message, summary FROM commits_fts "
+            "WHERE commits_fts MATCH ? ORDER BY rank LIMIT ?",
+            (match, min(limit, COMMIT_HITS)),
         ).fetchall()
+
+        if scope is not None:
+            if scope["kind"] == "module":
+                scoped = [r for r in doc_rows if r[1] == scope["value"]]
+            else:
+                scoped = [r for r in doc_rows if Path(r[0]).stem == scope["value"]]
+            doc_rows = scoped or doc_rows
+
+        doc_rows = doc_rows[:limit]
+        bodies = _doc_bodies(conn, [row[0] for row in doc_rows])
     finally:
         conn.close()
 
-    if scope is not None:
-        if scope["kind"] == "module":
-            scoped = [r for r in doc_rows if r[1] == scope["value"]]
+    context: list[dict] = []
+    budget = CONTEXT_CHARS_MAX
+    for path, _domain, title, excerpt in doc_rows:
+        body = _truncate(bodies.get(path, ""), DOC_CHARS_MAX)
+        # The best-ranked doc is sent whole even when it alone fills the budget — a repo whose
+        # top hit is its one enormous doc must not get an excerpt-only answer about it.
+        if body and (len(body) <= budget or not context):
+            budget -= len(body)
+            context.append({"source": path, "label": title, "text": body, "kind": "doc"})
         else:
-            scoped = [r for r in doc_rows if Path(r[0]).stem == scope["value"]]
-        doc_rows = scoped or doc_rows
-
-    context = [
-        {"source": path, "label": title, "text": excerpt}
-        for path, _domain, title, excerpt in doc_rows[:limit]
-    ]
+            # Out of budget, or a path in the FTS table with no row behind it (an index written
+            # by an older version). The search hit still names a doc worth reading.
+            context.append({"source": path, "label": title, "text": excerpt, "kind": "excerpt"})
     context += [
-        {"source": sha[:8], "label": message, "text": excerpt}
-        for sha, message, excerpt in commit_rows
-        if excerpt
+        {
+            "source": sha[:8],
+            "label": message,
+            "text": _truncate(summary, COMMIT_CHARS_MAX),
+            "kind": "commit",
+        }
+        for sha, message, summary in commit_rows
+        if summary
     ]
     return context
 
 
+def _context_block(entry: dict) -> str:
+    note = " (matching excerpt only — this doc was not included in full)" if (
+        entry.get("kind") == "excerpt"
+    ) else ""
+    return f"[{entry['source']}] {entry['label']}{note}\n{entry['text']}"
+
+
 def _build_prompt(question: str, context: list[dict], history: Sequence[Turn] = ()) -> str:
     blocks = (
-        "\n\n".join(f"[{c['source']}] {c['label']}\n{c['text']}" for c in context)
+        "\n\n".join(_context_block(c) for c in context)
         if context
         else "(no matching docs or commits found in the index)"
     )
