@@ -60,3 +60,9 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 |---|---|
 | [rendering/diagram-support.md](rendering/diagram-support.md) | Server-side mermaid diagram rendering with glossary tooltips and styled tables in the HTML viewer |
 | [rendering/html-viewer-shell.md](rendering/html-viewer-shell.md) | Interactive HTML viewer with tag/type filtering and cross-doc navigation |
+
+## Integration
+
+| Doc | Purpose |
+|---|---|
+| [integration/marketplace-installation.md](integration/marketplace-installation.md) | Enable specky checkout installation via Claude Code plugin marketplace |
