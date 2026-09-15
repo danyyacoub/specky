@@ -185,7 +185,9 @@ abbr[title] { border-bottom: 1px dotted #63666d; text-decoration: none; cursor: 
 _HEADING_TAG = re.compile(r"<(/?)h([1-5])\b")
 # `link_glossary`'s output. The wrapped text is always a bare word — it never wraps inside a tag
 # (see `_NO_WRAP_INSIDE`) — so one non-greedy match per span is exact, not a guess.
-_GLOSSARY_SPAN = re.compile(r'<span class="gl" data-term="([^"]*)">(.*?)</span>', re.DOTALL)
+_GLOSSARY_SPAN = re.compile(
+    r'<span class="gl" data-term="([^"]*)"[^>]*>(.*?)</span>', re.DOTALL
+)
 _CODE_BLOCK = re.compile(r'<pre><code(?: class="language-([^"]*)")?>(.*?)</code></pre>', re.DOTALL)
 _TABLE_FIGURE = re.compile(r'<figure class="tw">(.*?)</figure>', re.DOTALL)
 _ANY_TAG = re.compile(r"<[^>]+>")

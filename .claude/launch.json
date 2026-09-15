@@ -6,6 +6,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8934", "--directory", ".specky/site"],
       "port": 8934
+    },
+    {
+      "name": "specky-serve",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "specky", "serve", "--port", "8936"],
+      "port": 8936
     }
   ]
 }

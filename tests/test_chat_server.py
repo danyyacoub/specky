@@ -9,14 +9,17 @@ import pytest
 
 from specky import chat_server, db
 from specky.chat_server import (
+    INTENT_EXPLORE,
+    INTENT_SPEC,
     ConversationStore,
     ServeConfig,
     Turn,
     _build_prompt,
-    _extract_html_snippet,
     _parse_scope,
     _topic_match,
     answer_question,
+    classify_intent,
+    coerce_intent,
     retrieve_context,
 )
 from specky.indexer import run_index
@@ -47,22 +50,60 @@ def test_parse_scope_ignores_a_bare_hash_word():
     assert _parse_scope("what is #billing") == ("what is #billing", None)
 
 
-# --- html snippet extraction ------------------------------------------------------------
+# --- intent ------------------------------------------------------------------------------
 
 
-def test_extract_html_snippet_without_a_fence():
-    assert _extract_html_snippet("  plain answer  ") == ("plain answer", None)
+@pytest.mark.parametrize(
+    "question",
+    [
+        "write a spec for bulk refunds",
+        "draft the documentation for the new export flow",
+        "can you create a feature doc for saved searches?",
+        "propose requirements for rate limiting",
+        "what are the acceptance criteria for a partial refund?",
+        "acceptance tests for the retry path",
+        "requirements for the billing webhook",
+        "how should we handle a failed payout?",
+        "we need to support multi-currency invoices",
+        "spec out the audit log",
+        "outline a user story for onboarding",
+    ],
+)
+def test_a_question_asking_for_a_draft_is_spec_intent(question):
+    assert classify_intent(question) == INTENT_SPEC
 
 
-def test_extract_html_snippet_pulls_the_block_out_of_the_prose():
-    prose, snippet = _extract_html_snippet("Refunds flow like so:\n```html\n<b>x</b>\n```\nDone.")
-    assert prose == "Refunds flow like so:\n\nDone."
-    assert snippet == "<b>x</b>"
+@pytest.mark.parametrize(
+    "question",
+    [
+        "how do refunds work?",
+        "where is the retry added?",
+        "which doc describes the export flow?",
+        "what does the acceptance test table cover?",
+        "who owns the billing docs",
+        "why is a spec split by domain?",
+        "when was the webhook feature documented?",
+        "does the exporter create a PDF?",
+    ],
+)
+def test_a_question_asking_about_the_docs_is_explore_intent(question):
+    assert classify_intent(question) == INTENT_EXPLORE
 
 
-def test_extract_html_snippet_is_case_insensitive():
-    _, snippet = _extract_html_snippet("```HTML\n<i>y</i>\n```")
-    assert snippet == "<i>y</i>"
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (INTENT_SPEC, INTENT_SPEC),
+        (INTENT_EXPLORE, INTENT_EXPLORE),
+        ("auto", None),
+        ("", None),
+        (None, None),
+        (7, None),
+        (["spec"], None),
+    ],
+)
+def test_only_a_known_intent_is_taken_from_the_client(value, expected):
+    assert coerce_intent(value) == expected
 
 
 # --- retrieval --------------------------------------------------------------------------
@@ -263,6 +304,19 @@ def test_build_prompt_does_not_mark_a_whole_doc():
     assert "excerpt only" not in prompt
 
 
+def test_build_prompt_carries_the_instructions_for_the_intent_it_was_given():
+    explore = _build_prompt("q", [], intent=INTENT_EXPLORE)
+    spec = _build_prompt("q", [], intent=INTENT_SPEC)
+
+    assert "Answer the reader's question" in explore
+    assert "specs/<domain>/<topic>.md" not in explore
+    assert "## Acceptance Tests" in spec
+    assert "specs/<domain>/<topic>.md" in spec
+    # Grounding is the half that doesn't vary: an answer of either kind comes from the context.
+    for prompt in (explore, spec):
+        assert "using ONLY" in prompt or "ONLY the context below" in prompt
+
+
 def test_answer_question_scopes_retrieval_and_reports_sources(indexed_repo, monkeypatch):
     provider = FakeProvider("Refunds work like this.")
     monkeypatch.setattr(
@@ -271,19 +325,50 @@ def test_answer_question_scopes_retrieval_and_reports_sources(indexed_repo, monk
 
     result = answer_question(indexed_repo, "#module:billing how do refunds work?")
 
-    assert result == {"answer": "Refunds work like this.", "sources": ["specs/billing/refund-flow.md"]}
+    assert result["answer"] == "Refunds work like this."
+    assert result["sources"] == ["specs/billing/refund-flow.md"]
+    assert result["intent"] == INTENT_EXPLORE
     assert "#module:billing" not in provider.prompts[0]  # the mention never reaches the model
 
 
-def test_answer_question_returns_an_html_snippet_when_the_model_sends_one(indexed_repo, monkeypatch):
-    provider = FakeProvider("Here:\n```html\n<table><tr><td>1</td></tr></table>\n```")
+def test_answer_question_renders_the_answer_for_the_panel(indexed_repo, monkeypatch):
+    provider = FakeProvider("## Refunds\n\n| Case | Result |\n|---|---|\n| Full | Refunded |")
     monkeypatch.setattr(
         chat_server, "load_provider_from_toml", lambda _path, _command="": provider
     )
 
-    result = answer_question(indexed_repo, "refund table?")
-    assert result["answer"] == "Here:"
-    assert result["html_snippet"].startswith("<table>")
+    result = answer_question(indexed_repo, "how do refunds work?")
+
+    assert result["answer"].startswith("## Refunds")  # the markdown survives, for Copy markdown
+    assert "<h2>Refunds</h2>" in result["answer_html"]
+    assert '<figure class="tw">' in result["answer_html"]
+
+
+def test_answer_question_classifies_the_intent_and_prompts_for_it(indexed_repo, monkeypatch):
+    provider = FakeProvider("draft")
+    monkeypatch.setattr(
+        chat_server, "load_provider_from_toml", lambda _path, _command="": provider
+    )
+
+    result = answer_question(indexed_repo, "write a spec for partial refunds")
+
+    assert result["intent"] == INTENT_SPEC
+    assert "## Acceptance Tests" in provider.prompts[0]
+
+
+def test_an_explicit_intent_beats_the_classifier(indexed_repo, monkeypatch):
+    """The panel's chips exist for the question the classifier reads the other way round."""
+    provider = FakeProvider("prose")
+    monkeypatch.setattr(
+        chat_server, "load_provider_from_toml", lambda _path, _command="": provider
+    )
+
+    result = answer_question(
+        indexed_repo, "write a spec for partial refunds", intent=INTENT_EXPLORE
+    )
+
+    assert result["intent"] == INTENT_EXPLORE
+    assert "specs/<domain>/<topic>.md" not in provider.prompts[0]
 
 
 # --- conversation memory ------------------------------------------------------------------
@@ -492,19 +577,24 @@ def _request(port, method, path, *, origin=None, token=None, body=None):
 @pytest.fixture
 def answering(monkeypatch):
     """Stub the whole retrieval+provider path: these tests are about access control and session
-    plumbing. Each entry is one `(question, history)` the handler passed down."""
+    plumbing. Each entry is one `(question, history, intent)` the handler passed down."""
     asked = []
 
-    def fake(_root, question, history=()):
-        asked.append((question, tuple(history)))
-        return {"answer": f"answer to {question}", "sources": []}
+    def fake(_root, question, history=(), intent=None):
+        asked.append((question, tuple(history), intent))
+        return {
+            "answer": f"answer to {question}",
+            "answer_html": f"<p>answer to {question}</p>",
+            "sources": [],
+            "intent": intent or INTENT_EXPLORE,
+        }
 
     monkeypatch.setattr(chat_server, "answer_question", fake)
     return asked
 
 
 def _questions(asked) -> list[str]:
-    return [question for question, _history in asked]
+    return [question for question, _history, _intent in asked]
 
 
 def test_chat_answers_any_origin_under_the_default_config(tmp_repo, answering):
@@ -569,6 +659,26 @@ def test_an_unknown_post_path_is_404_not_a_chat_call(tmp_repo, answering):
     assert answering == []
 
 
+def test_chat_passes_the_intent_the_panels_chips_sent(tmp_repo, answering):
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(
+            port, "POST", "/chat", body={"question": "q", "intent": INTENT_SPEC}
+        )
+    assert status == 200
+    assert json.loads(raw)["intent"] == INTENT_SPEC
+    assert answering[0][2] == INTENT_SPEC
+
+
+@pytest.mark.parametrize("intent", ["draft", "", 7, None, {"mode": "spec"}])
+def test_chat_ignores_an_intent_it_does_not_know(tmp_repo, answering, intent):
+    """A stale page or a hand-rolled caller can send anything; an unknown value means "you
+    decide", not an error and not a prompt built from client-supplied text."""
+    with _running(tmp_repo) as port:
+        status, _, _ = _request(port, "POST", "/chat", body={"question": "q", "intent": intent})
+    assert status == 200
+    assert answering[0][2] is None  # classify_intent decides
+
+
 # --- sessions over HTTP -------------------------------------------------------------------
 
 
@@ -593,7 +703,7 @@ def test_a_request_with_no_session_stays_stateless(tmp_repo, answering):
     with _running(tmp_repo) as port:
         _request(port, "POST", "/chat", body={"question": "first"})
         _request(port, "POST", "/chat", body={"question": "second"})
-    assert [history for _q, history in answering] == [(), ()]
+    assert [history for _q, history, _intent in answering] == [(), ()]
 
 
 def test_reset_clears_the_conversation(tmp_repo, answering):

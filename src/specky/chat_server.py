@@ -22,6 +22,13 @@ session are replayed to the provider so "why?" and "what about the other one?" m
 something. The transcript lives in this process's memory and in nothing else — see
 `ConversationStore`.
 
+Two questions in the same panel can want two different things, so the prompt is steered by
+intent: `INTENT_EXPLORE` explains what the docs say, `INTENT_SPEC` drafts a new doc in the
+project's own convention. `classify_intent()` guesses from the question's phrasing and the
+widget's chips can pin it (`intent` on the request). Either way the answer comes back as both
+the markdown the model wrote and that markdown rendered for the panel — tables, headings and
+```mermaid``` diagrams included, sanitized in `answer_render`.
+
 Access control lives in `[serve]` in specky.toml and defaults to open
 (`allow_origins = ["*"]`, no token) so a site served from another port or host keeps
 working without configuration. Open means what it says: any page in a reader's browser can
@@ -98,23 +105,93 @@ DOC_CHARS_MAX = 24_000
 # rather than excerpted — but it's a paragraph, not a doc, and gets a paragraph's budget.
 COMMIT_CHARS_MAX = 2_000
 
-_SYSTEM_PROMPT = (
-    "You are a documentation assistant for this codebase. Answer the user's question "
-    "using ONLY the context below — whole docs from the project's specs/ tree, plus "
-    "commit summaries from its git history. Cite the doc path or commit sha each part "
-    "of your answer is drawn from. A block marked as an excerpt is a search hit from a "
-    "doc that was too long to include in full: name that doc as worth reading rather "
-    "than answering from the fragment. If the context doesn't contain the answer, say you "
-    "couldn't find it in the docs — don't guess or use outside knowledge. If a table, "
-    "diagram, or code sample would make the answer clearer, you may add ONE fenced "
-    "```html block after your prose with a small, self-contained snippet (inline styles "
-    "only, no <script> tags, no external resources) — omit it when plain text is enough."
+_GROUNDING_RULES = (
+    "You are a documentation assistant for this codebase. Work from ONLY the context below — "
+    "whole docs from the project's specs/ tree, plus commit summaries from its git history. Cite "
+    "the doc path or commit sha each part of your answer is drawn from. A block marked as an "
+    "excerpt is a search hit from a doc that was too long to include in full: name that doc as "
+    "worth reading rather than answering from the fragment. If the context doesn't contain what "
+    "you need, say so — don't guess or use outside knowledge."
+)
+
+# The two registers a question can be in, and the reason this file has prompts at all rather than
+# one prompt. A reader asking "how does X work" wants the docs explained; a reader asking for a
+# spec wants a doc drafted. The same instructions can't serve both — asked to draft, the discovery
+# prompt answers *about* the docs instead of writing one.
+INTENT_EXPLORE = "explore"
+INTENT_SPEC = "spec"
+INTENTS = (INTENT_EXPLORE, INTENT_SPEC)
+
+# Diagram types the viewer can actually draw — `beautiful-mermaid` via html_render.render_mermaid_svg.
+# Named in the prompt because a diagram in a type it can't render degrades to fenced source text,
+# which is a worse answer than no diagram at all.
+_MERMAID_TYPES = (
+    "`graph TD` / `flowchart LR`, `sequenceDiagram`, `stateDiagram-v2`, `erDiagram`, "
+    "`classDiagram`, `pie`, `xychart-beta` (bar and line charts)"
+)
+
+_EXPLORE_INSTRUCTIONS = (
+    "Answer the reader's question. Write markdown: lead with the direct answer in one or two "
+    "sentences, then the detail. Use a table when you're comparing cases, statuses or options, "
+    "and short headings when the answer has parts. Include at most ONE fenced ```mermaid block, "
+    "and only when a flow, a relationship or a quantity is the actual point of the answer — "
+    f"supported types are {_MERMAID_TYPES}. Never emit raw HTML."
+)
+
+# The doc shape here is `generator.DOC_STYLE_INSTRUCTIONS`'s, deliberately: a draft a reader asks
+# for in the panel and a doc specky generates from a commit should be the same kind of document,
+# or the draft is a second convention nobody asked for.
+_SPEC_INSTRUCTIONS = (
+    "The reader is drafting documentation, not asking what the docs already say. Write the draft, "
+    "in markdown, in this project's own doc convention:\n"
+    "- First line: the path it should live at, as `specs/<domain>/<topic>.md` — kebab-case topic, "
+    "an existing domain where one fits.\n"
+    "- If any doc in the context already covers this subject, say so first and name it: a second "
+    "doc on the same subject is a defect, and updating that one is the right move.\n"
+    "- Then the doc itself: `# Domain — Topic`, `## What It Does` (2-3 plain-language sentences), "
+    "`## How It Works` (numbered steps, one sentence each, bold label per step), `## Outcomes` "
+    "(a table of the distinct outcomes or statuses), `## Acceptance Tests` (a Given/When/Then "
+    "table).\n"
+    "- Anything the context doesn't settle is written as `TBD — not in the docs` in place, never "
+    "invented and never quietly left out.\n"
+    "- A diagram is welcome where a flow needs one: at most ONE fenced ```mermaid block, "
+    f"supported types are {_MERMAID_TYPES}. Never emit raw HTML.\n"
+    "Style: plain language, compact, WHAT and WHY over implementation detail, tables for "
+    "structured information, readable by a non-technical stakeholder."
+)
+
+_INTENT_INSTRUCTIONS = {
+    INTENT_EXPLORE: _EXPLORE_INSTRUCTIONS,
+    INTENT_SPEC: _SPEC_INSTRUCTIONS,
+}
+
+# Spec intent is decided on phrases, not words. Every single word that suggests drafting is also
+# ordinary discovery vocabulary — "where is the retry added", "what does this feature do", "which
+# docs describe the plan" — so a word-level rule fires on questions that wanted an explanation and
+# gets a half-invented doc instead. A verb next to its object is the signal; the default is
+# discovery, which is both the common case and the cheaper thing to get wrong.
+_SPEC_INTENT_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\b(write|draft|create|author|outline|propose|design|sketch|generate|start)\b[\w\s,'-]{0,30}"
+        r"\b(spec|specs|doc|docs|documentation|feature doc|user story|story|requirements|"
+        r"acceptance|epic|rfc|prd)\b",
+        # "for the retry path" is what makes this a request for criteria; without it the phrase is
+        # as likely to be a question *about* the section every generated doc already has.
+        r"\bacceptance (tests?|criteria) (for|of|around)\b",
+        r"\brequirements (for|of|around)\b",
+        r"\bhow should (we|i|it|this)\b",
+        r"\bwe (need|want|should) to\b",
+        r"\b(should|must) support\b",
+        r"\bnew (feature|workflow|doc|spec) for\b",
+        r"\bspec (out|for)\b",
+        r"\bdocument (a|an|the) new\b",
+    )
 )
 
 # "#module:<domain>" or "#feature:<slug>" — inserted by the chat widget's mention
 # autocomplete (see MENTION_JS in html_render.py), stripped before retrieval/prompting.
 _MENTION_RE = re.compile(r"#(module|feature):([\w-]+)")
-_HTML_SNIPPET_RE = re.compile(r"```html\s*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -187,12 +264,18 @@ def _parse_scope(question: str) -> tuple[str, dict | None]:
     return " ".join(clean.split()), scope
 
 
-def _extract_html_snippet(raw: str) -> tuple[str, str | None]:
-    match = _HTML_SNIPPET_RE.search(raw)
-    if not match:
-        return raw.strip(), None
-    prose = (raw[: match.start()] + raw[match.end() :]).strip()
-    return prose, match.group(1).strip()
+def classify_intent(question: str) -> str:
+    """Which register a question is in: `INTENT_SPEC` if it's asking for a doc to be drafted,
+    `INTENT_EXPLORE` otherwise. See `_SPEC_INTENT_PATTERNS` for why this is phrase-based."""
+    if any(pattern.search(question) for pattern in _SPEC_INTENT_PATTERNS):
+        return INTENT_SPEC
+    return INTENT_EXPLORE
+
+
+def coerce_intent(value: object) -> str | None:
+    """A client-supplied intent, or None for "you decide". The widget's chips send one; anything
+    that isn't one of `INTENTS` (a stale page, a hand-rolled caller) falls back to classifying."""
+    return value if value in INTENTS else None
 
 
 def _truncate(text: str, cap: int) -> str:
@@ -308,7 +391,12 @@ def _context_block(entry: dict) -> str:
     return f"[{entry['source']}] {entry['label']}{note}\n{entry['text']}"
 
 
-def _build_prompt(question: str, context: list[dict], history: Sequence[Turn] = ()) -> str:
+def _build_prompt(
+    question: str,
+    context: list[dict],
+    history: Sequence[Turn] = (),
+    intent: str = INTENT_EXPLORE,
+) -> str:
     blocks = (
         "\n\n".join(_context_block(c) for c in context)
         if context
@@ -324,23 +412,42 @@ def _build_prompt(question: str, context: list[dict], history: Sequence[Turn] = 
             "\nConversation so far — use it only to understand what the question refers to; the "
             f"answer must still come from the context below:\n{turns}\n"
         )
-    return f"{_SYSTEM_PROMPT}\n{prior}\nContext:\n{blocks}\n\nQuestion: {question}\nAnswer:"
+    instructions = _INTENT_INSTRUCTIONS[intent]
+    return (
+        f"{_GROUNDING_RULES}\n\n{instructions}\n{prior}\nContext:\n{blocks}\n\n"
+        f"Question: {question}\nAnswer:"
+    )
 
 
-def answer_question(repo_root: Path, question: str, history: Sequence[Turn] = ()) -> dict:
+def answer_question(
+    repo_root: Path, question: str, history: Sequence[Turn] = (), intent: str | None = None
+) -> dict:
+    """One question answered from the index, as both markdown and panel-ready HTML.
+
+    `intent` pins the register (the panel's chips); None classifies the question. `answer` is the
+    markdown the model wrote — it's what the conversation store replays and what the panel's
+    "Copy markdown" hands the reader — and `answer_html` is that same answer rendered.
+    """
     question, scope = _parse_scope(question)
+    intent = intent or classify_intent(question)
     context = retrieve_context(repo_root, question, scope=scope)
     if not context and history:
         # A follow-up is often too short to retrieve on at all ("why?", "and the other one?"). The
         # previous question holds the words it left out, so ask the index again with those.
         context = retrieve_context(repo_root, f"{history[-1].question} {question}", scope=scope)
     provider = load_provider_from_toml(repo_root / "specky.toml", "serve")
-    raw = provider.generate(_build_prompt(question, context, history))
-    answer, html_snippet = _extract_html_snippet(raw)
-    result = {"answer": answer, "sources": sorted({c["source"] for c in context})}
-    if html_snippet:
-        result["html_snippet"] = html_snippet
-    return result
+    answer = provider.generate(_build_prompt(question, context, history, intent)).strip()
+    # Imported here, not at module scope: html_render imports DEFAULT_PORT from this module, so a
+    # top-level import of anything that reaches it would close a cycle (same reason `_search`
+    # imports the indexer inside itself).
+    from specky.answer_render import render_answer
+
+    return {
+        "answer": answer,
+        "answer_html": render_answer(repo_root, answer),
+        "sources": sorted({c["source"] for c in context}),
+        "intent": intent,
+    }
 
 
 @dataclass(frozen=True)
@@ -482,7 +589,10 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
                 if not question:
                     raise ValueError("question is required")
                 result = answer_question(
-                    repo_root, question, history=conversations.history(session)
+                    repo_root,
+                    question,
+                    history=conversations.history(session),
+                    intent=coerce_intent(body.get("intent")),
                 )
                 conversations.record(session, question, result["answer"])
                 self._json(200, result)

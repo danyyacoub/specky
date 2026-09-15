@@ -89,8 +89,10 @@ scripts/reindex.sh [query] # rebuild the FTS5 index then search it — fast loop
 scripts/mcp-inspector.sh   # open MCP Inspector against src/specky/mcp_server.py (needs Node/npx)
 ```
 
-`.claude/launch.json` serves `.specky/site/` on :8934 for the Browser tool's `preview_start` —
-use it to visually check rendered pages (e.g. mermaid diagrams) over `http://`, since the
+`.claude/launch.json` has two entries for the Browser tool's `preview_start`: `specky-site` serves
+`.specky/site/` statically on :8934, and `specky-serve` runs `specky serve` on :8936 — the same
+pages *plus* the Ask panel's `/chat` endpoint, so it's the one to use when the change touches
+answers. Either way, check rendered pages (mermaid diagrams, the Ask dock) over `http://`: the
 in-app preview snapshots `file://` and won't execute page scripts.
 
 ## Architecture
@@ -132,6 +134,13 @@ Key entry points:
   - `specs/GLOSSARY.md` terms are auto-linked to a hover tooltip on first mention per page
     (`link_glossary()`), pure Python + a small vanilla-JS tooltip script — no new dependency.
   - Markdown tables are wrapped in a scrollable, zebra-striped `figure.tw` (`_wrap_tables()`).
+- [`answer_render.py`](src/specky/answer_render.py) — a chat answer's markdown run through that
+  same pipeline, so an answer in the Ask dock reads like a doc page (tables, glossary hovers,
+  mermaid diagrams as static SVG). It is also the trust boundary for the one thing in the viewer a
+  model wrote: `sanitize_fragment()` rebuilds the model's markup from a tag/attribute allowlist,
+  and it runs *before* the diagram step so the only `<svg>` that reaches a reader is our own.
+  `chat_server` imports it inside a function — `html_render` imports `chat_server.DEFAULT_PORT`,
+  so a top-level import would close a cycle.
 
 Both doc-generation paths converge on the same convention: `specs/<domain>/<topic>.md`,
 kebab-case topic, not `README.md`.

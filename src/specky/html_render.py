@@ -120,13 +120,32 @@ _RAIL_TEMPLATE = _env.from_string(
     "</div>"
 )
 
-_CHAT_WIDGET = (
-    '<button id="chat-toggle" class="chat-toggle" type="button">'
-    '<svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>Ask</button>'
-    '<div id="chat-panel" class="chat-panel">'
-    '<div class="chat-header">Ask about these docs'
+# The Ask panel is a column of the page, not a popover floating over it: an answer grounded in whole
+# docs (tables, a diagram, a drafted spec) needs a doc's worth of room, and a 340px bubble was
+# reading a document through a keyhole. It's the third flex child of `.body-row`, so opening it
+# reflows the content pane rather than covering it — nav stays reachable mid-conversation, and the
+# reader can follow a cited source without losing the panel.
+_ASK_PANEL = (
+    '<aside id="ask-panel" class="ask-panel" aria-label="Ask about these docs">'
+    '<div id="ask-resize" class="ask-resize" role="separator" aria-orientation="vertical" '
+    'aria-label="Resize panel" tabindex="0"></div>'
+    '<div class="ask-body">'
+    '<div class="chat-header">'
+    '<span class="chat-title"><svg class="icon" aria-hidden="true">'
+    '<use href="#icon-chat"></use></svg>Ask about these docs</span>'
     '<span class="chat-header-right"><span id="chat-status"></span>'
-    '<button id="chat-reset" class="chat-reset" type="button">New</button></span></div>'
+    '<button id="chat-reset" class="chat-reset" type="button">New</button>'
+    '<button id="ask-close" class="ask-close" type="button" aria-label="Close panel">'
+    "&#215;</button></span></div>"
+    # Auto is the default and the honest one: the server classifies the question. The other two
+    # exist for when it reads a question the other way round (see chat_server.classify_intent).
+    '<div class="ask-intent" role="group" aria-label="Answer style">'
+    '<button class="chip intent-chip" type="button" data-intent="auto" data-active="true">'
+    "Auto</button>"
+    '<button class="chip intent-chip" type="button" data-intent="explore" data-active="false">'
+    "Explore</button>"
+    '<button class="chip intent-chip" type="button" data-intent="spec" data-active="false">'
+    "Draft spec</button></div>"
     '<div id="chat-log" class="chat-log"></div>'
     '<form id="chat-form" class="chat-form">'
     '<div class="chat-input-wrap">'
@@ -136,7 +155,12 @@ _CHAT_WIDGET = (
     "</div>"
     '<button type="submit" aria-label="Send">'
     '<svg class="icon" aria-hidden="true"><use href="#icon-send"></use></svg></button>'
-    "</form></div>"
+    "</form></div></aside>"
+)
+
+_ASK_TOGGLE = (
+    '<button id="chat-toggle" class="chat-toggle" type="button">'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>Ask</button>'
 )
 
 _PAGE_TEMPLATE = _env.from_string(
@@ -156,7 +180,9 @@ _PAGE_TEMPLATE = _env.from_string(
     "</div></div>"
     '<div class="body-row">{{ rail | safe }}'
     '<div class="content-pane"><div class="doc">{{ body | safe }}</div></div>'
-    "</div></div>" + _CHAT_WIDGET
+    + _ASK_PANEL
+    + "</div></div>"
+    + _ASK_TOGGLE
     # site-data before app: app.js reads SPECKY_INDEX at load. Plain (non-module, non-defer)
     # scripts run in document order, on file:// as well as over http.
     + '<script src="assets/site-data.js"></script>'
@@ -447,17 +473,44 @@ a { color: inherit; }
   padding: 10px 18px; font-family: var(--font-sans); font-size: 0.8125rem; font-weight: 600;
   box-shadow: var(--shadow-md); cursor: pointer;
 }
-.chat-panel {
-  position: fixed; bottom: 76px; right: 24px; z-index: 20; width: 340px; max-height: 460px;
+/* --- the Ask dock: a column of .body-row, so opening it reflows the content pane instead of
+   covering it. Width is a custom property the drag handle writes (see CHAT_JS), and the
+   titlebar clearance mirrors .sidebar's — both scroll under the fixed bar. */
+.ask-panel {
+  /* min-width: 0 — a flex item's automatic minimum is its content, and one wide diagram or a long
+     code line would otherwise push the dock past the width the reader dragged it to. */
+  position: relative; flex: 0 0 var(--ask-width, 440px); min-width: 0; height: 100vh; z-index: 20;
   background: var(--glass-bg); backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%); border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-md); border: 1px solid var(--glass-border);
-  display: none; flex-direction: column; overflow: hidden;
+  -webkit-backdrop-filter: blur(24px) saturate(180%); border-left: 1px solid var(--glass-border);
+  display: none;
 }
-.chat-panel.open { display: flex; }
+body.ask-open .ask-panel { display: block; }
+body.ask-open .chat-toggle { display: none; }
+.ask-body { display: flex; flex-direction: column; height: 100%; padding-top: 52px; }
+.ask-resize {
+  position: absolute; top: 0; bottom: 0; left: -3px; width: 7px; z-index: 2; cursor: col-resize;
+}
+.ask-resize:hover, .ask-resize:focus-visible { background: var(--accent-soft); }
+.ask-close {
+  border: none; background: none; color: var(--text-secondary); font-size: 1.125rem; line-height: 1;
+  padding: 0 2px; cursor: pointer;
+}
+.ask-close:hover { color: var(--text-primary); }
+.ask-intent { display: flex; gap: 6px; padding: 10px 16px 0; }
+.intent-chip[data-active="true"] { background: var(--accent-soft); color: var(--accent); }
 .chat-header {
   padding: 12px 16px; font-weight: 600; font-size: 0.8125rem; border-bottom: 1px solid var(--border);
-  display: flex; justify-content: space-between; align-items: center;
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+}
+.chat-title { display: flex; align-items: center; gap: 6px; }
+.chat-title .icon { color: var(--accent); }
+/* Narrow windows have no width to give: the dock overlays the content instead of crushing the
+   doc column to an unreadable ribbon. */
+@media (max-width: 1100px) {
+  .ask-panel {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 26; flex: none;
+    width: min(var(--ask-width, 440px), 100vw); box-shadow: var(--shadow-md);
+  }
 }
 #chat-status { font-weight: 400; color: var(--text-secondary); font-size: 0.6875rem; }
 .chat-header-right { display: flex; align-items: center; gap: 8px; }
@@ -467,8 +520,8 @@ a { color: inherit; }
   border-radius: var(--radius-sm); cursor: pointer;
 }
 .chat-reset:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
-.chat-log { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
-.chat-msg { font-size: 0.75rem; line-height: 1.5; padding: 6px 10px; border-radius: var(--radius-md); max-width: 90%; white-space: pre-wrap; }
+.chat-log { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; min-height: 120px; min-width: 0; }
+.chat-msg { font-size: 0.75rem; line-height: 1.5; padding: 6px 10px; border-radius: var(--radius-md); max-width: 90%; min-width: 0; white-space: pre-wrap; }
 .chat-user { align-self: flex-end; background: var(--accent-soft); color: var(--text-primary); }
 .chat-assistant { align-self: flex-start; background: var(--surface-tertiary); color: var(--text-primary); }
 .chat-sources { align-self: flex-start; color: var(--text-secondary); font-size: 0.6875rem; }
@@ -501,11 +554,76 @@ a { color: inherit; }
   background: var(--surface-tertiary);
 }
 .mention-dropdown .mention-item .kind { color: var(--text-tertiary); font-size: 0.6875rem; flex-shrink: 0; }
-.chat-html-wrap {
-  align-self: stretch; border: 1px solid var(--border); border-radius: var(--radius-md);
-  overflow: hidden; max-height: 420px;
+/* --- a rendered answer: the panel's version of `.doc`, not a chat bubble. Full width of the
+   log (a table or diagram has nowhere to go in a 90% bubble), normal wrapping (the markdown is
+   real HTML now, not preformatted text), and the doc page's own figure/table/diagram styling
+   reused as-is — the same server-side pipeline produced both. */
+.chat-rich {
+  align-self: stretch; max-width: 100%; white-space: normal; background: none; padding: 2px 0;
+  font-size: 0.8125rem;
 }
-.chat-html-frame { display: block; width: 100%; border: none; background: var(--surface); }
+.chat-rich > :first-child { margin-top: 0; }
+.chat-rich > :last-child { margin-bottom: 0; }
+.chat-rich h1, .chat-rich h2, .chat-rich h3, .chat-rich h4 {
+  font-family: var(--font-display); letter-spacing: -0.01em; margin: 16px 0 6px; border: none;
+  padding: 0;
+}
+.chat-rich h1 { font-size: 1rem; }
+.chat-rich h2 { font-size: 0.9375rem; }
+.chat-rich h3, .chat-rich h4 { font-size: 0.875rem; }
+.chat-rich p, .chat-rich ul, .chat-rich ol { margin: 8px 0; }
+.chat-rich ul, .chat-rich ol { padding-left: 20px; }
+.chat-rich li { margin-bottom: 3px; }
+.chat-rich a { color: var(--accent); }
+.chat-rich code {
+  font-family: var(--font-mono); background: var(--surface-tertiary); padding: 1px 4px;
+  border-radius: 4px; font-size: 0.75rem;
+}
+.chat-rich pre {
+  background: var(--text-primary); color: var(--surface); padding: 12px; border-radius: var(--radius-md);
+  overflow-x: auto; font-size: 0.75rem;
+}
+.chat-rich pre code { background: none; color: inherit; padding: 0; }
+.chat-rich blockquote {
+  border-left: 3px solid var(--accent-soft); margin: 8px 0; padding: 2px 12px; color: var(--text-secondary);
+}
+.chat-rich figure.tw { margin: 10px 0; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
+.chat-rich figure.tw table { border-collapse: collapse; width: 100%; font-size: 0.75rem; }
+.chat-rich figure.tw th, .chat-rich figure.tw td {
+  padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top;
+}
+.chat-rich figure.tw thead th {
+  background: var(--surface-secondary); color: var(--text-secondary); font-weight: 600;
+  font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.chat-rich figure.tw tbody tr:nth-child(even) { background: var(--surface-secondary); }
+.chat-rich figure.flow {
+  margin: 12px 0; padding: 12px; background: #f7f7f8; border-radius: var(--radius-md); text-align: center;
+  max-width: 100%; box-sizing: border-box;
+}
+.chat-rich figure.flow svg { max-width: 100%; height: auto; }
+/* A diagram too wide to shrink readably scrolls inside the panel rather than widening it. */
+.chat-rich figure.flow .fx { overflow-x: auto; max-width: 100%; }
+.chat-rich figure.flow .fx svg { max-width: none; margin: 0; }
+.chat-rich .gl { border-bottom: 1px dotted var(--accent); cursor: help; }
+
+.chat-actions {
+  align-self: stretch; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  font-size: 0.6875rem; color: var(--text-secondary);
+}
+.chat-actions .intent-badge {
+  border-radius: 999px; padding: 2px 8px; font-weight: 600; background: var(--surface-tertiary);
+  color: var(--text-secondary);
+}
+.chat-actions .intent-badge[data-intent="spec"] { background: var(--feature-bg); color: var(--feature); }
+.chat-copy {
+  border: 1px solid var(--border); background: none; color: var(--text-secondary); font: inherit;
+  padding: 2px 8px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.chat-copy:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
+.chat-source-link { color: var(--accent); text-decoration: none; }
+.chat-source-link:hover { text-decoration: underline; }
+.chat-note { align-self: stretch; color: var(--text-tertiary); font-size: 0.6875rem; font-style: italic; }
 """
 
 # Finding the companion server from wherever this page was opened. `specky serve` serves this page
@@ -715,17 +833,24 @@ if (currentLink) {
 # The viewer is many pages, and the reader navigates between them mid-conversation, so both halves
 # of a conversation have to outlive the page: the session id the server keys its transcript on, and
 # the transcript the panel shows. sessionStorage holds both — the tab, not the browser, is the right
-# lifetime for "the conversation I'm having now", and it's the reader's own tab either way.
+# lifetime for "the conversation I'm having now", and it's the reader's own tab either way. The
+# panel's own state (open, width, pinned intent) lives there too, for the same reason: a reader who
+# clicks a cited source shouldn't find the panel gone and 440px back to its default.
 CHAT_JS = """
 const chatToggle = document.getElementById('chat-toggle');
-const chatPanel = document.getElementById('chat-panel');
+const askPanel = document.getElementById('ask-panel');
+const askClose = document.getElementById('ask-close');
+const askResize = document.getElementById('ask-resize');
 const chatLog = document.getElementById('chat-log');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatStatus = document.getElementById('chat-status');
 const chatReset = document.getElementById('chat-reset');
+const intentChips = [...document.querySelectorAll('.intent-chip')];
 const CHAT_LOG_MAX = 24;
 const CHAT_PERSISTED = new Set(['user', 'assistant', 'sources']);
+const ASK_WIDTH_MIN = 320;
+const ASK_WIDTH_MAX = 720;
 
 // A file:// page may refuse storage outright, and a sandboxed iframe always does. Failing that
 // probe costs the reader one thing: a follow-up asked after navigating starts a fresh conversation.
@@ -755,10 +880,70 @@ function readChatLog() {
   }
 }
 
-chatToggle?.addEventListener('click', () => {
-  chatPanel.classList.toggle('open');
-  if (chatPanel.classList.contains('open')) chatInput.focus();
+function setAskOpen(open) {
+  document.body.classList.toggle('ask-open', open);
+  chatStore?.setItem('specky-ask-open', open ? '1' : '0');
+  if (open) chatInput?.focus();
+}
+
+chatToggle?.addEventListener('click', () => setAskOpen(true));
+askClose?.addEventListener('click', () => setAskOpen(false));
+if (chatStore?.getItem('specky-ask-open') === '1') setAskOpen(true);
+
+// --- panel width: one custom property on <html>, dragged and remembered ------------------
+function setAskWidth(px) {
+  const width = Math.min(Math.max(Math.round(px), ASK_WIDTH_MIN), ASK_WIDTH_MAX);
+  document.documentElement.style.setProperty('--ask-width', `${width}px`);
+  chatStore?.setItem('specky-ask-width', String(width));
+}
+
+const storedAskWidth = Number(chatStore?.getItem('specky-ask-width'));
+if (storedAskWidth) setAskWidth(storedAskWidth);
+
+askResize?.addEventListener('pointerdown', (event) => {
+  event.preventDefault();
+  // Capture keeps a fast drag that outruns the 7px handle on target; window listeners are what
+  // actually move the panel, so a browser that refuses the capture still resizes.
+  try { askResize.setPointerCapture(event.pointerId); } catch (err) { /* not capturable */ }
+  const onMove = (move) => setAskWidth(window.innerWidth - move.clientX);
+  const stop = () => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', stop);
+    window.removeEventListener('pointercancel', stop);
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', stop);
+  window.addEventListener('pointercancel', stop);
 });
+
+askResize?.addEventListener('keydown', (event) => {
+  const step = event.key === 'ArrowLeft' ? 24 : event.key === 'ArrowRight' ? -24 : 0;
+  if (!step) return;
+  event.preventDefault();
+  setAskWidth(askPanel.getBoundingClientRect().width + step);
+});
+
+// --- intent: Auto lets the server classify the question; the other two pin it -------------
+let askIntent = chatStore?.getItem('specky-ask-intent') || 'auto';
+
+function setAskIntent(value) {
+  askIntent = value;
+  chatStore?.setItem('specky-ask-intent', value);
+  for (const chip of intentChips) {
+    chip.dataset.active = chip.dataset.intent === value ? 'true' : 'false';
+  }
+}
+setAskIntent(askIntent);
+for (const chip of intentChips) {
+  chip.addEventListener('click', () => setAskIntent(chip.dataset.intent));
+}
+
+function persistChatEntry(role, text) {
+  if (!chatStore || !CHAT_PERSISTED.has(role)) return;
+  const log = readChatLog();
+  log.push({ role, text });
+  chatStore.setItem('specky-chat-log', JSON.stringify(log.slice(-CHAT_LOG_MAX)));
+}
 
 function addChatMessage(role, text, persist = true) {
   const div = document.createElement('div');
@@ -766,37 +951,87 @@ function addChatMessage(role, text, persist = true) {
   div.textContent = text;
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
-  if (persist && chatStore && CHAT_PERSISTED.has(role)) {
-    const log = readChatLog();
-    log.push({ role, text });
-    chatStore.setItem('specky-chat-log', JSON.stringify(log.slice(-CHAT_LOG_MAX)));
-  }
+  if (persist) persistChatEntry(role, text);
   return div;
 }
 
-// LLM-produced markup, rendered fully isolated: sandbox omits allow-scripts (so the
-// allow-same-origin needed for the parent to read scrollHeight can't be paired with
-// script execution), and the injected CSP meta blocks network-driven exfil attempts
-// (e.g. <img src>) that sandboxing alone doesn't stop.
-function addChatHtmlSnippet(rawHtml) {
-  const wrap = document.createElement('div');
-  wrap.className = 'chat-html-wrap';
-  const frame = document.createElement('iframe');
-  frame.className = 'chat-html-frame';
-  frame.setAttribute('sandbox', 'allow-same-origin');
-  frame.style.height = '80px';
-  frame.addEventListener('load', () => {
+// A cited doc path is a page this site already rendered, so it should be one click away rather
+// than a string the reader has to find in the nav. A commit sha (or a path from an index this
+// page predates) has no entry here and stays plain text.
+function sourceLink(source) {
+  const hit = SPECKY_INDEX.find((d) => d.path === source);
+  if (!hit) {
+    const span = document.createElement('span');
+    span.textContent = source;
+    return span;
+  }
+  const link = document.createElement('a');
+  link.className = 'chat-source-link';
+  link.href = hit.html_path;
+  link.textContent = hit.title;
+  link.title = source;
+  return link;
+}
+
+function copyMarkdownButton(markdown) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'chat-copy';
+  button.textContent = 'Copy markdown';
+  button.addEventListener('click', async () => {
     try {
-      const h = frame.contentWindow.document.documentElement.scrollHeight;
-      frame.style.height = `${Math.min(Math.max(h, 40), 420)}px`;
-    } catch (err) { /* leave default height */ }
+      await navigator.clipboard.writeText(markdown);
+    } catch (err) {
+      // clipboard.writeText needs a secure context, which a file:// page isn't.
+      const area = document.createElement('textarea');
+      area.value = markdown;
+      document.body.appendChild(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
+    button.textContent = 'Copied';
+    setTimeout(() => { button.textContent = 'Copy markdown'; }, 1500);
   });
-  const csp = '<meta http-equiv="Content-Security-Policy" '
-    + 'content="default-src \\'none\\'; style-src \\'unsafe-inline\\'; img-src data:;">';
-  frame.srcdoc = csp + rawHtml;
-  wrap.appendChild(frame);
-  chatLog.appendChild(wrap);
+  return button;
+}
+
+// The answer HTML was rendered and sanitized by the server (see answer_render.py), which is the
+// only reason this assigns innerHTML at all — the markdown behind it is the model's, and nothing
+// on this side of the wire is in a position to vet markup.
+function addChatAnswer(data) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg chat-assistant chat-rich';
+  div.innerHTML = data.answer_html || '';
+  chatLog.appendChild(div);
+
+  const actions = document.createElement('div');
+  actions.className = 'chat-actions';
+  const badge = document.createElement('span');
+  badge.className = 'intent-badge';
+  badge.dataset.intent = data.intent || 'explore';
+  badge.textContent = data.intent === 'spec' ? 'Draft spec' : 'Explore';
+  actions.appendChild(badge);
+  actions.appendChild(copyMarkdownButton(data.answer || ''));
+  const sources = data.sources || [];
+  if (sources.length) {
+    const label = document.createElement('span');
+    label.textContent = 'Sources:';
+    actions.appendChild(label);
+    sources.forEach((source, i) => {
+      actions.appendChild(sourceLink(source));
+      if (i < sources.length - 1) {
+        const comma = document.createElement('span');
+        comma.textContent = ',';
+        actions.appendChild(comma);
+      }
+    });
+  }
+  chatLog.appendChild(actions);
   chatLog.scrollTop = chatLog.scrollHeight;
+
+  persistChatEntry('assistant', data.answer || '');
+  if (sources.length) persistChatEntry('sources', `Sources: ${sources.join(', ')}`);
 }
 
 chatForm?.addEventListener('submit', async (event) => {
@@ -807,11 +1042,13 @@ chatForm?.addEventListener('submit', async (event) => {
   addChatMessage('user', question);
   chatInput.value = '';
   chatStatus.textContent = 'Thinking…';
+  const payload = { question, session: chatSession };
+  if (askIntent !== 'auto') payload.intent = askIntent;
   try {
     const res = await speckyFetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, session: chatSession }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     chatStatus.textContent = '';
@@ -819,13 +1056,7 @@ chatForm?.addEventListener('submit', async (event) => {
       addChatMessage('error', data.error || 'Something went wrong.');
       return;
     }
-    addChatMessage('assistant', data.answer);
-    if (data.html_snippet) {
-      addChatHtmlSnippet(data.html_snippet);
-    }
-    if (data.sources && data.sources.length) {
-      addChatMessage('sources', `Sources: ${data.sources.join(', ')}`);
-    }
+    addChatAnswer(data);
   } catch (err) {
     chatStatus.textContent = '';
     addChatMessage('error', 'Chat server not reachable. Run `specky serve` in this repo, then try again.');
@@ -850,16 +1081,26 @@ chatReset?.addEventListener('click', async () => {
   } catch (err) { /* offline, or no server: the abandoned transcript expires on its own */ }
 });
 
-// Replay what this conversation said on the pages before this one. Text only: an HTML snippet is
-// the model's answer to a question already in the transcript, and re-serving stored markup on every
-// page load is more surface than a visual nicety is worth.
+// Replay what this conversation said on the pages before this one — as text, never as markup.
+// What's stored is the model's markdown, and sessionStorage is editable by anything running on this
+// origin, so replaying it through innerHTML would hand that anything a way into the page. The
+// transcript is worth keeping; a second page's worth of rendered tables is not worth that.
 if (chatLog) {
+  let replayed = 0;
   for (const msg of readChatLog()) {
-    // Storage is editable by anything running on this origin, so trust the shape as far as it
-    // checks out and drop the rest rather than rendering a `chat-undefined` bubble.
+    // Storage is editable, so trust the shape as far as it checks out and drop the rest rather
+    // than rendering a `chat-undefined` bubble.
     if (CHAT_PERSISTED.has(msg?.role) && typeof msg.text === 'string') {
       addChatMessage(msg.role, msg.text, false);
+      replayed += 1;
     }
+  }
+  if (replayed) {
+    const note = document.createElement('div');
+    note.className = 'chat-note';
+    note.textContent = 'Earlier answers are replayed as plain text. The next one renders in full.';
+    chatLog.appendChild(note);
+    chatLog.scrollTop = chatLog.scrollHeight;
   }
 }
 """
@@ -948,6 +1189,10 @@ chatInput?.addEventListener('keydown', (event) => {
 # Ported from glia's `_TOOLTIP_SCRIPT` (enrichment_render.py) — same hover, minus the
 # host-messaging half glia needs for its sandboxed-iframe pages, which a plain page here
 # doesn't. One tooltip element reused for every hover, not one per term.
+#
+# Listeners are delegated from `document` rather than attached per term at load: a chat answer is
+# glossary-linked too (see answer_render.render_answer) and arrives long after this script ran, so
+# per-element binding would give the page's own terms a tooltip and an answer's terms none.
 GLOSSARY_JS = """
 const tip = document.createElement('div');
 tip.className = 'tip';
@@ -967,12 +1212,16 @@ function showGlossaryTip(target) {
 }
 function hideGlossaryTip() { tip.hidden = true; }
 
-for (const el of document.querySelectorAll('[data-term]')) {
-  el.tabIndex = 0;
-  el.addEventListener('mouseenter', () => showGlossaryTip(el));
-  el.addEventListener('focus', () => showGlossaryTip(el));
-  el.addEventListener('mouseleave', hideGlossaryTip);
-  el.addEventListener('blur', hideGlossaryTip);
+for (const type of ['mouseover', 'focusin']) {
+  document.addEventListener(type, (event) => {
+    const target = event.target.closest?.('[data-term]');
+    if (target) showGlossaryTip(target);
+  });
+}
+for (const type of ['mouseout', 'focusout']) {
+  document.addEventListener(type, (event) => {
+    if (event.target.closest?.('[data-term]')) hideGlossaryTip();
+  });
 }
 """
 
@@ -1166,7 +1415,13 @@ def link_glossary(fragment: str, glossary: dict[str, str]) -> str:
         if key in seen:
             return word
         seen.add(key)
-        return f'<span class="gl" data-term="{html.escape(word, quote=True)}">{word}</span>'
+        # tabindex so the tooltip is reachable without a mouse. It's set here rather than by the
+        # hover script, which delegates from `document` and so never touches the spans (see
+        # GLOSSARY_JS).
+        return (
+            f'<span class="gl" data-term="{html.escape(word, quote=True)}" tabindex="0">'
+            f"{word}</span>"
+        )
 
     for token in _TAG_OR_TEXT.split(fragment):
         if token.startswith("<"):
@@ -1259,19 +1514,28 @@ def render_mermaid_svg(source: str) -> str | None:
     return _scrub_svg(proc.stdout)
 
 
-def _render_mermaid_blocks(body_html: str) -> tuple[str, bool, bool]:
+def _render_mermaid_blocks(body_html: str, limit: int | None = None) -> tuple[str, bool, bool]:
     """Replace fenced mermaid blocks with rendered `<figure class="flow">` SVGs.
 
     Returns `(html, any_mermaid_source, any_rendered)` — the first two counts drive
     `render_site()`'s one-time hint if diagrams exist but none could be rendered (Node or
     the tool's `node_modules` missing).
+
+    `limit` caps how many fences are actually rendered; the rest are left as their own source
+    text. A doc page passes None (a doc's diagrams are written by a person and reviewed in git),
+    while a chat answer bounds it — each fence is a `node` subprocess, so an answer full of them
+    would be one question spawning a dozen (see `answer_render.MAX_ANSWER_DIAGRAMS`).
     """
     any_source = False
     any_rendered = False
+    drawn = 0
 
     def repl(match: re.Match[str]) -> str:
-        nonlocal any_source, any_rendered
+        nonlocal any_source, any_rendered, drawn
         any_source = True
+        if limit is not None and drawn >= limit:
+            return match.group(0)
+        drawn += 1
         svg = render_mermaid_svg(html.unescape(match.group(1)))
         if svg is None:
             return match.group(0)
