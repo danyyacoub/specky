@@ -501,7 +501,9 @@ def build_parser() -> argparse.ArgumentParser:
         _sync,
     )
     sync_cmd.add_argument(
-        "--since", metavar="REV|DATE", help='e.g. v1.2.0, HEAD~50, or "2 weeks ago"'
+        "--since",
+        metavar="REV|DATE",
+        help='e.g. v1.2.0, HEAD~50, or "2 weeks ago" (default: newest 10 commits)',
     )
     sync_cmd.add_argument("--limit", type=int, metavar="N", help="Process at most N commits")
     sync_cmd.add_argument(

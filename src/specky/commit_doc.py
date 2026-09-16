@@ -107,6 +107,13 @@ DIFF_TRUNCATE_CHARS = 8000
 SYNC_CONCURRENCY = 4
 SYNC_CONFIRM_THRESHOLD = 25
 
+# How far back a bare `specky sync` (no --since/--limit/--all-branches) looks. Without this, the
+# first run on an existing repo silently walks its entire history — the whole-history backfill
+# the confirmation above exists to make deliberate becomes the *default*, not something asked
+# for. Any of the three range flags means the caller already has a range in mind, so it overrides
+# this rather than stacking with it.
+SYNC_DEFAULT_DEPTH = 10
+
 # How much of the backlog a *hook* fire will look at and act on. Both bounds matter, for different
 # reasons:
 #
@@ -420,10 +427,15 @@ def sync(
 
     `since`/`limit`/`all_branches` choose the range (see `pending_commits`), `dry_run` lists what
     would be processed without contacting the provider at all, and `assume_yes` skips the
-    confirmation that a large backfill otherwise stops for.
+    confirmation that a large backfill otherwise stops for. Bare `sync()` — none of those three —
+    only looks at the newest `SYNC_DEFAULT_DEPTH` commits; pass any one of them to see further
+    back (e.g. `--since <first commit>` for the whole history on a fresh adopt).
     """
     repo_root = _repo_root()
-    pending = pending_commits(repo_root, since=since, limit=limit, all_branches=all_branches)
+    depth = None if (since or limit or all_branches) else SYNC_DEFAULT_DEPTH
+    pending = pending_commits(
+        repo_root, since=since, limit=limit, all_branches=all_branches, depth=depth
+    )
     total = len(pending)
     if not pending:
         print("specky sync: already up to date")

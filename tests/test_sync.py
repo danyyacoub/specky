@@ -177,6 +177,32 @@ def test_limit_caps_after_filtering_not_before(tmp_repo):
     assert pending(tmp_repo, limit=1) == [second]
 
 
+# --- the default range (bare sync) --------------------------------------------------------
+
+
+def test_bare_sync_only_looks_at_the_newest_default_depth_commits(in_repo, monkeypatch):
+    """No --since/--limit/--all-branches: only SYNC_DEFAULT_DEPTH commits are even inspected, so
+    an old, never-documented commit outside that window is left alone rather than surfacing a
+    confirmation prompt or a surprise bill."""
+    monkeypatch.setattr(commit_doc, "SYNC_DEFAULT_DEPTH", 2)
+    shas = [_commit(in_repo, f"commit {i}") for i in range(3)]  # + the fixture's initial commit
+    _use_provider(monkeypatch, RoutingProvider())
+
+    commit_doc.sync()
+
+    assert _history(in_repo) == {sha[:8] for sha in shas[-2:]}
+
+
+def test_an_explicit_range_flag_overrides_the_default_depth(in_repo, monkeypatch):
+    monkeypatch.setattr(commit_doc, "SYNC_DEFAULT_DEPTH", 1)
+    shas = [_commit(in_repo, f"commit {i}") for i in range(3)]  # + the fixture's initial commit
+    _use_provider(monkeypatch, RoutingProvider())
+
+    commit_doc.sync(limit=10)
+
+    assert len(_history(in_repo)) == len(shas) + 1
+
+
 # --- spending money on purpose ------------------------------------------------------------
 
 
