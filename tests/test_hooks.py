@@ -66,9 +66,9 @@ class _SplicingProvider(RoutingProvider):
         super().__init__(**kwargs)
         self._sections = sections
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
         if "Sections in the doc right now:" not in prompt:
-            return super().generate(prompt)
+            return super().generate(prompt, prefix=prefix, task=task)
         with self._lock:
             self.prompts.append(prompt)
         return self._sections
@@ -487,7 +487,7 @@ class TestRewrites:
         new_sha = git(in_repo, "rev-parse", "HEAD").strip()
 
         class Forbidden:
-            def generate(self, prompt: str) -> str:
+            def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
                 raise AssertionError("a rewrite must not call the provider")
 
         _use_provider(monkeypatch, Forbidden())

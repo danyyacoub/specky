@@ -211,7 +211,27 @@ def _config(repo_root: Path) -> list[Check]:
             if executable and shutil.which(executable)
             else Check("config", FAIL, f"provider command `{executable}` not found on PATH")
         )
+
+    # Per-task model routing, reported because it is invisible otherwise: the whole point of
+    # `[ai] discovery_model` is to be set once and forgotten, and the only other way to find out
+    # which model answered what is to read `specky cost` after the fact.
+    checks += _task_model_checks(path)
     return checks
+
+
+def _task_model_checks(path: Path) -> list[Check]:
+    from specky.ai_provider import ConfigError, task_models
+
+    try:
+        config = paths.read_table(path, ("ai",))
+        routed = task_models(config)
+    except ConfigError as exc:
+        return [Check("config", FAIL, str(exc))]
+    if not routed:
+        return []
+    default = config.get("model") or "(provider default)"
+    listed = ", ".join(f"{task} -> {model}" for task, model in sorted(routed.items()))
+    return [Check("config", OK, f"per-task models: {listed} (everything else -> {default})")]
 
 
 def _history(repo_root: Path) -> list[Check]:

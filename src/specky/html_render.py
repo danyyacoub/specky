@@ -1377,7 +1377,7 @@ def load_glossary(repo_root: Path) -> dict[str, str]:
     Empty if the repo has no glossary yet — auto-linking degrades to a no-op, same as a
     doc with no glossary terms to find.
     """
-    path = paths.docs_root(repo_root) / "GLOSSARY.md"
+    path = paths.glossary(repo_root)
     if not path.exists():
         return {}
     terms: dict[str, str] = {}

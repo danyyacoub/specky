@@ -243,11 +243,46 @@ def index_doc_files(repo_root: Path, conn) -> int:
                 continue
             pairs.update((f, doc_path) for doc_path in covering[sha] for f in files)
 
+    pairs.update(declared_sources(repo_root))
     conn.executemany(
         "INSERT OR REPLACE INTO doc_files (path, doc_path, commits) VALUES (?, ?, ?)",
         [(path, doc_path, commits) for (path, doc_path), commits in pairs.items()],
     )
     return len(pairs)
+
+
+def declared_sources(repo_root: Path) -> Counter[tuple[str, str]]:
+    """`(code file, doc)` pairs a doc states outright in its `sources:` frontmatter.
+
+    The git-log derivation above cannot see a bootstrapped doc set, and not by accident: a single
+    commit adding twenty docs is exactly what `DOC_FILES_MAX_DOCS_PER_COMMIT` exists to reject, and
+    a doc written from code it did not change has no commit pairing it with that code in the first
+    place. Left at that, `specky check` would read every source file in a freshly bootstrapped repo
+    as undocumented — the gate silently off on the repos that most need it.
+
+    So `bootstrap.write_domain_doc` writes down which files it read, and this folds that in. Counted
+    as `MIN_LINK_COMMITS` rather than 1 because it is not the weak evidence that threshold exists to
+    filter: the git-derived pairs are a guess from "these files rode in a commit that touched this
+    doc", while this is the doc saying which files it is about.
+    """
+    from specky.check import MIN_LINK_COMMITS
+
+    specs_root = paths.docs_root(repo_root)
+    if not specs_root.exists():
+        return Counter()
+
+    pairs: Counter[tuple[str, str]] = Counter()
+    for md_path in sorted(specs_root.rglob("*.md")):
+        sources = frontmatter.parse(md_path.read_text())[0].get("sources")
+        if not isinstance(sources, list):
+            continue
+        doc_path = str(md_path.relative_to(repo_root))
+        for source in sources:
+            # Only files that still exist: a doc outliving the code it named must not keep claiming
+            # coverage of a path nobody can open.
+            if isinstance(source, str) and (repo_root / source).is_file():
+                pairs[(source, doc_path)] = MIN_LINK_COMMITS
+    return pairs
 
 
 def run_index(repo_root: Path) -> tuple[int, int]:

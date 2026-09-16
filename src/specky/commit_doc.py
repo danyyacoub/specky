@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Sequence
 
 from specky import frontmatter, paths
-from specky.ai_provider import ConfigError, Provider, load_provider_from_toml
+from specky.ai_provider import ConfigError, Provider, load_provider_from_toml, supports_batch
 from specky.db import connect, repo_root as _repo_root
 from specky.lock import LockBusy, exclusive
 
@@ -184,12 +184,24 @@ def _commit_info(rev: str = "HEAD", with_diff: bool = True) -> Commit:
     return Commit(sha=sha, author=author, date=date, message=message.strip(), diff=diff)
 
 
-def generate_micro_doc(commit: Commit, provider: Provider) -> str:
-    prompt = (
-        "Summarize what changed and why, in one short paragraph, for a commit history reader.\n\n"
-        f"Commit message:\n{commit.message}\n\nDiff (may be truncated):\n{commit.diff[:DIFF_TRUNCATE_CHARS]}"
+# The micro-doc instruction, identical for every commit, so it rides as the cacheable prefix.
+MICRO_DOC_PREFIX = (
+    "Summarize what changed and why, in one short paragraph, for a commit history reader."
+)
+
+
+def micro_doc_prompt(commit: Commit) -> tuple[str, str]:
+    """`(cacheable prefix, this commit's half)`, shared by the serial and batched paths."""
+    return (
+        MICRO_DOC_PREFIX,
+        f"Commit message:\n{commit.message}\n\n"
+        f"Diff (may be truncated):\n{commit.diff[:DIFF_TRUNCATE_CHARS]}",
     )
-    return provider.generate(prompt).strip()
+
+
+def generate_micro_doc(commit: Commit, provider: Provider) -> str:
+    prefix, prompt = micro_doc_prompt(commit)
+    return provider.generate(prompt, prefix=prefix, task="summary").strip()
 
 
 def _recorded_sha(path: Path) -> str | None:
@@ -338,6 +350,7 @@ def _sync_one(
     existing: ExistingDocs | None = None,
     label: str = "specky commit-doc",
     summary: str | None = None,
+    feature_docs: bool = True,
 ) -> list[Path]:
     """History log entry (changelog trail) + feature/workflow reference doc, if this commit
     affects one. The specs/<domain>/<topic>.md docs are the reference; specs/history/ is just
@@ -346,7 +359,14 @@ def _sync_one(
     `existing` lets a multi-commit caller (`sync()`) reuse one walk of specs/ across every
     commit; the single-commit hook path leaves it out. `label` prefixes this commit's output —
     `sync()` passes a `[12/431] abc1234` progress marker. `summary` is the micro-doc when the
-    caller already fetched it (see `_prefetch_summaries`)."""
+    caller already fetched it (see `_prefetch_summaries`).
+
+    `feature_docs=False` writes the history entry and stops. It's for the commits in a run that has
+    just bootstrapped: those docs were written from the working tree at HEAD, which already
+    *contains* every one of these commits, so asking a model to update them from the same commits'
+    diffs is redundant at best. At worst it's destructive — and observably so: on a real run every
+    such update came back as a whole-body rewrite that `lost_content` had to refuse, leaving drafts
+    in `.specky/pending/` for docs that were correct to begin with."""
     from specky.generator import sync_feature_doc
 
     if summary is None:
@@ -355,6 +375,8 @@ def _sync_one(
     record_micro_doc(repo_root, commit, summary)
     print(f"{label}: wrote {history_path}")
     written = [history_path]
+    if not feature_docs:
+        return written
 
     # A doc can be linked without being written — see generator.DocSync. `written` is what gets
     # committed, so a refused or frozen doc stays out of it while the link, which answers "which
@@ -387,6 +409,31 @@ def _prefetch_summaries(
         return {c.sha: pool.submit(generate_micro_doc, c, provider) for c in commits}
 
 
+def _batch_summaries(commits: list[Commit], provider: Provider) -> dict[str, str]:
+    """Every pending commit's micro-doc in one batched request, keyed by sha.
+
+    The micro-doc is the one call in the commit path that batches cleanly: it depends on nothing
+    but its own commit. Classification deliberately cannot — it is fed the running `ExistingDocs`
+    snapshot, and answering a whole backlog against one frozen snapshot is how a run ends up with
+    three docs about one subject (see `_prefetch_summaries`).
+
+    Whole-run rather than per-batch-of-four, because the Batches API's win is per *request*, not
+    per call, and one round trip for 400 commits is the point. Anything that goes wrong returns
+    `{}` and the ordinary concurrent path runs instead.
+    """
+    if not supports_batch(provider, "summary"):
+        print("specky sync: --batch ignored, this provider has no batch API")
+        return {}
+    prompts = {c.sha: micro_doc_prompt(c) for c in commits}
+    print(f"specky sync: sending {len(prompts)} summary requests as one batch")
+    try:
+        answers = provider.generate_batch(prompts, task="summary")
+    except Exception as exc:
+        print(f"specky sync: batch failed ({exc}) — falling back to concurrent calls")
+        return {}
+    return {sha: text.strip() for sha, text in answers.items()}
+
+
 def _call_estimate(commits: int) -> str:
     """Two provider calls per commit (micro-doc + classification), plus a third for each commit
     that turns out to affect a documented feature — hence a range, not a number."""
@@ -413,6 +460,8 @@ def sync(
     dry_run: bool = False,
     assume_yes: bool = False,
     all_branches: bool = False,
+    bootstrap: bool = True,
+    batch: bool = False,
 ) -> list[Path]:
     """Generate a micro-doc + feature/workflow doc update for every commit that doesn't have a
     history entry yet. Idempotent for the history log — safe to re-run any time (e.g. after
@@ -431,17 +480,25 @@ def sync(
     only looks at the newest `SYNC_DEFAULT_DEPTH` commits; pass any one of them to see further
     back (e.g. `--since <first commit>` for the whole history on a fresh adopt).
     """
+    # Imported here rather than at module scope: `bootstrap` imports `generator`, which imports this
+    # module, so a top-level import would be a cycle. Same reason `_sync_one` imports
+    # `sync_feature_doc` inside its body.
+    from specky.bootstrap import bootstrap as run_bootstrap, needs_bootstrap
+
     repo_root = _repo_root()
+    cold = bootstrap and needs_bootstrap(repo_root)
     depth = None if (since or limit or all_branches) else SYNC_DEFAULT_DEPTH
     pending = pending_commits(
         repo_root, since=since, limit=limit, all_branches=all_branches, depth=depth
     )
     total = len(pending)
-    if not pending:
+    if not (pending or cold):
         print("specky sync: already up to date")
         return []
 
     if dry_run:
+        if cold:
+            print("specky sync: no feature docs yet — would bootstrap from the code first")
         print(f"specky sync: {total} commits to document, {_call_estimate(total)}")
         for i, (sha, subject) in enumerate(pending, 1):
             print(f"  [{i}/{total}] {sha[:8]} {subject}")
@@ -450,14 +507,45 @@ def sync(
     _confirm(total, assume_yes)
     provider = load_provider_from_toml(repo_root / "specky.toml", "sync")  # let ConfigError surface
 
+    bootstrapped: list[Path] = []
     try:
         with exclusive(repo_root):
-            written = _document(repo_root, pending, provider, label_prefix="")
+            # Bootstrap first, so the commit walk below classifies into the docs it writes instead
+            # of inventing parallel ones: `_document` loads its own `ExistingDocs` snapshot, and on
+            # a cold repo that list is empty — which is exactly the case the classification prompt
+            # warns about when it calls a second doc on one subject a defect.
+            if cold:
+                print("specky sync: no feature docs yet — writing them from the code first")
+                try:
+                    bootstrapped = run_bootstrap(
+                        repo_root, provider, assume_yes=assume_yes, batch=batch, label="specky sync"
+                    )
+                except Exception as exc:
+                    # Declining the bootstrap confirmation, or a discovery call that failed, must
+                    # not cost the commit walk — that's the part the user actually asked for, and
+                    # it works on a repo with no docs exactly as it did before this existed.
+                    print(f"specky sync: skipping bootstrap ({exc})")
+            # `feature_docs=False` when bootstrap just ran: see `_sync_one`. These commits are
+            # already in the docs it wrote, so this pass only owes them a history entry — which also
+            # takes the cold-start path from ~2.5 provider calls per commit down to one.
+            written = _document(
+                repo_root,
+                pending,
+                provider,
+                label_prefix="",
+                feature_docs=not bootstrapped,
+                batch=batch,
+            )
     except LockBusy as exc:
         print(f"specky sync: {exc}")
         return []
+    # Counted separately, because they are not the same claim: bootstrap's files came from the code
+    # and `written`'s from the commit walk, and "12 files across 5 commits" would be a lie about
+    # where ten of them came from.
+    if bootstrapped:
+        print(f"specky sync: wrote {len(bootstrapped)} files from the code")
     print(f"specky sync: wrote {len(written)} files across {total} commits")
-    return written
+    return bootstrapped + written
 
 
 def _document(
@@ -465,6 +553,8 @@ def _document(
     pending: list[tuple[str, str]],
     provider: Provider,
     label_prefix: str = "",
+    feature_docs: bool = True,
+    batch: bool = False,
 ) -> list[Path]:
     """Work through a pending list in commit order, batching the micro-doc calls.
 
@@ -478,11 +568,17 @@ def _document(
     # into it, so commit 400 is told about the doc commit 3 created.
     existing = ExistingDocs.load(repo_root)
 
+    # With `--batch`, every commit's summary is fetched up front in one request; the per-chunk
+    # `_prefetch_summaries` below then has nothing left to ask for and the loop is unchanged.
+    batched: dict[str, str] = {}
+    if batch:
+        batched = _batch_summaries([_commit_info(sha) for sha, _ in pending], provider)
+
     written: list[Path] = []
     for start in range(0, total, SYNC_CONCURRENCY):
-        batch = [_commit_info(sha) for sha, _ in pending[start : start + SYNC_CONCURRENCY]]
-        summaries = _prefetch_summaries(batch, provider)
-        for offset, commit in enumerate(batch):
+        chunk = [_commit_info(sha) for sha, _ in pending[start : start + SYNC_CONCURRENCY]]
+        summaries = _prefetch_summaries([c for c in chunk if c.sha not in batched], provider)
+        for offset, commit in enumerate(chunk):
             label = f"{label_prefix}[{start + offset + 1}/{total}] {commit.sha[:8]}"
             try:
                 written += _sync_one(
@@ -491,7 +587,8 @@ def _document(
                     provider,
                     existing,
                     label=label,
-                    summary=summaries[commit.sha].result(),
+                    summary=batched.get(commit.sha) or summaries[commit.sha].result(),
+                    feature_docs=feature_docs,
                 )
             except Exception as exc:
                 print(f"{label}: skipped ({exc})")
@@ -816,17 +913,20 @@ def main(rewritten: bool = False) -> None:
         # stages exactly these paths, so the fire it triggers finds nothing left to do.
         ours = _head_subject(repo_root).startswith(_AUTO_COMMIT_MARKER)
 
-        batch: list[tuple[str, str]] = []
+        # `todo`, not `batch`: `_document` now takes a keyword argument called `batch` meaning
+        # "use the Batch API", and a local of the same name meaning "the commits to document" is
+        # one keyword-ification away from a hook that silently starts batching.
+        todo: list[tuple[str, str]] = []
         too_old: list[tuple[str, str]] = []
         if not ours:
             pending = pending_commits(repo_root, depth=HOOK_CATCHUP_DEPTH)
-            batch, too_old = pending[:HOOK_CATCHUP_MAX], pending[HOOK_CATCHUP_MAX:]
+            todo, too_old = pending[:HOOK_CATCHUP_MAX], pending[HOOK_CATCHUP_MAX:]
 
-        if not (batch or written or removed or _read_deferred(repo_root)):
+        if not (todo or written or removed or _read_deferred(repo_root)):
             return  # nothing to document and nothing owed: don't even take the lock
 
         provider = None
-        if batch:
+        if todo:
             try:
                 provider = load_provider_from_toml(repo_root / "specky.toml", "commit-doc")
             except ConfigError as exc:
@@ -836,7 +936,7 @@ def main(rewritten: bool = False) -> None:
             with exclusive(repo_root):
                 if provider is not None:
                     written += _document(
-                        repo_root, batch, provider, label_prefix="specky commit-doc "
+                        repo_root, todo, provider, label_prefix="specky commit-doc "
                     )
                 # Inside the lock: the commit below fires this hook again, and the nested fire
                 # finding the lock held is what stops two of them interleaving.

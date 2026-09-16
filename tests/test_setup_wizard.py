@@ -96,7 +96,7 @@ def test_validation_happens_before_the_file_is_written(tmp_path, monkeypatch):
     """A provider that doesn't work must not leave a specky.toml claiming it does."""
 
     class Broken:
-        def generate(self, _prompt):
+        def generate(self, _prompt, *, prefix: str = "", task: str = ""):
             raise RuntimeError("ANTHROPIC_API_KEY is not set in the environment")
 
     monkeypatch.setattr(setup_wizard, "load_provider", lambda _config: Broken())
@@ -172,7 +172,7 @@ def test_the_interview_is_still_the_default(tmp_path, monkeypatch):
 
 
 class _OkProvider:
-    def generate(self, _prompt):
+    def generate(self, _prompt, *, prefix: str = "", task: str = ""):
         return "ok"
 
 

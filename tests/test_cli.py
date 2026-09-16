@@ -70,7 +70,7 @@ def test_cost_prints_a_report_and_clears_the_cache(tmp_repo, monkeypatch, capsys
     from specky.ai_provider import CachingProvider
 
     class Fake:
-        def generate(self, prompt: str) -> str:
+        def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
             return "an answer"
 
     CachingProvider(Fake(), tmp_repo, model="test-model", command="sync").generate("why?")

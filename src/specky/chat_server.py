@@ -436,7 +436,9 @@ def answer_question(
         # previous question holds the words it left out, so ask the index again with those.
         context = retrieve_context(repo_root, f"{history[-1].question} {question}", scope=scope)
     provider = load_provider_from_toml(repo_root / "specky.toml", "serve")
-    answer = provider.generate(_build_prompt(question, context, history, intent)).strip()
+    answer = provider.generate(
+        _build_prompt(question, context, history, intent), task="chat"
+    ).strip()
     # Imported here, not at module scope: html_render imports DEFAULT_PORT from this module, so a
     # top-level import of anything that reaches it would close a cycle (same reason `_search`
     # imports the indexer inside itself).

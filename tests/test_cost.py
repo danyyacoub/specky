@@ -21,7 +21,7 @@ class Counter:
     def __init__(self) -> None:
         self.calls = 0
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
         self.calls += 1
         return f"answer {self.calls}"
 
@@ -94,7 +94,7 @@ def test_the_cache_evicts_its_oldest_entries_to_stay_bounded(tmp_repo, monkeypat
     monkeypatch.setattr("specky.ai_provider.PROMPT_CACHE_MAX_CHARS", 20)
 
     class Big:
-        def generate(self, prompt: str) -> str:
+        def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
             return "x" * 8
 
     provider = CachingProvider(Big(), tmp_repo, model="test-model")

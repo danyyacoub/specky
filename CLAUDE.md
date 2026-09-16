@@ -23,6 +23,12 @@ file isn't. Full behavior docs are indexed at [specs/MODULES.md](specs/MODULES.m
 `--help` won't tell you:
 
 - `specky check` needs `specky index` to have run first.
+- `specky bootstrap` is the only command that reads source code; everything else reads git. It runs
+  automatically inside `specky sync` on a repo with no feature docs yet (`--no-bootstrap` opts out).
+- `Provider.generate(prompt, *, prefix, task)` — `prefix` is the stable half of a prompt (sent as a
+  cached system block), `task` picks the per-task model. A new prompt gets a `prefix` only if it is
+  byte-identical across calls; anything per-call leaking in makes every call a cache miss.
+- `--batch` is Anthropic-only and asynchronous. Never reachable from a git hook, by design.
 - `specky commit-doc [--rewritten]` is hook-only — not for manual use
   ([documentation/auto-commit-docs.md](specs/documentation/auto-commit-docs.md)).
 - `specky pr-comment` prints to stdout, never posts — pipe it to `gh pr comment`.

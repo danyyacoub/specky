@@ -204,6 +204,32 @@ def _install_git_hook(args: argparse.Namespace) -> None:
         print(f"Installed {path}")
 
 
+def _bootstrap(args: argparse.Namespace) -> None:
+    from specky.ai_provider import load_provider_from_toml
+    from specky.bootstrap import MAX_DOMAINS, bootstrap
+    from specky.db import repo_root
+    from specky.lock import LockBusy, exclusive
+
+    root = repo_root()
+    provider = load_provider_from_toml(root / "specky.toml", "bootstrap")
+    try:
+        # Taken here rather than inside `bootstrap()`: `sync` calls the same function while already
+        # holding this lock, and `flock(LOCK_EX|LOCK_NB)` refuses a second acquisition even from the
+        # process that holds it — so the lock belongs to the entry points, not the work.
+        with exclusive(root):
+            bootstrap(
+                root,
+                provider,
+                max_domains=args.max_domains or MAX_DOMAINS,
+                scope=args.scope,
+                assume_yes=args.yes,
+                dry_run=args.dry_run,
+                batch=args.batch,
+            )
+    except LockBusy as exc:
+        print(f"specky bootstrap: {exc}")
+
+
 def _sync(args: argparse.Namespace) -> None:
     from specky.commit_doc import sync
 
@@ -215,6 +241,8 @@ def _sync(args: argparse.Namespace) -> None:
         dry_run=args.dry_run,
         assume_yes=args.yes,
         all_branches=args.all_branches,
+        bootstrap=not args.no_bootstrap,
+        batch=args.batch,
     )
 
 
@@ -495,10 +523,56 @@ def build_parser() -> argparse.ArgumentParser:
         "Install the post-commit, post-merge and post-rewrite doc hooks",
         _install_git_hook,
     )
+    bootstrap_cmd = command(
+        "bootstrap",
+        "Write a repo's first docs by reading its code, not its commits (idempotent)",
+        _bootstrap,
+    )
+    bootstrap_cmd.add_argument(
+        "scope",
+        nargs="?",
+        metavar="PATH",
+        help="Only look at this subtree, e.g. src/billing (default: the whole repo)",
+    )
+    # Default resolved in `_bootstrap`, not here: every other subcommand in this file imports its
+    # module lazily inside its handler so `specky --help` doesn't pay for the whole package, and
+    # naming `bootstrap.MAX_DOMAINS` at parser-build time would import it on every invocation.
+    bootstrap_cmd.add_argument(
+        "--max-domains",
+        type=int,
+        metavar="N",
+        help="Document at most N domains this run; the rest are reported and picked up by "
+        "re-running (default: 25)",
+    )
+    bootstrap_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List the domains it would document, then stop (still costs the discovery call)",
+    )
+    bootstrap_cmd.add_argument(
+        "--yes", action="store_true", help="Skip the confirmation before generating"
+    )
+    bootstrap_cmd.add_argument(
+        "--batch",
+        action="store_true",
+        help="Send every domain's doc in one Message Batches request: half price, but "
+        "asynchronous (Anthropic provider only)",
+    )
     sync_cmd = command(
         "sync",
         "Backfill micro-docs for any commit that doesn't have one yet (idempotent)",
         _sync,
+    )
+    sync_cmd.add_argument(
+        "--batch",
+        action="store_true",
+        help="Send the commit summaries in one Message Batches request: half price, but "
+        "asynchronous (Anthropic provider only)",
+    )
+    sync_cmd.add_argument(
+        "--no-bootstrap",
+        action="store_true",
+        help="On a repo with no docs yet, don't offer to write them from the code first",
     )
     sync_cmd.add_argument(
         "--since",

@@ -25,9 +25,15 @@ class FakeProvider:
         self._replies = [replies] if isinstance(replies, str) else list(replies)
         self._single = isinstance(replies, str)
         self.prompts: list[str] = []
+        self.prefixes: list[str] = []
 
-    def generate(self, prompt: str) -> str:
-        self.prompts.append(prompt)
+    def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
+        # `prompts` records the whole logical prompt — prefix first, exactly as a provider renders
+        # it — so a test asserting that some instruction reached the model doesn't have to know
+        # which half of the call it now travels in. `prefixes` is there for the tests that care
+        # about the split itself.
+        self.prompts.append(prefix + prompt)
+        self.prefixes.append(prefix)
         if self._single:
             return self._replies[0]
         if not self._replies:
@@ -48,16 +54,31 @@ class RoutingProvider:
         summary: str = "A change happened.",
         classification: str = '{"skip": true}',
         doc: str = "# Doc\n\n## What It Does\nThings.\n",
+        discovery: str = '{"product": {}, "domains": []}',
+        glossary: str = '{"terms": []}',
     ) -> None:
         self._summary, self._classification, self._doc = summary, classification, doc
+        self._discovery, self._glossary = discovery, glossary
         self._lock = threading.Lock()
         self.prompts: list[str] = []
+        self.prefixes: list[str] = []
 
-    def generate(self, prompt: str) -> str:
+    def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
+        # Routing reads the whole logical prompt, not just the volatile half: the instructions that
+        # identify which kind of call this is now travel in `prefix`.
+        prompt = prefix + prompt
         with self._lock:
             self.prompts.append(prompt)
+            self.prefixes.append(prefix)
         if prompt.startswith("Summarize what changed"):
             return self._summary
+        # Both bootstrap prompts are matched before the generic JSON check below, which the
+        # glossary one would otherwise satisfy — it asks for a JSON object in the same words the
+        # classifier does.
+        if prompt.startswith("You are reading a codebase"):
+            return self._discovery
+        if "the shared vocabulary" in prompt:
+            return self._glossary
         if "Respond with ONLY a JSON object" in prompt:
             return self._classification
         return self._doc

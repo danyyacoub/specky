@@ -63,7 +63,8 @@ Details: [doc-adoption.md](specs/documentation/doc-adoption.md).
 ## Use
 
 ```bash
-specky sync [--dry-run] [--since REV|DATE] [--limit N] [--all-branches]  # backfill doc history
+specky bootstrap [PATH] [--max-domains N] [--dry-run] [--yes] [--batch]  # first docs, from the code
+specky sync [--dry-run] [--since REV|DATE] [--limit N] [--all-branches] [--no-bootstrap] [--batch]
 specky index                    # rebuild .specky/index.db (FTS5) from specs/ + git log
 specky search "<query>"         # keyword search
 specky render-html               # static site -> .specky/site/index.html
@@ -81,8 +82,30 @@ Each commit hook fire documents up to 5 of the newest 20 undocumented commits (b
 a follow-up commit. Amend/rebase renames the affected history docs instead of duplicating them.
 Nothing commits mid-rebase/cherry-pick; those paths queue in `.specky/deferred-docs`.
 
-For a whole domain at once instead of commit-by-commit: `/document-domain billing` runs the bundled
-[`document-domain`](skills/document-domain/SKILL.md) skill.
+On a repo with no docs yet, `specky sync` reads the **code** first rather than the commit log: one
+call works out what the product is and which domains it has, then one call per domain writes its
+`specs/<domain>/<topic>.md`, plus `PRODUCT.md` and `GLOSSARY.md`. Only then does it walk the last 10
+commits, which by then are already reflected in what it just wrote — so they only get their
+`specs/history/` entry. Cost is O(domains), not O(commits): roughly 2 + N calls, against 2–3 *per
+commit* for the `--since <first commit>` backfill that was the only broad-coverage option before.
+
+It is idempotent and resumable with no state on disk: a domain that already has a doc is skipped,
+`--max-domains` bounds one run, and re-running picks up the rest. `specky bootstrap` runs the same
+pass on demand — after adding a module, or scoped to a subtree (`specky bootstrap src/billing`).
+`specky sync --no-bootstrap` opts out. Every subsequent run is the incremental commit-driven path,
+unchanged.
+
+`--batch` on either command sends the independent calls — every domain's doc, or every commit's
+summary — as one Message Batches request at half the per-token price. It is asynchronous (specky
+waits up to an hour, then leaves the batch running and tells you to re-run; whatever landed is
+already cached), so it is the right trade for a backfill and the wrong one for anything you're
+waiting on. Anthropic provider only; elsewhere it says so and runs normally. Only calls that
+depend on nothing but their own input are batched — classification stays serial and in commit
+order, because it's fed the running list of docs and answering a whole backlog against one frozen
+snapshot is how a run ends up with three docs about one subject.
+
+For a whole domain at once with an agent that can actually read the tree: `/document-domain billing`
+runs the bundled [`document-domain`](skills/document-domain/SKILL.md) skill.
 
 Add `owner: <name/team/channel>` to a generated doc's frontmatter to say who to ask about it — shown
 in the viewer as "Who to ask", never overwritten by regeneration.
@@ -128,10 +151,25 @@ model = "claude-haiku-4-5"
 api_key_env = "ANTHROPIC_API_KEY"   # env var name, never the key itself
 max_tokens = 4096
 cache = true                        # memoize responses in the index; see `specky cost`
+
+# Optional: point one kind of call at a different model. Everything else uses `model`.
+discovery_model = "claude-sonnet-5"  # bootstrap's one whole-repo call — the hardest question
+                                     # specky asks, asked once, and it shapes every doc after it
 ```
 
-`openai-compatible` also needs `base_url`. `command` needs `command` (e.g. `"claude -p"`), no key.
-Cache: keyed on model, max 20 MB, oldest evicted first.
+`openai-compatible` also needs `base_url`. `command` needs `command` (e.g. `"claude -p"`), no key —
+and can't take per-task models, since it has no model to swap. Tasks: `summary`, `classify`, `doc`,
+`discovery`, `glossary`, `tag`, `chat`; an unknown `<task>_model` is a config error, not a no-op.
+`specky doctor` prints the routing.
+
+Cache: keyed on model **and** prompt, max 20 MB, oldest evicted first. That is specky's own
+memoization — an identical re-run costs nothing. Separately, with the `anthropic` provider the
+stable half of each prompt (the classification instructions plus the list of every doc that
+already exists) is sent as a cached prefix, which the API bills at a tenth of the input rate after
+the first call. That half is resent on every commit and grows with the doc set, so it is the
+largest thing specky pays for on a mature repo: ~73% off the classification bill at 60 docs, ~84%
+at 300. Below a model's minimum cacheable length nothing is cached and nothing is charged extra, so
+small repos are unaffected either way.
 
 ```toml
 # pyproject.toml — prefer over specky.toml for anything CI must see (specky.toml is gitignored)

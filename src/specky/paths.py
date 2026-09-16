@@ -99,3 +99,15 @@ def history_prefix(repo_root: Path) -> str:
 
 def modules_index(repo_root: Path) -> Path:
     return docs_root(repo_root) / "MODULES.md"
+
+
+def product_doc(repo_root: Path) -> Path:
+    """`<repo>/specs/PRODUCT.md` — what the product is, the framing every other doc is written
+    against."""
+    return docs_root(repo_root) / "PRODUCT.md"
+
+
+def glossary(repo_root: Path) -> Path:
+    """`<repo>/specs/GLOSSARY.md` — the shared vocabulary, parsed back by the viewer for term
+    auto-linking (`html_render.load_glossary`)."""
+    return docs_root(repo_root) / "GLOSSARY.md"

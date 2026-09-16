@@ -7,7 +7,7 @@ from specky.commit_doc import Commit
 from specky.generator import (
     PENDING_DIR,
     _parse_type_and_tags,
-    _strip_code_fence,
+    strip_code_fence,
     classify_change,
     lost_content,
     merge_sections,
@@ -27,9 +27,9 @@ def _commit(message: str = "feat: add refunds", diff: str = "+ refund code") -> 
 
 
 def test_strip_code_fence():
-    assert _strip_code_fence("```json\n{}\n```") == "{}"
-    assert _strip_code_fence("```\ntext\n```") == "text"
-    assert _strip_code_fence("  bare  ") == "bare"
+    assert strip_code_fence("```json\n{}\n```") == "{}"
+    assert strip_code_fence("```\ntext\n```") == "text"
+    assert strip_code_fence("  bare  ") == "bare"
 
 
 def test_parse_type_and_tags_defaults_to_feature():
@@ -537,3 +537,39 @@ def test_backfill_tags_skips_already_tagged_and_meta_domains(tmp_repo, write_doc
     assert [p.name for p in updated] == ["refund-flow.md"]
     assert "type: workflow" in (tmp_repo / "specs" / "billing" / "refund-flow.md").read_text()
     assert len(provider.prompts) == 1
+
+
+# --- the cacheable split ----------------------------------------------------------------------
+
+
+def test_the_classification_preamble_is_identical_for_every_commit(tmp_repo):
+    """The whole point of the split: the instructions and the doc list are the same for every
+    commit in a run, so they can be sent once and cached. If a commit's own text leaked into the
+    prefix, every call would be a cache miss and the optimization would silently do nothing."""
+    from specky.generator import ExistingDocs, classify_prompt
+
+    existing = ExistingDocs(tags={"billing"}, purposes={"billing/refunds": "Issue refunds"})
+    one = _commit("adds a refund cap", "diff one")
+    two = _commit("renames a variable", "diff two")
+
+    assert classify_prompt(one, existing)[0] == classify_prompt(two, existing)[0]
+    assert classify_prompt(one, existing)[1] != classify_prompt(two, existing)[1]
+
+
+def test_the_classification_prefix_carries_the_doc_list_and_the_commit_half_does_not(tmp_repo):
+    from specky.generator import ExistingDocs, classify_prompt
+
+    existing = ExistingDocs(tags={"billing"}, purposes={"billing/refunds": "Issue refunds"})
+    prefix, volatile = classify_prompt(_commit("a change", "the diff"), existing)
+
+    assert "billing/refunds" in prefix
+    assert "the diff" in volatile and "the diff" not in prefix
+
+
+def test_classify_sends_the_prefix_separately(tmp_repo):
+    from specky.generator import ExistingDocs, classify_change
+
+    provider = FakeProvider('{"skip": true}')
+    classify_change(tmp_repo, _commit("a change", "the diff"), provider, ExistingDocs())
+
+    assert provider.prefixes[0], "the stable half must travel as `prefix`, not inside the prompt"

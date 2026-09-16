@@ -306,10 +306,10 @@ def test_one_failing_commit_does_not_abandon_the_rest(in_repo, monkeypatch, caps
     _commit(in_repo, "fine")
 
     class HalfBroken(RoutingProvider):
-        def generate(self, prompt: str) -> str:
+        def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
             if "explodes" in prompt:
                 raise RuntimeError("provider said no")
-            return super().generate(prompt)
+            return super().generate(prompt, prefix=prefix, task=task)
 
     _use_provider(monkeypatch, HalfBroken())
     commit_doc.sync()
@@ -362,3 +362,157 @@ def test_a_non_utf8_file_in_the_diff_does_not_abort_the_run(in_repo, monkeypatch
     commit_doc.sync()
 
     assert sha[:8] in _history(in_repo)  # the run reached this commit instead of dying on it
+
+
+# --- cold start: bootstrapping from the code before walking commits ------------------------------
+
+
+def _source(repo: Path, rel: str, body: str = "def run():\n    return 1\n") -> None:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", f"add {rel}")
+
+
+def test_a_cold_repo_bootstraps_before_walking_commits(in_repo, monkeypatch, capsys):
+    """The whole point of the ordering: the commit walk must classify into the docs bootstrap
+    wrote, not invent parallel ones — on a cold repo `ExistingDocs` is empty, which is exactly the
+    case the classification prompt calls a defect."""
+    import json
+
+    _source(in_repo, "src/billing/refund.py")
+    provider = RoutingProvider(
+        discovery=json.dumps(
+            {
+                "product": {"what_it_is": "Refunds things."},
+                "domains": [
+                    {
+                        "domain": "billing",
+                        "topic": "refunds",
+                        "purpose": "Issue refunds",
+                        "type": "feature",
+                        "tags": ["billing"],
+                        "paths": ["src/billing/refund.py"],
+                    }
+                ],
+            }
+        ),
+    )
+    _use_provider(monkeypatch, provider)
+
+    commit_doc.sync(assume_yes=True)
+
+    assert (in_repo / "specs" / "billing" / "refunds.md").exists()
+    assert "writing them from the code first" in capsys.readouterr().out
+
+
+def test_a_warm_repo_never_bootstraps(in_repo, monkeypatch, capsys, write_doc):
+    _source(in_repo, "src/billing/refund.py")
+    write_doc("billing/refunds.md", "# Billing\n", {"type": "feature", "tags": ["billing"]})
+    provider = RoutingProvider()
+    _use_provider(monkeypatch, provider)
+
+    commit_doc.sync(assume_yes=True)
+
+    assert "writing them from the code first" not in capsys.readouterr().out
+    assert not any(p.startswith("You are reading a codebase") for p in provider.prompts)
+
+
+def test_no_bootstrap_skips_the_offer(in_repo, monkeypatch, capsys):
+    _source(in_repo, "src/billing/refund.py")
+    provider = RoutingProvider()
+    _use_provider(monkeypatch, provider)
+
+    commit_doc.sync(assume_yes=True, bootstrap=False)
+
+    assert "writing them from the code first" not in capsys.readouterr().out
+
+
+def test_bootstrapped_commits_get_history_only(in_repo, monkeypatch):
+    """Those commits are already in the docs bootstrap just wrote from the working tree, so asking
+    a model to update the same docs from the same diffs is redundant — and in practice came back as
+    whole-body rewrites that `lost_content` refused, leaving pending drafts for correct docs."""
+    import json
+
+    _source(in_repo, "src/billing/refund.py")
+    provider = RoutingProvider(
+        discovery=json.dumps(
+            {
+                "product": {"what_it_is": "Refunds things."},
+                "domains": [
+                    {
+                        "domain": "billing",
+                        "topic": "refunds",
+                        "purpose": "Issue refunds",
+                        "type": "feature",
+                        "tags": ["billing"],
+                        "paths": ["src/billing/refund.py"],
+                    }
+                ],
+            }
+        ),
+    )
+    _use_provider(monkeypatch, provider)
+
+    commit_doc.sync(assume_yes=True)
+
+    assert _history(in_repo), "history entries are still written"
+    assert not any("decide whether it changes user-facing" in p for p in provider.prompts), (
+        "no commit should have been classified on the bootstrap run"
+    )
+    assert not (in_repo / ".specky" / "pending").exists()
+
+
+def test_batch_fetches_every_summary_in_one_request(in_repo, monkeypatch):
+    """The micro-doc is the one call in the commit path that batches cleanly — it depends on
+    nothing but its own commit. Classification deliberately cannot."""
+    shas = [_commit(in_repo, f"commit {i}") for i in range(5)]
+
+    class Batching(RoutingProvider):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.batches = []
+
+        def generate_batch(self, prompts, task: str = ""):
+            self.batches.append(prompts)
+            return {sha: "batched summary" for sha in prompts}
+
+    provider = Batching()
+    _use_provider(monkeypatch, provider)
+
+    commit_doc.sync(assume_yes=True, batch=True, bootstrap=False)
+
+    assert len(provider.batches) == 1, "one request for the whole run, not one per chunk of four"
+    assert len(provider.batches[0]) == len(shas) + 1  # + the fixture's initial commit
+    doc = next((in_repo / "specs" / "history").glob("*.md")).read_text()
+    assert "batched summary" in doc
+
+
+def test_batch_falls_back_when_the_provider_has_none(in_repo, monkeypatch, capsys):
+    _commit(in_repo, "second")
+    _use_provider(monkeypatch, RoutingProvider())
+
+    commit_doc.sync(assume_yes=True, batch=True, bootstrap=False)
+
+    assert _history(in_repo), "the commits are still documented"
+    assert "--batch ignored" in capsys.readouterr().out
+
+
+def test_each_kind_of_call_reuses_one_stable_prefix(in_repo, monkeypatch):
+    """A run makes two kinds of call, each with its own prefix, and each prefix must be
+    byte-identical across every commit — a prefix cache is a literal prefix match, so anything
+    commit-specific leaking into it turns every call into a miss and the saving silently vanishes."""
+    for i in range(3):
+        _commit(in_repo, f"commit {i}")
+    provider = RoutingProvider()
+    _use_provider(monkeypatch, provider)
+
+    commit_doc.sync(assume_yes=True, bootstrap=False)
+
+    prefixes = [p for p in provider.prefixes if p]
+    summary = [p for p in prefixes if p.startswith("Summarize what changed")]
+    classify = [p for p in prefixes if p.startswith("You maintain a set of")]
+    assert len(set(summary)) == 1 and len(summary) == 4  # 3 commits + the fixture's initial one
+    assert len(set(classify)) == 1 and len(classify) == 4
+    assert len(set(prefixes)) == 2, "and no third, per-commit prefix crept in"

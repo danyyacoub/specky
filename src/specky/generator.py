@@ -74,9 +74,19 @@ Respond with ONLY a JSON object, no other text, matching exactly one of these sh
 
 Docs that already exist (domain/topic — what it covers):
 {existing_docs}
-""" + TAG_GUIDANCE + """
+""" + TAG_GUIDANCE
 
-Commit message:
+# Split in two on purpose, and this is the boundary that matters most in specky. Everything above
+# is identical for every commit in a run — the instructions, and the list of every doc that already
+# exists. Everything below changes per commit. A run over 400 commits therefore resends the same
+# several-kilobyte preamble 400 times, and on a repo with 300 docs that preamble is the largest
+# single thing specky pays for: the classification bill is O(commits x docs).
+#
+# So the top half is handed to `Provider.generate` as `prefix`, which providers that support prompt
+# caching bill at a tenth of the input rate after the first call. Caching is a literal prefix match,
+# so the commit-specific half has to come strictly after — which is how this prompt was already
+# laid out, because it also reads better that way.
+CLASSIFY_COMMIT = """Commit message:
 {message}
 
 Diff (may be truncated):
@@ -137,12 +147,12 @@ class Classification:
     tags: list[str] = field(default_factory=list)
 
 
-def _strip_code_fence(text: str) -> str:
+def strip_code_fence(text: str) -> str:
     match = re.match(r"^```[a-zA-Z]*\n(.*)\n```$", text.strip(), re.DOTALL)
     return match.group(1) if match else text.strip()
 
 
-def _leading_json_object(text: str) -> dict | None:
+def leading_json_object(text: str) -> dict | None:
     """The JSON object `text` starts with, ignoring anything after it — or None if it starts with
     something else.
 
@@ -230,18 +240,29 @@ def _parse_type_and_tags(data: dict) -> tuple[str, list[str]]:
     return doc_type, tags
 
 
+def classify_prompt(commit: Commit, existing: ExistingDocs) -> tuple[str, str]:
+    """`(cacheable prefix, this commit's half)` — see the note above `CLASSIFY_COMMIT`.
+
+    Split out so the batch path can build the same pair for many commits without going through
+    `classify_change`, which answers one commit at a time.
+    """
+    return (
+        CLASSIFY_PROMPT.format(
+            existing_tags=existing.tags_line(), existing_docs=existing.docs_block()
+        ),
+        CLASSIFY_COMMIT.format(
+            message=commit.message, diff=commit.diff[:DIFF_TRUNCATE_CHARS]
+        ),
+    )
+
+
 def classify_change(
     repo_root: Path, commit: Commit, provider: Provider, existing: ExistingDocs | None = None
 ) -> Classification:
     existing = existing if existing is not None else ExistingDocs.load(repo_root)
-    prompt = CLASSIFY_PROMPT.format(
-        message=commit.message,
-        diff=commit.diff[:DIFF_TRUNCATE_CHARS],
-        existing_tags=existing.tags_line(),
-        existing_docs=existing.docs_block(),
-    )
-    raw = _strip_code_fence(provider.generate(prompt))
-    data = _leading_json_object(raw)
+    prefix, prompt = classify_prompt(commit, existing)
+    raw = strip_code_fence(provider.generate(prompt, prefix=prefix, task="classify"))
+    data = leading_json_object(raw)
     if data is None:
         return Classification(skip=True, reason=f"could not parse classification response: {raw!r}")
 
@@ -400,8 +421,8 @@ def update_feature_doc(
     )
     # Frontmatter off first, so an echo of the block the doc it was shown starts with doesn't hide
     # the envelope behind it; the whole-body fallback below wants it gone either way.
-    _, raw = frontmatter.parse(_strip_code_fence(provider.generate(prompt)))
-    parsed = _leading_json_object(raw)
+    _, raw = frontmatter.parse(strip_code_fence(provider.generate(prompt, task="doc")))
+    parsed = leading_json_object(raw)
     if parsed is not None and isinstance(parsed.get("sections"), dict):
         return merge_sections(existing_content, parsed["sections"])
     # Not the JSON contract: read it as a whole replacement body.
@@ -431,7 +452,7 @@ def generate_feature_doc(
     # from this run's classification, and a second block would land on top of it. It happens for
     # a concrete reason — a commit that adds or edits a doc under specs/ carries that doc's own
     # frontmatter in its diff, and the model copies what it sees there into its output.
-    _, body = frontmatter.parse(_strip_code_fence(provider.generate(prompt)))
+    _, body = frontmatter.parse(strip_code_fence(provider.generate(prompt, task="doc")))
     return body + "\n"
 
 
@@ -541,7 +562,7 @@ class DocSync:
     note: str
 
 
-def _stage_pending(repo_root: Path, domain: str, topic: str, content: str) -> Path:
+def stage_pending(repo_root: Path, domain: str, topic: str, content: str) -> Path:
     """Park a refused draft where a human can read it, out of git's reach (see `PENDING_DIR`)."""
     path = repo_root / PENDING_DIR / domain / f"{topic}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -595,8 +616,13 @@ def sync_feature_doc(
     # supported it — the hook runs on every commit, so it would silently strip the line within a
     # day of someone adding it. `origin` is `specky adopt`'s pointer back to where a doc used to
     # live, which is the one thing a reader needs to resolve a stale link somebody else wrote.
+    # `sources` joins them for a different reason than the rest: it isn't hand-written, it's what
+    # `bootstrap.write_domain_doc` recorded about which files a doc was written from, and it's the
+    # only thing giving a bootstrapped repo `specky check` coverage. The AI is never asked for it,
+    # so without this line the first commit-driven update of a bootstrapped doc would silently drop
+    # that coverage — within a day, since the hook runs on every commit.
     meta: dict[str, str | list[str]] = {"type": classification.doc_type, "tags": classification.tags}
-    for key in ("related", "owner", "authored", "origin"):
+    for key in ("related", "owner", "authored", "origin", "sources"):
         if existing_meta.get(key):
             meta[key] = existing_meta[key]
     content = frontmatter.render(meta, body)
@@ -608,7 +634,7 @@ def sync_feature_doc(
             named = ", ".join(f"`{flag}`" for flag in invented)
             problem = f"it names {named}, which nothing in this repo accepts"
     if problem:
-        pending = _stage_pending(repo_root, classification.domain, classification.topic, content)
+        pending = stage_pending(repo_root, classification.domain, classification.topic, content)
         return DocSync(
             doc_path,
             False,
@@ -668,7 +694,7 @@ def backfill_tags(repo_root: Path, provider: Provider) -> list[Path]:
         prompt = TAG_PROMPT.format(
             title=title, content=body[:DIFF_TRUNCATE_CHARS], existing_tags=existing.tags_line()
         )
-        data = _leading_json_object(_strip_code_fence(provider.generate(prompt)))
+        data = leading_json_object(strip_code_fence(provider.generate(prompt, task="tag")))
         if data is None:
             continue
 
