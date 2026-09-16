@@ -56,9 +56,11 @@ def _escape(value: str) -> str:
 
 
 def _render_toml(config: dict, docs_root: str | None = None) -> str:
+    """`docs_root` is the *override*, or `None` to record the default — either way the `[docs]`
+    table is always written, so specky.toml states plainly which tree it's using rather than
+    leaving a reader to know the default by heart."""
     lines = ["[ai]"] + [f'{key} = "{_escape(value)}"' for key, value in config.items()]
-    if docs_root:
-        lines += ["", "[docs]", f'root = "{_escape(docs_root)}"']
+    lines += ["", "[docs]", f'root = "{_escape(docs_root or DEFAULT_DOCS_ROOT)}"']
     return "\n".join(lines) + "\n"
 
 

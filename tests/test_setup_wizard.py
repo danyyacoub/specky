@@ -116,6 +116,14 @@ def test_docs_root_flag_writes_the_docs_table(tmp_path):
     assert 'root = "documentation"' in body, "trailing slash should be tidied away"
 
 
+def test_the_default_docs_root_is_recorded_too(tmp_path):
+    """No override, no collision — still spelled out, so specky.toml states which tree it's using
+    rather than leaving the default to be known by heart."""
+    body = _config(tmp_path, assume_yes=True, **NO_VALIDATE)
+
+    assert 'root = "specs"' in body
+
+
 @pytest.mark.parametrize("bad", ["/etc/specs", "../outside", "docs/../../outside"])
 def test_a_docs_root_outside_the_repo_is_refused(tmp_path, bad):
     """Rejected rather than silently defaulted: an absolute path stripped of its slashes reads as an
@@ -141,7 +149,7 @@ def test_a_colliding_docs_root_is_reported_and_kept(tmp_path):
     message = "\n".join(printed)
     assert "openapi.yaml" in message
     assert "--docs-root" in message
-    assert "[docs]" not in (tmp_path / "specky.toml").read_text()
+    assert 'root = "specs"' in (tmp_path / "specky.toml").read_text()
 
 
 # --- the interview still works -------------------------------------------------------------
