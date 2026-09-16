@@ -3,7 +3,7 @@
 Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 
 The engine's own behavior is documented per feature, in the sections below — Documentation,
-Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. The
+Cli, Ai, Docs, Chat, Search, Rendering, Integration — rather than per module in `src/specky/`. The
 `document-domain` skill is documented in place, in
 [skills/document-domain/SKILL.md](../skills/document-domain/SKILL.md).
 
@@ -33,6 +33,15 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | [cli/export.md](cli/export.md) | Export documentation as single-page HTML, PDF, or Confluence storage format for sharing and archival |
 | [cli/init.md](cli/init.md) | Configure specky with interactive interview or command-line flags for CI and automation environments |
 | [cli/bootstrap.md](cli/bootstrap.md) | Write a repo's first feature and workflow documentation from source code instead of commit history |
+
+## Ai
+
+How specky talks to the configured AI provider, and what that costs. Cross-cutting: every
+command that calls a model goes through this layer.
+
+| Doc | Purpose |
+|---|---|
+| [ai/provider-cost-controls.md](ai/provider-cost-controls.md) | Prompt prefix caching, batched requests, and per-task model routing |
 
 ## Docs
 
