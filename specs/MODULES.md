@@ -32,6 +32,7 @@ Cli, Docs, Chat, Search, Rendering — rather than per module in `src/specky/`. 
 | [cli/pr-comment.md](cli/pr-comment.md) | Generate markdown summaries of documentation changes in a commit range for GitHub PR comments |
 | [cli/export.md](cli/export.md) | Export documentation as single-page HTML, PDF, or Confluence storage format for sharing and archival |
 | [cli/init.md](cli/init.md) | Configure specky with interactive interview or command-line flags for CI and automation environments |
+| [cli/bootstrap.md](cli/bootstrap.md) | Write a repo's first feature and workflow documentation from source code instead of commit history |
 
 ## Docs
 
