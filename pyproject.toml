@@ -4,6 +4,22 @@ version = "0.1.0"
 description = "Cross-agent plugin that generates and maintains functional documentation in place, with a SQLite-backed searchable history and an HTML viewer for non-technical stakeholders."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "dany", email = "dany.yacoub@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Documentation",
+    "Topic :: Software Development :: Documentation",
+]
 dependencies = [
     "mcp>=2.0.0",
     "anthropic>=0.40.0",
@@ -11,6 +27,11 @@ dependencies = [
     "jinja2>=3.1.0",
     "markdown>=3.6",
 ]
+
+[project.urls]
+Homepage = "https://github.com/danyyacoub/specky"
+Repository = "https://github.com/danyyacoub/specky"
+Issues = "https://github.com/danyyacoub/specky/issues"
 
 [dependency-groups]
 dev = [
