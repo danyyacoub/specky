@@ -17,30 +17,16 @@ pointer rather than a copy.
 
 ## Commands
 
-No build/lint step. Dev loop: edit `src/specky/`, run CLI directly. Run `--help` on any command
-for full flags; each row below is the gist, with a spec doc for the non-obvious behavior.
+No build/lint step. Dev loop: edit `src/specky/`, run CLI directly. `specky --help` (or `-h` on
+any subcommand) lists every command with its one-liner and flags — that's always accurate, this
+file isn't. Full behavior docs are indexed at [specs/MODULES.md](specs/MODULES.md). Gotchas
+`--help` won't tell you:
 
-| Command | What | Docs |
-|---|---|---|
-| `specky init` | configure AI provider → `specky.toml` (gitignored); non-interactive via `--yes` | [cli/init.md](specs/cli/init.md) |
-| `specky doctor [--json]` | health check: toolchain, config, hook, index, site, doc backlog | [cli/doctor.md](specs/cli/doctor.md) |
-| `specky install-git-hook` | installs real post-commit/post-merge/post-rewrite hooks | — |
-| `specky adopt` | one-time import of existing markdown into the docs tree | [documentation/doc-adoption.md](specs/documentation/doc-adoption.md) |
-| `specky sync [--dry-run]` | backfill docs for existing commits | [cli/sync.md](specs/cli/sync.md) |
-| `specky check` | CI gate: fails if changed code's doc wasn't updated; needs `specky index` first | [cli/check.md](specs/cli/check.md) |
-| `specky pr-comment` | doc-change summary to stdout, never posts | [cli/pr-comment.md](specs/cli/pr-comment.md) |
-| `specky cost` | provider call stats, cache hit rate | [cli/cost.md](specs/cli/cost.md) |
-| `specky tests` | scaffold pytest files from docs' Acceptance Tests tables | [documentation/acceptance-test-scaffolding.md](specs/documentation/acceptance-test-scaffolding.md) |
-| `specky export [--pdf\|--confluence]` | docs as one handable file | [cli/export.md](specs/cli/export.md) |
-| `specky index` | rebuild `.specky/index.db` (FTS5) from `specs/` + git log | [docs/search-and-indexing.md](specs/docs/search-and-indexing.md) |
-| `specky search "<query>"` | keyword search over the index | — |
-| `specky render-html` | write static site to `.specky/site/index.html` | — |
-| `specky setup-diagrams` | one-time: installs mermaid renderer into `~/.cache/specky` | [rendering/diagram-support.md](specs/rendering/diagram-support.md) |
-| `specky serve [--port] [--host]` | serves the site + the Ask widget's chat endpoint | [chat/serve-access-control.md](specs/chat/serve-access-control.md) |
-| `specky-mcp` | run MCP server over stdio, for local testing | — |
-
-`specky commit-doc [--rewritten]` is hook-only, not for manual use — see
-[documentation/auto-commit-docs.md](specs/documentation/auto-commit-docs.md).
+- `specky check` needs `specky index` to have run first.
+- `specky commit-doc [--rewritten]` is hook-only — not for manual use
+  ([documentation/auto-commit-docs.md](specs/documentation/auto-commit-docs.md)).
+- `specky pr-comment` prints to stdout, never posts — pipe it to `gh pr comment`.
+- `specky sync --dry-run` calls no provider.
 
 ## Scripts
 
@@ -61,25 +47,4 @@ statically on :8934; `specky-serve` runs `specky serve` on :8936 (same pages + t
 `/chat` endpoint — use this one when the change touches answers). Check rendered pages over
 `http://`, not `file://`: the in-app preview snapshots `file://` and won't execute page scripts.
 
-## Architecture
-
-Full details in the docs, indexed at [specs/MODULES.md](specs/MODULES.md). Invariants worth
-knowing before editing:
-
-- [`paths.py`](src/specky/paths.py) is the only place `specs` is spelled out — use
-  `paths.docs_root`/`docs_prefix`/`history_dir`/`history_prefix`/`modules_index` instead of
-  hardcoding. It imports nothing from specky, so it can't join a cycle.
-- [`lock.py`](src/specky/lock.py): non-blocking `flock` on `.specky/hook.lock`. A busy lock
-  prints and exits 0 — a hook must never block on it.
-- [`db.py`](src/specky/db.py): the only shared SQLite schema. Every FTS5 `MATCH` query must go
-  through `db.fts_match_query()` ([search/fts5-syntax-safety.md](specs/search/fts5-syntax-safety.md)).
-- [`ai_provider.py`](src/specky/ai_provider.py): `load_provider_from_toml()` is the only
-  construction path for a `Provider`.
-- [`html_render.py`](src/specky/html_render.py): must render via `file://` with no server/build
-  step for the reader. Mermaid fences become static SVG at `render-html` time, server-side
-  ([rendering/diagram-support.md](specs/rendering/diagram-support.md)).
-- [`answer_render.py`](src/specky/answer_render.py): the trust boundary for the one thing in the
-  viewer a model wrote — `sanitize_fragment()` runs *before* diagram rendering, so the only
-  `<svg>` a reader sees is our own. `chat_server` is imported inside a function here (and
-  `html_render` imports `chat_server.DEFAULT_PORT`) to avoid closing an import cycle.
-- Convention: docs are always `specs/<domain>/<topic>.md`, kebab-case topic, never `README.md`.
+Convention: docs are always `specs/<domain>/<topic>.md`, kebab-case topic, never `README.md`.
