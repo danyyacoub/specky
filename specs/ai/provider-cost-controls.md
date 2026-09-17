@@ -37,7 +37,7 @@ already exists, resent with every commit so the classifier doesn't invent a dupl
    per call has to come after everything that doesn't. A single commit-specific character leaking
    into a prefix turns every call into a cache miss, and nothing reports that it happened.
 
-5. **Independent calls can be batched** — `--batch` on `specky sync` or `specky bootstrap` sends
+5. **Independent calls can be batched** — `--batch` on `specky sync` sends
    every commit summary, or every domain's doc, as one Message Batches request at half the
    per-token price. Only calls that depend on nothing but their own input qualify.
 
@@ -52,7 +52,7 @@ already exists, resent with every commit so the classifier doesn't invent a dupl
 
 8. **Each kind of call can name its own model** — `[ai] <task>_model` in `specky.toml` routes one
    task elsewhere; everything else uses `[ai] model`. Tasks: `summary`, `classify`, `doc`,
-   `discovery`, `glossary`, `tag`, `chat`. `specky doctor` prints the routing, because it is
+   `tag`, `chat`. `specky doctor` prints the routing, because it is
    otherwise invisible until someone reads a bill.
 
 ## Two Different Caches
@@ -109,8 +109,9 @@ A ten-thousand-commit backfill on a three-hundred-doc repo: **$221 with neither,
 | An identical call is free | The same prefix and body twice | Both are made | The provider is reached once |
 | Batch skips what is already cached | One of two entries already memoized | A batch is sent | Only the uncached entry is sent; the memoized answer is returned for the other |
 | A batch key with a slash is accepted | A domain keyed `billing/refund-flow` | It is batched | The request id is alphanumeric and within the API's length limit |
-| A missing batch API degrades | A `command` provider and `--batch` | `specky bootstrap --batch` | It says the flag was ignored and writes every doc normally |
-| A failed batch degrades | A provider whose batch call raises | `specky bootstrap --batch` | It says the batch failed and generates each doc singly |
-| A per-task model routes only its task | `[ai] model = "haiku"`, `discovery_model = "sonnet"` | The provider is built | Discovery resolves to sonnet; classification and everything else resolve to haiku |
+| A missing batch API degrades | A `command` provider and `--batch` | `specky sync --batch` | It says the flag was ignored and asks for each summary normally |
+| A failed batch degrades | A provider whose batch call raises | `specky sync --batch` | It says the batch failed and asks for each summary singly |
+| A per-task model routes only its task | `[ai] model = "haiku"`, `document_model = "sonnet"` | The provider is built | The document task resolves to sonnet; classification and everything else resolve to haiku |
+| A task specky no longer has is a config error | `[ai] discovery_model = "sonnet"`, left over from `specky bootstrap` | The provider is built | It fails naming the tasks that exist, rather than routing nothing in silence |
 | A misspelled task is caught | `[ai] docs_model = "x"` | The provider is built | A config error naming the valid tasks, not a silent no-op |
 | A command provider refuses task models | `provider = "command"` with any `<task>_model` | The provider is built | A config error explaining there is no model to swap |

@@ -7,6 +7,11 @@ build/
 *.egg-info/
 .specky/
 specky.toml
+# Provider API keys. specky reads them from the environment by name (`[ai] api_key_env`)
+# and never stores a key itself, so nothing here ever needs to be committed.
+.env
+.env.*
+!.env.example
 .DS_Store
 .idea/
 .serena/

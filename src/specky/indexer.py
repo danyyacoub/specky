@@ -254,14 +254,15 @@ def index_doc_files(repo_root: Path, conn) -> int:
 def declared_sources(repo_root: Path) -> Counter[tuple[str, str]]:
     """`(code file, doc)` pairs a doc states outright in its `sources:` frontmatter.
 
-    The git-log derivation above cannot see a bootstrapped doc set, and not by accident: a single
-    commit adding twenty docs is exactly what `DOC_FILES_MAX_DOCS_PER_COMMIT` exists to reject, and
-    a doc written from code it did not change has no commit pairing it with that code in the first
-    place. Left at that, `specky check` would read every source file in a freshly bootstrapped repo
-    as undocumented — the gate silently off on the repos that most need it.
+    The git-log derivation above cannot see a doc written from code rather than from a diff, and
+    not by accident: a doc `specky document` wrote about a module nobody has touched in two years
+    has no commit pairing it with that module at all, and a commit adding several docs at once is
+    exactly what `DOC_FILES_MAX_DOCS_PER_COMMIT` exists to reject. Left at that, `specky check`
+    would read the code such a doc describes as undocumented — the gate silently off on the docs
+    written most deliberately.
 
-    So `bootstrap.write_domain_doc` writes down which files it read, and this folds that in. Counted
-    as `MIN_LINK_COMMITS` rather than 1 because it is not the weak evidence that threshold exists to
+    So `document.write` records which files were read, and this folds that in. Counted as
+    `MIN_LINK_COMMITS` rather than 1 because it is not the weak evidence that threshold exists to
     filter: the git-derived pairs are a guess from "these files rode in a commit that touched this
     doc", while this is the doc saying which files it is about.
     """

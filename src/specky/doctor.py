@@ -213,7 +213,7 @@ def _config(repo_root: Path) -> list[Check]:
         )
 
     # Per-task model routing, reported because it is invisible otherwise: the whole point of
-    # `[ai] discovery_model` is to be set once and forgotten, and the only other way to find out
+    # `[ai] document_model` is to be set once and forgotten, and the only other way to find out
     # which model answered what is to read `specky cost` after the fact.
     checks += _task_model_checks(path)
     return checks

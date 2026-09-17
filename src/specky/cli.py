@@ -204,30 +204,32 @@ def _install_git_hook(args: argparse.Namespace) -> None:
         print(f"Installed {path}")
 
 
-def _bootstrap(args: argparse.Namespace) -> None:
-    from specky.ai_provider import load_provider_from_toml
-    from specky.bootstrap import MAX_DOMAINS, bootstrap
+def _document(args: argparse.Namespace) -> None:
+    from specky.ai_provider import MAX_TOOL_TURNS, load_provider_from_toml
     from specky.db import repo_root
+    from specky.document import document
     from specky.lock import LockBusy, exclusive
 
     root = repo_root()
-    provider = load_provider_from_toml(root / "specky.toml", "bootstrap")
+    provider = load_provider_from_toml(root / "specky.toml", "document")
     try:
-        # Taken here rather than inside `bootstrap()`: `sync` calls the same function while already
-        # holding this lock, and `flock(LOCK_EX|LOCK_NB)` refuses a second acquisition even from the
-        # process that holds it — so the lock belongs to the entry points, not the work.
+        # The lock belongs to the entry point rather than to `document()`: `flock(LOCK_EX|LOCK_NB)`
+        # refuses a second acquisition even from the process already holding it, so a caller that
+        # took it cannot call through a function that takes it again.
         with exclusive(root):
-            bootstrap(
+            document(
                 root,
+                " ".join(args.request),
                 provider,
-                max_domains=args.max_domains or MAX_DOMAINS,
+                domain=args.domain,
+                topic=args.topic,
                 scope=args.scope,
+                max_turns=args.max_turns or MAX_TOOL_TURNS,
                 assume_yes=args.yes,
                 dry_run=args.dry_run,
-                batch=args.batch,
             )
     except LockBusy as exc:
-        print(f"specky bootstrap: {exc}")
+        print(f"specky document: {exc}")
 
 
 def _sync(args: argparse.Namespace) -> None:
@@ -241,7 +243,6 @@ def _sync(args: argparse.Namespace) -> None:
         dry_run=args.dry_run,
         assume_yes=args.yes,
         all_branches=args.all_branches,
-        bootstrap=not args.no_bootstrap,
         batch=args.batch,
     )
 
@@ -523,40 +524,46 @@ def build_parser() -> argparse.ArgumentParser:
         "Install the post-commit, post-merge and post-rewrite doc hooks",
         _install_git_hook,
     )
-    bootstrap_cmd = command(
-        "bootstrap",
-        "Write a repo's first docs by reading its code, not its commits (idempotent)",
-        _bootstrap,
+    document_cmd = command(
+        "document",
+        "Document one feature or workflow by searching this repo's code for it",
+        _document,
     )
-    bootstrap_cmd.add_argument(
-        "scope",
-        nargs="?",
+    document_cmd.add_argument(
+        "request",
+        nargs="+",
+        metavar="WHAT",
+        help='The feature or workflow to document, in plain words, e.g. "the refund flow"',
+    )
+    document_cmd.add_argument(
+        "--domain", help="Pin the doc's domain instead of letting the model choose it"
+    )
+    document_cmd.add_argument("--topic", help="Pin the doc's topic slug")
+    document_cmd.add_argument(
+        "--scope",
         metavar="PATH",
-        help="Only look at this subtree, e.g. src/billing (default: the whole repo)",
+        help="Only let it search this subtree, e.g. src/billing (default: the whole repo)",
     )
-    # Default resolved in `_bootstrap`, not here: every other subcommand in this file imports its
+    # Default resolved in `_document`, not here: every other subcommand in this file imports its
     # module lazily inside its handler so `specky --help` doesn't pay for the whole package, and
-    # naming `bootstrap.MAX_DOMAINS` at parser-build time would import it on every invocation.
-    bootstrap_cmd.add_argument(
-        "--max-domains",
+    # naming `ai_provider.MAX_TOOL_TURNS` at parser-build time would import it on every invocation.
+    document_cmd.add_argument(
+        "--max-turns",
         type=int,
         metavar="N",
-        help="Document at most N domains this run; the rest are reported and picked up by "
-        "re-running (default: 25)",
+        # No number here on purpose. The default lives in `ai_provider.MAX_TOOL_TURNS` and is
+        # resolved in `_document`, because naming it at parser-build time would import the module
+        # on every invocation — so a copy in this string is one that drifts, and did.
+        help="Let it use at most N turns of searching and reading. The last turn is spent writing "
+        "the doc whether or not it is finished looking",
     )
-    bootstrap_cmd.add_argument(
+    document_cmd.add_argument(
         "--dry-run",
         action="store_true",
-        help="List the domains it would document, then stop (still costs the discovery call)",
+        help="Print the prompt it would send and stop, calling nothing",
     )
-    bootstrap_cmd.add_argument(
+    document_cmd.add_argument(
         "--yes", action="store_true", help="Skip the confirmation before generating"
-    )
-    bootstrap_cmd.add_argument(
-        "--batch",
-        action="store_true",
-        help="Send every domain's doc in one Message Batches request: half price, but "
-        "asynchronous (Anthropic provider only)",
     )
     sync_cmd = command(
         "sync",
@@ -568,11 +575,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Send the commit summaries in one Message Batches request: half price, but "
         "asynchronous (Anthropic provider only)",
-    )
-    sync_cmd.add_argument(
-        "--no-bootstrap",
-        action="store_true",
-        help="On a repo with no docs yet, don't offer to write them from the code first",
     )
     sync_cmd.add_argument(
         "--since",

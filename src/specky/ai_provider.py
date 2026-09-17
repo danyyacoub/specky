@@ -15,11 +15,20 @@ than returning a half-written doc.
 `load_provider_from_toml` wraps whichever provider it built in `CachingProvider` unless
 `[ai] cache = false`, so an identical prompt is answered from the repo's index instead of paid for
 twice, and every call — hit or miss — leaves a row for `specky cost` (see cost.py).
+
+Most of specky asks a provider one question and reads one answer. `specky document` is the
+exception: it hands the model tools and lets it search the repo for itself, which is a multi-turn
+conversation rather than a call. That is `converse`, kept deliberately beside `generate` rather than
+replacing it — every other caller is a single call and should stay one, since a single call is what
+can be cached, batched and costed exactly. Not every provider can hold a tool conversation:
+`provider = "command"` is one stdin and one stdout, so it raises `ToolLoopUnsupported` and the
+caller degrades (see `document.py`).
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shlex
 import sqlite3
@@ -28,7 +37,7 @@ import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from specky.db import connect
 
@@ -44,10 +53,32 @@ DEFAULT_TIMEOUT_SECONDS = 60.0
 BATCH_TIMEOUT_SECONDS = 3600.0
 BATCH_POLL_SECONDS = 10.0
 
+# How many turns one `converse` may take before it is made to finish. Each turn is a billed call,
+# so this is the spend bound on a command whose cost is otherwise decided by the model. Sixteen
+# rather than a tighter number because a turn is one *round*, not one tool call: a model that calls
+# tools in parallel spends few, and one that calls them strictly one at a time (DeepSeek does)
+# spends one per file it opens, which a thorough read of two modules exhausts on its own.
+MAX_TOOL_TURNS = 16
+
+# What is said to a model that stops calling tools without calling the terminal one. It happens for
+# a mundane reason: asked to write a document, a model writes it — as prose, in the reply, instead
+# of through the tool it was told to use. The text is usually the finished doc, so throwing it away
+# discards the whole run. One nudge, with only the terminal tool on the table, recovers it for the
+# price of a single call. It is sent at most once per run, so it cannot become a loop.
+NUDGE = (
+    "Stop searching now and hand the document over: call the {tool} tool with what you already "
+    "have. Do not reply with the document as text — only a {tool} call is read."
+)
+
 # The tasks specky asks a model to do, each able to name its own model in `[ai]`. Kept as a tuple
 # rather than free-form strings so `specky doctor` can report the routing and a typo in
 # `[ai] doc_modle` is a config error rather than a setting that silently does nothing.
-TASKS = ("summary", "classify", "doc", "discovery", "glossary", "tag", "chat")
+# `discovery` and `glossary` were here until `specky bootstrap` was removed, and they are gone
+# with it rather than kept for compatibility. Leaving a name in this tuple keeps `[ai] <task>_model`
+# accepting it, and an accepted key that routes nothing is the exact failure the tuple exists to
+# prevent: `specky doctor` would go on reporting the route as active while nothing ever asked for
+# that task. Dropping them turns a stale `discovery_model` into the loud config error it should be.
+TASKS = ("summary", "classify", "doc", "document", "tag", "chat")
 
 
 class Provider(Protocol):
@@ -56,6 +87,28 @@ class Provider(Protocol):
 
 class TruncatedResponse(RuntimeError):
     """The model stopped because it hit the output token limit, so the text is incomplete."""
+
+
+class ToolLoopUnsupported(RuntimeError):
+    """This provider has no tool channel, so it cannot run a `converse`.
+
+    Raised by `CommandProvider`, which is one stdin and one stdout with nowhere to put a tool
+    definition. It is a normal outcome rather than a failure: the caller degrades to a single
+    `generate` and says so (`document.py`).
+    """
+
+
+# What a `converse` is handed. `tools` is only read for `.name`, `.description` and `.schema`, and
+# `invoke(name, arguments) -> str` runs one and returns its result as text — so this module never
+# learns what any particular tool *means*, which is what keeps `specky.tools` out of its imports and
+# lets the terminal tool end the loop by raising through `invoke` (see `tools.DocSubmitted`).
+if TYPE_CHECKING:
+    from specky.tools import Tool
+
+Invoke = Callable[[str, dict], str]
+# Reports one turn's traffic as `(chars sent, chars received)`, so `CachingProvider` can log a usage
+# row per turn. Without it a twelve-turn run would appear in `specky cost` as one call.
+TurnReport = Callable[[int, int], None]
 
 
 # What `prefix` is for, since it's the one part of the protocol that isn't obvious:
@@ -111,6 +164,104 @@ class AnthropicProvider:
             )
         return response.content[0].text
 
+    def converse(
+        self,
+        prompt: str,
+        *,
+        prefix: str = "",
+        tools: list["Tool"],
+        invoke: Invoke,
+        task: str = "",
+        max_turns: int = MAX_TOOL_TURNS,
+        final_tool: str = "",
+        on_turn: TurnReport | None = None,
+    ) -> str:
+        """Let the model use tools until it stops, and return whatever it said last.
+
+        The terminal condition is not this method's business. A tool that ends the run does so by
+        raising through `invoke`, which unwinds straight past this loop to the caller — so a
+        `converse` that returns normally means the model ran out of turns or simply stopped talking,
+        both of which are the caller's problem to report (`document.py`).
+
+        `prefix` keeps the cache breakpoint `generate` gives it, and it matters much more here: the
+        instructions, the doc template and the list of every existing doc are resent on *every turn*
+        of every run, so on a twelve-turn conversation that block is read thirteen times and paid
+        for once.
+        """
+        import anthropic
+
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            raise RuntimeError(f"{self.api_key_env} is not set in the environment")
+        # A tool conversation is many sequential calls, and the last of them is the one that writes
+        # a whole doc — so the per-call timeout is the same 60s every other call gets, but the run
+        # as a whole is bounded by `max_turns` rather than by the clock.
+        client = anthropic.Anthropic(api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS)
+
+        specs = [
+            {"name": tool.name, "description": tool.description, "input_schema": tool.schema}
+            for tool in tools
+        ]
+        messages: list[dict] = [{"role": "user", "content": prompt}]
+        sent = len(prefix) + len(prompt)
+        nudged = False
+
+        for turn in range(max_turns):
+            # A forced turn offers *only* the terminal tool, not merely a preference for it. Left
+            # with the full list, a model asked to finish will sometimes reach for one more read
+            # instead — observed against a real endpoint, which picked a search over the tool it
+            # had been told to call.
+            forcing = bool(final_tool) and (nudged or turn == max_turns - 1)
+            kwargs: dict = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "messages": messages,
+                "tools": [s for s in specs if s["name"] == final_tool] if forcing else specs,
+            }
+            if prefix:
+                kwargs["system"] = [
+                    {"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}
+                ]
+            if forcing:
+                kwargs["tool_choice"] = {"type": "tool", "name": final_tool}
+
+            response = client.messages.create(**kwargs)
+            said = "".join(block.text for block in response.content if block.type == "text")
+            if on_turn:
+                on_turn(sent, len(said))
+            if response.stop_reason == "max_tokens":
+                raise TruncatedResponse(
+                    f"{self.model} hit the {self.max_tokens}-token output limit — "
+                    "raise `max_tokens` in specky.toml's [ai] table"
+                )
+            if response.stop_reason != "tool_use":
+                # Stopped talking without finishing. Nudge once; if it has already been nudged, it
+                # means it twice and whatever it said is all there is.
+                if not final_tool or nudged or turn >= max_turns - 1:
+                    return said
+                nudged = True
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": NUDGE.format(tool=final_tool)})
+                sent += len(said) + len(NUDGE)
+                continue
+
+            messages.append({"role": "assistant", "content": response.content})
+            sent += len(said)
+            results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                # `invoke` contains its own failures and returns them as text — except the terminal
+                # tool, which raises through here on purpose and ends the run.
+                result = invoke(block.name, dict(block.input))
+                sent += len(result)
+                results.append(
+                    {"type": "tool_result", "tool_use_id": block.id, "content": result}
+                )
+            messages.append({"role": "user", "content": results})
+
+        return ""
+
     def generate_batch(
         self, prompts: dict[str, tuple[str, str]], task: str = ""
     ) -> dict[str, str]:
@@ -121,8 +272,8 @@ class AnthropicProvider:
         whether one bad commit should stop a backfill, and every caller here decides it shouldn't.
 
         Worth it only for work nobody is waiting on: a batch is asynchronous and the API allows up
-        to 24 hours, so this is reached for by `specky sync --batch` and `specky bootstrap --batch`
-        and never by a git hook, which must not turn `git commit` into a long poll.
+        to 24 hours, so this is reached for by `specky sync --batch` and never by a git hook, which
+        must not turn `git commit` into a long poll.
         """
         import anthropic
 
@@ -208,6 +359,117 @@ class OpenAICompatibleProvider:
             )
         return choice["message"]["content"]
 
+    def converse(
+        self,
+        prompt: str,
+        *,
+        prefix: str = "",
+        tools: list["Tool"],
+        invoke: Invoke,
+        task: str = "",
+        max_turns: int = MAX_TOOL_TURNS,
+        final_tool: str = "",
+        on_turn: TurnReport | None = None,
+    ) -> str:
+        """The same loop as `AnthropicProvider.converse`, in OpenAI's spelling.
+
+        "OpenAI-compatible" is a claim about the chat-completions shape, and tool calling is the
+        part of it endpoints most often leave out — Ollama, vLLM, llama.cpp and the various hosted
+        gateways all differ. So a rejection that mentions tools is turned into a `ConfigError`
+        naming the lever, rather than an httpx stack trace that reads like a specky bug.
+        """
+        import httpx
+
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            raise RuntimeError(f"{self.api_key_env} is not set in the environment")
+
+        specs = [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.schema,
+                },
+            }
+            for tool in tools
+        ]
+        messages: list[dict] = [{"role": "user", "content": prompt}]
+        if prefix:
+            messages.insert(0, {"role": "system", "content": prefix})
+        sent = len(prefix) + len(prompt)
+        nudged = False
+
+        for turn in range(max_turns):
+            forcing = bool(final_tool) and (nudged or turn == max_turns - 1)
+            payload: dict = {
+                "model": self.model,
+                "max_tokens": self.max_tokens,
+                "messages": messages,
+                # Only the terminal tool on a forced turn — see the note in the Anthropic loop.
+                "tools": [s for s in specs if s["function"]["name"] == final_tool]
+                if forcing
+                else specs,
+            }
+            if forcing:
+                payload["tool_choice"] = {"type": "function", "function": {"name": final_tool}}
+
+            response = httpx.post(
+                f"{self.base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+                timeout=DEFAULT_TIMEOUT_SECONDS,
+            )
+            if response.status_code in (400, 404, 422) and "tool" in response.text.lower():
+                raise ConfigError(
+                    f"{self.base_url} rejected a tool-calling request ({response.status_code}), so "
+                    f"`specky document` can't run against {self.model}. Point [ai] at an endpoint "
+                    "that supports tool use, or at provider = \"anthropic\""
+                )
+            response.raise_for_status()
+            choice = response.json()["choices"][0]
+            message = choice["message"]
+            said = message.get("content") or ""
+            if on_turn:
+                on_turn(sent, len(said))
+            if choice.get("finish_reason") == "length":
+                raise TruncatedResponse(
+                    f"{self.model} hit the {self.max_tokens}-token output limit — "
+                    "raise `max_tokens` in specky.toml's [ai] table"
+                )
+
+            calls = message.get("tool_calls") or []
+            if not calls:
+                # See the Anthropic loop: a model asked to write a document often writes it as
+                # prose instead of calling the tool, and discarding that throws the run away.
+                if not final_tool or nudged or turn >= max_turns - 1:
+                    return said
+                nudged = True
+                messages.append(message)
+                messages.append({"role": "user", "content": NUDGE.format(tool=final_tool)})
+                sent += len(said) + len(NUDGE)
+                continue
+
+            messages.append(message)
+            sent += len(said)
+            for call in calls:
+                function = call.get("function") or {}
+                try:
+                    arguments = json.loads(function.get("arguments") or "{}")
+                except json.JSONDecodeError as exc:
+                    # Handed back as the tool's result rather than raised: the model wrote the
+                    # arguments, it can see they didn't parse, and the next turn usually fixes it.
+                    arguments, result = {}, f"arguments were not valid JSON: {exc}"
+                else:
+                    result = invoke(function.get("name", ""), arguments)
+                sent += len(result)
+                messages.append(
+                    {"role": "tool", "tool_call_id": call.get("id", ""), "content": result}
+                )
+
+        return ""
+
 
 @dataclass
 class CommandProvider:
@@ -226,6 +488,20 @@ class CommandProvider:
             check=True,
         )
         return result.stdout.strip()
+
+    def converse(self, prompt: str, **kwargs) -> str:
+        """Never. One stdin, one stdout, nowhere to put a tool definition.
+
+        Worth being precise about why, because the command is often an agent that plainly *does*
+        have tools: `claude -p` can read and grep, but through its own harness, invisibly to specky
+        — which can neither offer the tools in `tools.py` nor see which files were opened. So the
+        caller degrades to a single `generate` and loses the guard that a doc must be written from
+        code someone actually read (`document.py`).
+        """
+        raise ToolLoopUnsupported(
+            f"provider = \"command\" ({self.command}) has no tool channel, so specky can't drive "
+            "a search loop through it"
+        )
 
 
 class ConfigError(RuntimeError):
@@ -285,6 +561,46 @@ class CachingProvider:
 
     def key(self, prefix: str, prompt: str) -> str:
         return hashlib.sha256(f"{self.model}\x00{prefix}\x00{prompt}".encode()).hexdigest()
+
+    def converse(self, prompt: str, *, on_turn=None, **kwargs) -> str:
+        """Logged, never memoized — and the asymmetry with `generate` is deliberate.
+
+        The key is `sha256(model + prefix + prompt)`, which is a complete description of a
+        single-call question and a badly incomplete one of a tool conversation: the answer also
+        depends on every file the model chose to read, and those aren't in the key. So a cache hit
+        after the code changed would serve a doc describing the repo as it used to be — silently,
+        and exactly on the re-runs where someone is checking whether their edit is reflected.
+
+        Usage rows still land, one per turn, so `specky cost` reports a twelve-turn run as twelve
+        calls rather than one. They are all `cached=0`, which is the truth.
+        """
+
+        def record(sent: int, received: int) -> None:
+            if on_turn:
+                on_turn(sent, received)
+            try:
+                conn = connect(self.repo_root)
+            except sqlite3.Error:
+                return
+            try:
+                conn.execute(
+                    "INSERT INTO usage (created_at, command, model, prompt_chars, response_chars, "
+                    "cached) VALUES (?, ?, ?, ?, ?, 0)",
+                    (_now(), self.command, self.model, sent, received),
+                )
+                conn.commit()
+            except sqlite3.Error:
+                pass
+            finally:
+                conn.close()
+
+        return self.inner.converse(prompt, on_turn=record, **kwargs)
+
+    def supports_tools(self, task: str = "") -> bool:
+        # Takes `task` it never reads, to match `supports_batch` below. The asymmetry is not free:
+        # the module-level helper had to call this inside `try/except TypeError`, which also
+        # swallowed any TypeError raised *inside* a provider's own implementation.
+        return hasattr(self.inner, "converse") and not isinstance(self.inner, CommandProvider)
 
     def generate_batch(
         self, prompts: dict[str, tuple[str, str]], task: str = ""
@@ -366,10 +682,10 @@ class TaskRouter:
 
     Per-task models exist because specky's calls are not one workload. Deciding whether a commit
     touches a documented feature is a small JSON judgement that the cheapest model does well;
-    working out what an unfamiliar repo *is* and which domains it has (`specky bootstrap`'s
-    discovery call) is the hardest single question specky asks, it is asked once, and it sets the
-    shape of every doc written afterwards. Pinning both to one model means overpaying for the
-    first or underpowering the second.
+    working out which files across a whole repo make up a feature and then writing its doc
+    (`specky document`'s tool conversation) is the hardest thing specky asks of a model, and the
+    only task where a weak one shows up directly in what lands in `specs/`. Pinning both to one
+    model means overpaying for the first or underpowering the second.
 
     Routing lives here rather than in each caller's signature so that `provider.generate(...)` stays
     the whole interface: a call site names its task and knows nothing about models. Each task's
@@ -388,6 +704,9 @@ class TaskRouter:
     ) -> dict[str, str]:
         return self.for_task(task).generate_batch(prompts, task)
 
+    def converse(self, prompt: str, *, task: str = "", **kwargs) -> str:
+        return self.for_task(task).converse(prompt, task=task, **kwargs)
+
     def for_task(self, task: str) -> Provider:
         return self.by_task.get(task, self.default)
 
@@ -395,6 +714,9 @@ class TaskRouter:
         provider = self.for_task(task)
         supports = getattr(provider, "supports_batch", None)
         return supports() if supports else hasattr(provider, "generate_batch")
+
+    def supports_tools(self, task: str = "") -> bool:
+        return supports_tools(self.for_task(task))
 
 
 def supports_batch(provider: Provider, task: str = "") -> bool:
@@ -406,6 +728,19 @@ def supports_batch(provider: Provider, task: str = "") -> bool:
     """
     check = getattr(provider, "supports_batch", None)
     return check(task) if check else hasattr(provider, "generate_batch")
+
+
+def supports_tools(provider: Provider, task: str = "") -> bool:
+    """Can this provider hold a tool conversation?
+
+    False only for `command`, which has no tool channel at all. `specky document` asks before it
+    starts so it can announce the degraded path up front, rather than building a toolbox and a
+    prompt and then discovering there is nowhere to send them.
+    """
+    check = getattr(provider, "supports_tools", None)
+    if check is not None:
+        return check(task)
+    return hasattr(provider, "converse") and not isinstance(provider, CommandProvider)
 
 
 def _batch_id(key: str) -> str:
@@ -509,7 +844,7 @@ def _model_label(config: dict) -> str:
 
 
 def task_models(config: dict) -> dict[str, str]:
-    """`{"discovery": "claude-sonnet-5"}` from `[ai] <task>_model` keys.
+    """`{"document": "claude-sonnet-5"}` from `[ai] <task>_model` keys.
 
     An unknown `<something>_model` is a ConfigError rather than a no-op: the whole point of these
     is to be set once and forgotten, so a typo that silently routes nothing would be found months

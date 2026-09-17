@@ -1,9 +1,10 @@
 """Keeps specs/<domain>/<topic>.md in sync with what a feature/workflow currently does.
 
-This is the automatic counterpart of the `document-domain` skill: where the skill is
-agent-driven (a human asks an agent to document a domain, the agent reasons over the
-codebase), this module runs unattended off the configured AI provider, triggered per
-commit by commit_doc.py. It classifies whether a commit's diff affects a documented
+This is the *maintenance* half of specky's doc writing, and `document.py` is the authoring half:
+there, a model searches the repo and writes a feature's doc from the code; here, the same doc is
+kept current from the commits that touch it afterwards. The split is why this module never reads
+source — by the time it runs, the doc exists and a diff is a precise statement of what changed
+about it. It runs unattended off the configured AI provider, triggered per commit by commit_doc.py. It classifies whether a commit's diff affects a documented
 feature/workflow, and if so, generates or updates that feature's reference doc in
 place — these specs/<domain>/*.md files are the reference, not the per-commit log in
 specs/history/ (which stays as a supplementary changelog trail).
@@ -317,6 +318,109 @@ def ungrounded_flags(repo_root: Path, body: str) -> list[str]:
     return sorted(flag for flag in unknown if not _grounded_in_source(repo_root, flag))
 
 
+# A fenced ```mermaid block's source. Non-greedy, so a doc with two diagrams yields two matches.
+_MERMAID_BLOCK = re.compile(r"```mermaid[ \t]*\n(.*?)\n```", re.DOTALL)
+
+# A node's class assignment (`A["Label"]:::feature`) and the `classDef` that gives it meaning. The
+# name is optional in the first pattern on purpose — a bare `:::` with nothing after it is the
+# defect this exists to catch, and it has to be matched before it can be removed.
+_CLASS_SUFFIX = re.compile(r":::([A-Za-z_][A-Za-z0-9_-]*)?")
+_CLASS_DEF = re.compile(r"^\s*classDef\s+([A-Za-z_][A-Za-z0-9_-]*)", re.MULTILINE)
+
+
+def _quoted_spans(line: str) -> list[tuple[int, int]]:
+    """Character ranges inside `"…"` on this line — where a `:::` is a label's text, not syntax."""
+    spans, start = [], None
+    for i, char in enumerate(line):
+        if char != '"':
+            continue
+        if start is None:
+            start = i
+        else:
+            spans.append((start, i))
+            start = None
+    return spans
+
+
+def repair_mermaid(body: str) -> tuple[str, list[str]]:
+    """Drop class suffixes a diagram can't honour. Returns the body and what was repaired.
+
+    Repaired rather than refused, because that is what this codebase already does with a generated
+    diagram: `catalog._mermaid_label` silently escapes the two characters that would end a node
+    label early, instead of rejecting the title. The same logic applies here — the fix is
+    unambiguous, and refusing a good document over one decorative token would be out of proportion.
+
+    Two defects, and both are invisible at exactly the moment they matter:
+
+    - **`A["Label"]:::`** — a class suffix with no class name. The vendored renderer parses it
+      happily and the node simply comes out unstyled, so nothing anywhere reports a problem.
+    - **`:::feature` with no `classDef feature`** — same outcome by a different route.
+
+    Neither is worth a human's time to find, and a model writing a diagram by hand produces the
+    first one often enough that it turned up on the first real run of `specky document`.
+
+    A `:::` inside a quoted label is left alone: there it is somebody's text, not syntax.
+    """
+    repairs: list[str] = []
+
+    def fix_block(match: re.Match) -> str:
+        block = match.group(1)
+        defined = set(_CLASS_DEF.findall(block))
+        out_lines = []
+        for line in block.splitlines():
+            spans = _quoted_spans(line)
+
+            def drop(suffix: re.Match) -> str:
+                if any(start < suffix.start() < end for start, end in spans):
+                    return suffix.group(0)  # inside a label, so it is text
+                name = suffix.group(1)
+                if name and name in defined:
+                    return suffix.group(0)
+                repairs.append(
+                    f"`:::{name}` names no classDef" if name else "a `:::` with no class name"
+                )
+                return ""
+
+            out_lines.append(_CLASS_SUFFIX.sub(drop, line))
+        return "```mermaid\n" + "\n".join(out_lines) + "\n```"
+
+    return _MERMAID_BLOCK.sub(fix_block, body), repairs
+
+
+def unrenderable_mermaid(body: str) -> list[str]:
+    """Every fenced mermaid block in this doc that the renderer cannot parse.
+
+    Returns `[]` when the renderer isn't installed, which is not the same as "they are all fine" —
+    it is "nothing can be said", and the caller treats it that way. `render_mermaid_svg` folds a
+    missing Node, a missing install and a parse failure into one `None`, so the install is checked
+    separately here or every diagram would look broken on a machine without the tool.
+
+    This is the second half of the check and catches nothing the first half does: a diagram can
+    parse perfectly and still be wrong (see `repair_mermaid`), and a diagram that does not parse is
+    not something specky can fix on the author's behalf.
+
+    It is a coarse net, deliberately described as one. Measured against the vendored renderer, it
+    catches an unknown diagram type and prose that is not a diagram at all; it does *not* catch an
+    unclosed bracket, a malformed arrow or a header with no body, all of which render into
+    something. So the lint above is the precise half and this is the backstop, not the reverse.
+    """
+    from specky.mermaid_tool import tool_dir
+
+    if tool_dir() is None:
+        return []
+
+    from specky.html_render import render_mermaid_svg
+
+    broken = []
+    for index, block in enumerate(_MERMAID_BLOCK.findall(body), 1):
+        if not block.strip():
+            broken.append(f"diagram {index} is empty")
+        elif render_mermaid_svg(block) is None:
+            first = next((l.strip() for l in block.splitlines() if l.strip()), "")
+            broken.append(f"diagram {index} (`{first[:60]}`) does not parse")
+    return broken
+
+
 def lost_content(existing_body: str, new_body: str) -> str | None:
     """Why this regeneration reads as a rewrite rather than an update — or None if it looks like one.
 
@@ -562,6 +666,56 @@ class DocSync:
     note: str
 
 
+# Terms one doc may contribute to the glossary. A doc proposing more than this has stopped naming
+# shared vocabulary and started restating its own contents.
+MAX_GLOSSARY_TERMS = 25
+
+
+def append_glossary_rows(repo_root: Path, terms: list[dict]) -> tuple[Path | None, int]:
+    """Add unseen terms to `specs/GLOSSARY.md`. Returns the file and how many rows landed.
+
+    **Additive, never a rewrite.** Existing definitions win and existing prose is untouched — this
+    is a file people hand-edit, and it is also the one specky file with a machine contract on the
+    other side: `html_render.load_glossary` parses it back with
+    `^\\|\\s*\\*\\*([^*|]+)\\*\\*\\s*\\|\\s*(.+?)\\s*\\|\\s*$` to drive the viewer's term
+    auto-linking, which degrades silently to a no-op against any row that doesn't match. So the
+    round trip is guaranteed by construction: the existing terms are read with `load_glossary`
+    itself — the writer's exact inverse — and a term carrying a `|` or a `*` is dropped rather than
+    escaped, because the regex's term group is `[^*|]+` and an escaped pipe fails it just the same.
+    """
+    from specky.html_render import load_glossary
+
+    path = paths.glossary(repo_root)
+    existing = load_glossary(repo_root)
+    known = {term.lower() for term in existing}
+
+    rows = []
+    for raw in terms[:MAX_GLOSSARY_TERMS]:
+        if not isinstance(raw, dict):
+            continue
+        term = str(raw.get("term", "")).strip()
+        definition = " ".join(str(raw.get("definition", "")).split())
+        if not term or not definition or "|" in term or "*" in term:
+            continue
+        if term.lower() in known:
+            continue  # hand-written definitions win
+        known.add(term.lower())  # and a term proposed twice in one run lands once
+        rows.append(f"| **{term}** | {definition.replace('|', '/')} |")
+
+    if not rows:
+        return None, 0
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# {repo_root.name} — Glossary\n\n| Term | Definition |\n|---|---|\n")
+
+    # Appended after the last table row, so prose below the table survives.
+    lines = path.read_text().splitlines()
+    last_row = max((i for i, line in enumerate(lines) if line.startswith("|")), default=len(lines) - 1)
+    lines[last_row + 1 : last_row + 1] = rows
+    path.write_text("\n".join(lines).rstrip("\n") + "\n")
+    return path, len(rows)
+
+
 def stage_pending(repo_root: Path, domain: str, topic: str, content: str) -> Path:
     """Park a refused draft where a human can read it, out of git's reach (see `PENDING_DIR`)."""
     path = repo_root / PENDING_DIR / domain / f"{topic}.md"
@@ -609,6 +763,9 @@ def sync_feature_doc(
         return DocSync(doc_path, False, f"left {rel} alone (authored: human) — may need a look")
 
     body = generate_feature_doc(existing_body, commit, classification.domain, classification.topic, provider)
+    # Same two checks `document.write` applies, for the same reason: this path rewrites whole
+    # sections, and a section carrying a diagram can come back with it mangled.
+    body, _ = repair_mermaid(body)
 
     # type/tags come from this run's classification; hand-authored `related`, `owner`, `authored`
     # and `origin` values are preserved across regenerations since the AI is never asked to produce
@@ -617,9 +774,9 @@ def sync_feature_doc(
     # day of someone adding it. `origin` is `specky adopt`'s pointer back to where a doc used to
     # live, which is the one thing a reader needs to resolve a stale link somebody else wrote.
     # `sources` joins them for a different reason than the rest: it isn't hand-written, it's what
-    # `bootstrap.write_domain_doc` recorded about which files a doc was written from, and it's the
-    # only thing giving a bootstrapped repo `specky check` coverage. The AI is never asked for it,
-    # so without this line the first commit-driven update of a bootstrapped doc would silently drop
+    # `document.write` recorded about which files a doc was written from, and it's the only thing
+    # giving such a doc `specky check` coverage. The AI is never asked for it here, so without this
+    # line the first commit-driven update of a doc written by `specky document` would silently drop
     # that coverage — within a day, since the hook runs on every commit.
     meta: dict[str, str | list[str]] = {"type": classification.doc_type, "tags": classification.tags}
     for key in ("related", "owner", "authored", "origin", "sources"):
@@ -633,6 +790,10 @@ def sync_feature_doc(
         if invented:
             named = ", ".join(f"`{flag}`" for flag in invented)
             problem = f"it names {named}, which nothing in this repo accepts"
+    if not problem:
+        broken = unrenderable_mermaid(body)
+        if broken:
+            problem = "; ".join(broken)
     if problem:
         pending = stage_pending(repo_root, classification.domain, classification.topic, content)
         return DocSync(

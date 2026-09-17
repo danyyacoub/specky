@@ -63,8 +63,8 @@ Details: [doc-adoption.md](specs/documentation/doc-adoption.md).
 ## Use
 
 ```bash
-specky bootstrap [PATH] [--max-domains N] [--dry-run] [--yes] [--batch]  # first docs, from the code
-specky sync [--dry-run] [--since REV|DATE] [--limit N] [--all-branches] [--no-bootstrap] [--batch]
+specky document "<feature>" [--domain D] [--topic T] [--scope PATH] [--max-turns N] [--dry-run] [--yes]
+specky sync [--dry-run] [--since REV|DATE] [--limit N] [--all-branches] [--batch]
 specky index                    # rebuild .specky/index.db (FTS5) from specs/ + git log
 specky search "<query>"         # keyword search
 specky render-html               # static site -> .specky/site/index.html
@@ -82,18 +82,23 @@ Each commit hook fire documents up to 5 of the newest 20 undocumented commits (b
 a follow-up commit. Amend/rebase renames the affected history docs instead of duplicating them.
 Nothing commits mid-rebase/cherry-pick; those paths queue in `.specky/deferred-docs`.
 
-On a repo with no docs yet, `specky sync` reads the **code** first rather than the commit log: one
-call works out what the product is and which domains it has, then one call per domain writes its
-`specs/<domain>/<topic>.md`, plus `PRODUCT.md` and `GLOSSARY.md`. Only then does it walk the last 10
-commits, which by then are already reflected in what it just wrote — so they only get their
-`specs/history/` entry. Cost is O(domains), not O(commits): roughly 2 + N calls, against 2–3 *per
-commit* for the `--since <first commit>` backfill that was the only broad-coverage option before.
+`specky document "the refund flow"` is the other half, and the only part of specky that reads
+**code**. You name one feature or workflow; a model searches the repo for it with tools specky hands
+it — search, outline, read — and writes `specs/billing/refund-flow.md` with its index row and any
+shared vocabulary it introduced. Scope is one thing at a time, which is the point: a budget that has
+to cover a whole repo leaves each feature a few kilobytes, and the docs come out broad and shallow.
 
-It is idempotent and resumable with no state on disk: a domain that already has a doc is skipped,
-`--max-domains` bounds one run, and re-running picks up the rest. `specky bootstrap` runs the same
-pass on demand — after adding a module, or scoped to a subtree (`specky bootstrap src/billing`).
-`specky sync --no-bootstrap` opts out. Every subsequent run is the incremental commit-driven path,
-unchanged.
+There is no pass to run before specky is useful. The commit-driven path above works from day one,
+and reference docs are added one feature at a time, when somebody wants one. Re-running on a feature
+that already has a doc updates it in place — a rewrite that drops or guts a section is refused and
+parked in `.specky/pending/` instead.
+
+The conversation is bounded (16 turns, 80k characters of tool output) and the tools resolve against
+`git ls-files` minus the docs tree, vendored paths and `[check] ignore` — so a gitignored, vendored
+or disowned path is unreachable rather than merely discouraged. A doc that was written without
+reading any code at all is refused outright. Needs a provider with a tool channel: `anthropic`, or
+an `openai-compatible` endpoint that supports tool calling. `command` degrades to a single call and
+says so. Details: [cli/document.md](specs/cli/document.md).
 
 `--batch` on either command sends the independent calls — every domain's doc, or every commit's
 summary — as one Message Batches request at half the per-token price. It is asynchronous (specky
@@ -153,14 +158,16 @@ max_tokens = 4096
 cache = true                        # memoize responses in the index; see `specky cost`
 
 # Optional: point one kind of call at a different model. Everything else uses `model`.
-discovery_model = "claude-sonnet-5"  # bootstrap's one whole-repo call — the hardest question
-                                     # specky asks, asked once, and it shapes every doc after it
+document_model = "claude-sonnet-5"  # the tool conversation behind `specky document` — the
+                                    # hardest thing specky asks, and the only task where a weak
+                                    # model shows up directly in what lands in specs/
 ```
 
 `openai-compatible` also needs `base_url`. `command` needs `command` (e.g. `"claude -p"`), no key —
-and can't take per-task models, since it has no model to swap. Tasks: `summary`, `classify`, `doc`,
-`discovery`, `glossary`, `tag`, `chat`; an unknown `<task>_model` is a config error, not a no-op.
-`specky doctor` prints the routing.
+and can't take per-task models, since it has no model to swap; it also can't run `specky document`'s
+tool loop, which degrades to one call. Tasks: `summary`, `classify`, `doc`, `document`, `tag`,
+`chat`; an unknown `<task>_model` is a config error, not a no-op. `specky doctor` prints the
+routing.
 
 Cache: keyed on model **and** prompt, max 20 MB, oldest evicted first. That is specky's own
 memoization — an identical re-run costs nothing. Separately, with the `anthropic` provider the

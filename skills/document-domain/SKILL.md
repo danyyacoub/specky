@@ -17,12 +17,25 @@ Ask the user for:
 - One `.md` per topic. If a module has multiple distinct topics, split into multiple files.
 - If the domain folder doesn't exist yet under `specs/`, create it.
 
+## Doing it without an agent
+
+`specky document "<feature or workflow>"` runs this whole procedure unattended: it hands a model
+tools to search and read the repo, then writes the doc, the `MODULES.md` row and any new glossary
+terms, applying the same rules below. It needs `[ai]` pointed at a provider with a tool channel
+(`anthropic`, or an `openai-compatible` endpoint that supports tool calling).
+
+Follow the steps below when you are the agent doing the work — you have the repo in context and
+your own tools, which is usually the better doc. Either way the output is the same shape, and
+`specky document` is the right answer when someone wants it done in CI or without an agent.
+
 ## Steps
 
 ### 1. Discover the domain
 - Find all related files: `find . -path "*<domain>*" -not -path "*/node_modules/*" -not -path "*/.venv/*" -not -path "*/dist/*"`
 - Identify the relevant modules, services, routers, jobs, or components for this domain.
 - If the user provided specific files, use those as the primary scope.
+- Ignore vendored and generated trees even when they are committed (`vendor/`, `third_party/`,
+  `*_pb2.py`, minified bundles) — they are not this repo's own code.
 
 ### 2. Check existing documentation
 - Look in `specs/<domain>/` for an existing functional doc (kebab-case `.md` — see Naming Convention above). Avoid creating a second doc for the same topic.
@@ -87,6 +100,11 @@ GLOSSARY.md so a scenario is unambiguous.}
   out otherwise; shared tags already cover most links and show up in `specky graph`.
 - `owner` (optional): never write one. It's a hand-written "who to ask" line (a name, team or
   channel) that the viewer surfaces, and you have no way to know who that is.
+- `sources` (recommended): the code files you actually read to write this doc. `specky index` folds
+  these into the code-to-doc map, and it is the only thing giving a doc written from code (rather
+  than from a commit) any `specky check` coverage — that map is otherwise derived from git log, and
+  a doc about a module nobody has touched in months has no commit pairing it with that module.
+  List only files you really read.
 - If updating an existing doc, keep its `related` list and `owner` as-is unless they're actually
   wrong now — both are hand-authored, not something to regenerate from scratch.
 

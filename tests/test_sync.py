@@ -364,7 +364,7 @@ def test_a_non_utf8_file_in_the_diff_does_not_abort_the_run(in_repo, monkeypatch
     assert sha[:8] in _history(in_repo)  # the run reached this commit instead of dying on it
 
 
-# --- cold start: bootstrapping from the code before walking commits ------------------------------
+# --- a repo with no feature docs yet --------------------------------------------------------------
 
 
 def _source(repo: Path, rel: str, body: str = "def run():\n    return 1\n") -> None:
@@ -375,93 +375,42 @@ def _source(repo: Path, rel: str, body: str = "def run():\n    return 1\n") -> N
     git(repo, "commit", "-q", "-m", f"add {rel}")
 
 
-def test_a_cold_repo_bootstraps_before_walking_commits(in_repo, monkeypatch, capsys):
-    """The whole point of the ordering: the commit walk must classify into the docs bootstrap
-    wrote, not invent parallel ones — on a cold repo `ExistingDocs` is empty, which is exactly the
-    case the classification prompt calls a defect."""
-    import json
-
+def test_a_repo_with_no_feature_docs_still_gets_its_history_walked(in_repo, monkeypatch, capsys):
+    """`sync` reads git and only git. A repo with no reference docs is not a broken state to be
+    fixed before the walk can happen — it is a repo whose docs are added one feature at a time."""
     _source(in_repo, "src/billing/refund.py")
-    provider = RoutingProvider(
-        discovery=json.dumps(
-            {
-                "product": {"what_it_is": "Refunds things."},
-                "domains": [
-                    {
-                        "domain": "billing",
-                        "topic": "refunds",
-                        "purpose": "Issue refunds",
-                        "type": "feature",
-                        "tags": ["billing"],
-                        "paths": ["src/billing/refund.py"],
-                    }
-                ],
-            }
-        ),
-    )
+    provider = RoutingProvider()
     _use_provider(monkeypatch, provider)
 
     commit_doc.sync(assume_yes=True)
 
-    assert (in_repo / "specs" / "billing" / "refunds.md").exists()
-    assert "writing them from the code first" in capsys.readouterr().out
+    assert _history(in_repo), "the history trail is written either way"
+    assert 'specky document "<feature>"' in capsys.readouterr().out
 
 
-def test_a_warm_repo_never_bootstraps(in_repo, monkeypatch, capsys, write_doc):
+def test_a_repo_that_already_has_feature_docs_is_not_told_to_document_one(
+    in_repo, monkeypatch, capsys, write_doc
+):
     _source(in_repo, "src/billing/refund.py")
     write_doc("billing/refunds.md", "# Billing\n", {"type": "feature", "tags": ["billing"]})
+    _use_provider(monkeypatch, RoutingProvider())
+
+    commit_doc.sync(assume_yes=True)
+
+    assert "specky document" not in capsys.readouterr().out
+
+
+def test_sync_never_reads_source_code(in_repo, monkeypatch):
+    """The division of labour with `specky document`: this path's evidence is a diff, always. A
+    commit's own source never reaches a prompt here, which is what keeps its cost O(commits)."""
+    _source(in_repo, "src/billing/refund.py", "def unmistakable_marker():\n    return 1\n")
     provider = RoutingProvider()
     _use_provider(monkeypatch, provider)
 
     commit_doc.sync(assume_yes=True)
 
-    assert "writing them from the code first" not in capsys.readouterr().out
-    assert not any(p.startswith("You are reading a codebase") for p in provider.prompts)
-
-
-def test_no_bootstrap_skips_the_offer(in_repo, monkeypatch, capsys):
-    _source(in_repo, "src/billing/refund.py")
-    provider = RoutingProvider()
-    _use_provider(monkeypatch, provider)
-
-    commit_doc.sync(assume_yes=True, bootstrap=False)
-
-    assert "writing them from the code first" not in capsys.readouterr().out
-
-
-def test_bootstrapped_commits_get_history_only(in_repo, monkeypatch):
-    """Those commits are already in the docs bootstrap just wrote from the working tree, so asking
-    a model to update the same docs from the same diffs is redundant — and in practice came back as
-    whole-body rewrites that `lost_content` refused, leaving pending drafts for correct docs."""
-    import json
-
-    _source(in_repo, "src/billing/refund.py")
-    provider = RoutingProvider(
-        discovery=json.dumps(
-            {
-                "product": {"what_it_is": "Refunds things."},
-                "domains": [
-                    {
-                        "domain": "billing",
-                        "topic": "refunds",
-                        "purpose": "Issue refunds",
-                        "type": "feature",
-                        "tags": ["billing"],
-                        "paths": ["src/billing/refund.py"],
-                    }
-                ],
-            }
-        ),
-    )
-    _use_provider(monkeypatch, provider)
-
-    commit_doc.sync(assume_yes=True)
-
-    assert _history(in_repo), "history entries are still written"
-    assert not any("decide whether it changes user-facing" in p for p in provider.prompts), (
-        "no commit should have been classified on the bootstrap run"
-    )
-    assert not (in_repo / ".specky" / "pending").exists()
+    bodies = [p for p in provider.prompts if "unmistakable_marker" in p]
+    assert all("Diff" in p for p in bodies), "only ever as part of a diff"
 
 
 def test_batch_fetches_every_summary_in_one_request(in_repo, monkeypatch):
@@ -481,7 +430,7 @@ def test_batch_fetches_every_summary_in_one_request(in_repo, monkeypatch):
     provider = Batching()
     _use_provider(monkeypatch, provider)
 
-    commit_doc.sync(assume_yes=True, batch=True, bootstrap=False)
+    commit_doc.sync(assume_yes=True, batch=True)
 
     assert len(provider.batches) == 1, "one request for the whole run, not one per chunk of four"
     assert len(provider.batches[0]) == len(shas) + 1  # + the fixture's initial commit
@@ -493,7 +442,7 @@ def test_batch_falls_back_when_the_provider_has_none(in_repo, monkeypatch, capsy
     _commit(in_repo, "second")
     _use_provider(monkeypatch, RoutingProvider())
 
-    commit_doc.sync(assume_yes=True, batch=True, bootstrap=False)
+    commit_doc.sync(assume_yes=True, batch=True)
 
     assert _history(in_repo), "the commits are still documented"
     assert "--batch ignored" in capsys.readouterr().out
@@ -508,7 +457,7 @@ def test_each_kind_of_call_reuses_one_stable_prefix(in_repo, monkeypatch):
     provider = RoutingProvider()
     _use_provider(monkeypatch, provider)
 
-    commit_doc.sync(assume_yes=True, bootstrap=False)
+    commit_doc.sync(assume_yes=True)
 
     prefixes = [p for p in provider.prefixes if p]
     summary = [p for p in prefixes if p.startswith("Summarize what changed")]

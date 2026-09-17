@@ -1,4 +1,5 @@
 import json
+import pathlib
 
 import pytest
 
@@ -573,3 +574,96 @@ def test_classify_sends_the_prefix_separately(tmp_repo):
     classify_change(tmp_repo, _commit("a change", "the diff"), provider, ExistingDocs())
 
     assert provider.prefixes[0], "the stable half must travel as `prefix`, not inside the prompt"
+
+
+# --- mermaid: repair what is unambiguous, refuse what isn't ---------------------------------------
+#
+# Both halves exist because a broken diagram is the quietest defect a generated doc can carry. The
+# viewer degrades an unparseable one to a fenced block of source, and a node with a class suffix
+# naming nothing renders perfectly — just unstyled. Neither shows up as an error anywhere, and the
+# first turned up on the very first real `specky document` run.
+
+
+def test_a_class_suffix_with_no_class_name_is_dropped():
+    body = '```mermaid\nflowchart LR\n  A["Refunds"]:::\n  A --> B\n```\n'
+
+    fixed, repairs = generator.repair_mermaid(body)
+
+    assert ':::' not in fixed
+    assert 'A["Refunds"]' in fixed
+    assert repairs == ["a `:::` with no class name"]
+
+
+def test_a_class_suffix_naming_no_classdef_is_dropped():
+    body = '```mermaid\nflowchart LR\n  A["Refunds"]:::feature\n```\n'
+
+    fixed, repairs = generator.repair_mermaid(body)
+
+    assert ":::feature" not in fixed
+    assert repairs == ["`:::feature` names no classDef"]
+
+
+def test_a_class_suffix_with_its_classdef_is_left_alone():
+    body = (
+        "```mermaid\nflowchart LR\n  classDef feature fill:#eef1ff\n"
+        '  A["Refunds"]:::feature\n```\n'
+    )
+
+    fixed, repairs = generator.repair_mermaid(body)
+
+    assert fixed == body and repairs == []
+
+
+def test_a_colon_run_inside_a_label_is_text_not_syntax():
+    """There it is somebody's title, and rewriting it would corrupt the diagram rather than fix it."""
+    body = '```mermaid\nflowchart LR\n  A["a ::: b"]\n```\n'
+
+    fixed, repairs = generator.repair_mermaid(body)
+
+    assert fixed == body and repairs == []
+
+
+def test_prose_outside_a_mermaid_block_is_never_touched():
+    body = "Use `:::` to assign a class.\n\n```python\nx = 1 ::: 2\n```\n"
+
+    fixed, repairs = generator.repair_mermaid(body)
+
+    assert fixed == body and repairs == []
+
+
+def test_both_diagrams_in_one_doc_are_repaired():
+    body = (
+        '```mermaid\nflowchart LR\n  A["x"]:::\n```\n\ntext\n\n'
+        '```mermaid\nflowchart TD\n  B["y"]:::gone\n```\n'
+    )
+
+    fixed, repairs = generator.repair_mermaid(body)
+
+    assert ":::" not in fixed
+    assert len(repairs) == 2
+
+
+def test_an_empty_diagram_is_reported():
+    assert generator.unrenderable_mermaid("```mermaid\n\n```") == ["diagram 1 is empty"]
+
+
+def test_a_diagram_the_renderer_cannot_parse_is_reported(monkeypatch):
+    """`render_mermaid_svg` folds a missing Node, a missing install and a parse failure into one
+    `None`, so the install is checked separately — otherwise every diagram would read as broken on
+    a machine without the tool."""
+    import specky.mermaid_tool as mermaid_tool
+
+    monkeypatch.setattr(mermaid_tool, "tool_dir", lambda: pathlib.Path("/tmp"))
+    monkeypatch.setattr("specky.html_render.render_mermaid_svg", lambda source: None)
+
+    broken = generator.unrenderable_mermaid('```mermaid\nbananachart LR\n  A --> B\n```')
+
+    assert len(broken) == 1 and "does not parse" in broken[0]
+
+
+def test_nothing_is_claimed_when_the_renderer_is_not_installed(monkeypatch):
+    import specky.mermaid_tool as mermaid_tool
+
+    monkeypatch.setattr(mermaid_tool, "tool_dir", lambda: None)
+
+    assert generator.unrenderable_mermaid("```mermaid\ntotal nonsense\n```") == []

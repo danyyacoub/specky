@@ -32,7 +32,7 @@ Cli, Ai, Docs, Chat, Search, Rendering, Integration — rather than per module i
 | [cli/pr-comment.md](cli/pr-comment.md) | Generate markdown summaries of documentation changes in a commit range for GitHub PR comments |
 | [cli/export.md](cli/export.md) | Export documentation as single-page HTML, PDF, or Confluence storage format for sharing and archival |
 | [cli/init.md](cli/init.md) | Configure specky with interactive interview or command-line flags for CI and automation environments |
-| [cli/bootstrap.md](cli/bootstrap.md) | Write a repo's first feature and workflow documentation from source code instead of commit history |
+| [cli/document.md](cli/document.md) | Document one named feature or workflow by letting a model search this repo's code for it |
 
 ## Ai
 
@@ -77,3 +77,9 @@ command that calls a model goes through this layer.
 | Doc | Purpose |
 |---|---|
 | [integration/marketplace-installation.md](integration/marketplace-installation.md) | Enable specky checkout installation via Claude Code plugin marketplace |
+
+## Catalog
+
+| Doc | Purpose |
+|---|---|
+| [catalog/feature-graph.md](catalog/feature-graph.md) | List, tag and link classified feature/workflow docs, and emit the feature/workflow graph as Mermaid |

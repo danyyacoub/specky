@@ -2,8 +2,9 @@
 
 Two things every test here needs: a real git repo on disk (specky resolves paths via
 `git rev-parse --show-toplevel` and writes its index to `<root>/.specky/index.db`), and a
-stand-in for the AI provider. The `Provider` protocol is a single `generate(prompt) -> str`,
-so the stand-in is a few lines rather than a mocking framework.
+stand-in for the AI provider. `generate(prompt) -> str` is the whole protocol for every caller
+but one, so those stand-ins are a few lines rather than a mocking framework; `ToolProvider`
+covers the exception, `specky document`, which holds a multi-turn tool conversation.
 """
 
 from __future__ import annotations
@@ -54,11 +55,8 @@ class RoutingProvider:
         summary: str = "A change happened.",
         classification: str = '{"skip": true}',
         doc: str = "# Doc\n\n## What It Does\nThings.\n",
-        discovery: str = '{"product": {}, "domains": []}',
-        glossary: str = '{"terms": []}',
     ) -> None:
         self._summary, self._classification, self._doc = summary, classification, doc
-        self._discovery, self._glossary = discovery, glossary
         self._lock = threading.Lock()
         self.prompts: list[str] = []
         self.prefixes: list[str] = []
@@ -72,13 +70,6 @@ class RoutingProvider:
             self.prefixes.append(prefix)
         if prompt.startswith("Summarize what changed"):
             return self._summary
-        # Both bootstrap prompts are matched before the generic JSON check below, which the
-        # glossary one would otherwise satisfy — it asks for a JSON object in the same words the
-        # classifier does.
-        if prompt.startswith("You are reading a codebase"):
-            return self._discovery
-        if "the shared vocabulary" in prompt:
-            return self._glossary
         if "Respond with ONLY a JSON object" in prompt:
             return self._classification
         return self._doc
@@ -119,3 +110,49 @@ def write_doc(tmp_repo: Path):
         return path
 
     return _write
+
+
+class ToolProvider:
+    """A provider that holds a tool conversation, driven by a script instead of a model.
+
+    `turns` is a list of turns, each a list of `(tool name, arguments)` the "model" calls. Tools are
+    reached through the same `invoke` callback the real provider loops use, so the terminal tool
+    ends the run by raising through this exactly as it does in production — which is the part worth
+    exercising, since neither provider catches it.
+    """
+
+    def __init__(self, turns: list[list[tuple[str, dict]]], trailing: str = "") -> None:
+        self.turns = turns
+        self.trailing = trailing
+        self.prompts: list[str] = []
+        self.prefixes: list[str] = []
+        self.tasks: list[str] = []
+        self.tool_names: list[str] = []
+        self.turns_taken = 0
+
+    def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
+        raise AssertionError("a tool-capable provider should never take the single-call path")
+
+    def converse(
+        self,
+        prompt: str,
+        *,
+        prefix: str = "",
+        tools,
+        invoke,
+        task: str = "",
+        max_turns: int = 12,
+        final_tool: str = "",
+        on_turn=None,
+    ) -> str:
+        self.prompts.append(prefix + prompt)
+        self.prefixes.append(prefix)
+        self.tasks.append(task)
+        self.tool_names = [tool.name for tool in tools]
+        for turn in self.turns[:max_turns]:
+            self.turns_taken += 1
+            for name, arguments in turn:
+                invoke(name, arguments)
+            if on_turn:
+                on_turn(len(prefix) + len(prompt), 0)
+        return self.trailing

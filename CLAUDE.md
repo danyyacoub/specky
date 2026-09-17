@@ -23,8 +23,13 @@ file isn't. Full behavior docs are indexed at [specs/MODULES.md](specs/MODULES.m
 `--help` won't tell you:
 
 - `specky check` needs `specky index` to have run first.
-- `specky bootstrap` is the only command that reads source code; everything else reads git. It runs
-  automatically inside `specky sync` on a repo with no feature docs yet (`--no-bootstrap` opts out).
+- `specky document "<feature>"` is the only command that reads source code, and the only one that
+  gives a model tools (`src/specky/tools.py`) instead of a single assembled prompt. Everything else
+  reads git. A repo needs no setup pass before it is useful — docs are added one feature at a time.
+- `Provider.converse` is that tool loop. `provider = "command"` has no tool channel and raises
+  `ToolLoopUnsupported`; `document.py` catches it and degrades to one call, losing the guard that a
+  doc must be written from code someone actually read. This repo's own `specky.toml` is a `command`
+  provider, so `specky document` runs degraded here unless `[ai]` is pointed elsewhere.
 - `Provider.generate(prompt, *, prefix, task)` — `prefix` is the stable half of a prompt (sent as a
   cached system block), `task` picks the per-task model. A new prompt gets a `prefix` only if it is
   byte-identical across calls; anything per-call leaking in makes every call a cache miss.
