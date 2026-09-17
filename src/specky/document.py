@@ -55,13 +55,11 @@ from specky.generator import (
     DocSync,
     ExistingDocs,
     append_glossary_rows,
+    doc_problem,
     leading_json_object,
-    lost_content,
     repair_mermaid,
     stage_pending,
     strip_code_fence,
-    ungrounded_flags,
-    unrenderable_mermaid,
     update_modules_index,
 )
 from specky.tools import DocSubmitted, Submission, Toolbox
@@ -296,6 +294,41 @@ class Written:
         )
 
 
+def _refused(doc_path: Path, note: str) -> Written:
+    """A refusal, in the one shape all of them share.
+
+    Five call sites in `write`, each of which was a six-line nested constructor. Collapsing them
+    makes the refusals visibly the same kind of thing, which is the point — they are one policy
+    ("say why, write nothing"), not five decisions.
+    """
+    return Written(DocSync(doc_path, False, note))
+
+
+def _recorded_sources(
+    repo_root: Path, submission: Submission, read: list[str], require_reads: bool
+) -> list[str]:
+    """Which files this doc may claim to be about.
+
+    `sources:` is what gives a doc `specky check` coverage at all: `indexer.declared_sources` folds
+    these pairs into the code-to-doc map, which is otherwise derived from git log alone and cannot
+    see a doc written from code it did not change. It is also weighted *above* the git-derived
+    pairs, so a file named here by mistake is a file nobody is warned about when it changes.
+
+    Two regimes, because the evidence differs. With tools, the claim is intersected with what was
+    actually opened, so a file the model merely saw in a search result cannot claim coverage; no
+    claim at all falls back to the read set, which is the more useful answer and is evidence either
+    way. Without tools there is no read set to check against, so the claim is taken on trust,
+    filtered only to paths that really are tracked source — which at least stops a doc claiming
+    coverage of a file that does not exist.
+    """
+    if require_reads:
+        return ([path for path in submission.sources if path in read] or read)[
+            :MAX_SOURCES_RECORDED
+        ]
+    tracked = set(source.source_files(repo_root))
+    return [path for path in submission.sources if path in tracked][:MAX_SOURCES_RECORDED]
+
+
 def write(
     repo_root: Path,
     submission: Submission,
@@ -306,16 +339,20 @@ def write(
 ) -> Written:
     """Validate a submission and put it on disk, or refuse it and say why.
 
-    The same three guards the commit path applies (`generator.sync_feature_doc`), plus one this path
-    needs and that one doesn't: a doc must be written from source somebody actually opened. On the
-    commit path that is free, because the diff *is* the source. Here the model chose what to read,
+    `generator.doc_problem` holds the guards this shares with the commit path, so the two refuse the
+    same things in the same order. What is added here is everything that path gets for free: a doc
+    must name a domain and topic, must have a body, and must be written from source somebody
+    actually opened. On the commit path the diff *is* the source; here the model chose what to read,
     so it has to be checked.
     """
     domain, topic = _slug(submission.domain), _slug(submission.topic)
+    docs_root = paths.docs_root(repo_root)
     if not domain or not topic:
-        return Written(DocSync(repo_root, False, "refused — the submission named no domain/topic"))
+        # No doc path to name yet, so the docs root stands in for one. `DocSync.path` means "the
+        # doc this is about", and there isn't one — but `Written.paths` skips it either way.
+        return _refused(docs_root, "refused — the submission named no domain/topic")
 
-    doc_path = paths.docs_root(repo_root) / domain / f"{topic}.md"
+    doc_path = docs_root / domain / f"{topic}.md"
     rel = doc_path.relative_to(repo_root)
 
     # Strip any frontmatter the model produced: the real block is rendered below from the fields it
@@ -326,31 +363,13 @@ def write(
     # because a class suffix naming nothing is the one diagram defect specky can fix outright.
     body, repairs = repair_mermaid(body)
     if not body.strip():
-        return Written(DocSync(doc_path, False, f"refused {rel} — the submission had no markdown"))
+        return _refused(doc_path, f"refused {rel} — the submission had no markdown")
+    if require_reads and not read:
+        return _refused(
+            doc_path, f"refused {rel} — no source file was read, so the doc has nothing behind it"
+        )
 
-    # `sources:` is what gives a doc `specky check` coverage at all: `indexer.declared_sources`
-    # folds these pairs into the code-to-doc map, which is otherwise derived from git log alone and
-    # cannot see a doc written from code it did not change.
-    if require_reads:
-        if not read:
-            return Written(
-                DocSync(
-                    doc_path,
-                    False,
-                    f"refused {rel} — no source file was read, so the doc has nothing behind it",
-                )
-            )
-        # The claim is checked against what was actually opened, so a file the model merely saw in
-        # a search result cannot claim coverage. No claim at all falls back to the read set, which
-        # is the more useful answer and is evidence either way.
-        sources = [path for path in submission.sources if path in read] or read
-    else:
-        # Degraded path: there is no read set to check against, so the claim is taken on trust —
-        # filtered only to paths that really are tracked source, which at least stops a doc
-        # claiming coverage of a file that does not exist.
-        tracked = set(source.source_files(repo_root))
-        sources = [path for path in submission.sources if path in tracked]
-    sources = sources[:MAX_SOURCES_RECORDED]
+    sources = _recorded_sources(repo_root, submission, read, require_reads)
 
     existing_meta: dict = {}
     existing_body = None
@@ -362,14 +381,13 @@ def write(
         # Parking it is therefore the same courtesy every other refusal extends: the draft may well
         # be worth reading next to the one on disk, and that is a judgement for its owner.
         if str(existing_meta.get("authored", "")).strip().lower() == "human":
-            pending = stage_pending(repo_root, domain, topic, frontmatter.render(meta_stub(submission), body))
-            return Written(
-                DocSync(
-                    doc_path,
-                    False,
-                    f"left {rel} alone (authored: human) — may need a look. The draft it wrote "
-                    f"is at {pending.relative_to(repo_root)}",
-                )
+            pending = stage_pending(
+                repo_root, domain, topic, frontmatter.render(meta_stub(submission), body)
+            )
+            return _refused(
+                doc_path,
+                f"left {rel} alone (authored: human) — may need a look. The draft it wrote "
+                f"is at {pending.relative_to(repo_root)}",
             )
 
     meta: dict[str, str | list[str]] = {"type": submission.doc_type, "tags": submission.tags}
@@ -383,27 +401,11 @@ def write(
             meta[key] = existing_meta[key]
     content = frontmatter.render(meta, body)
 
-    problem = lost_content(existing_body, body) if existing_body else None
-    if not problem:
-        invented = ungrounded_flags(repo_root, body)
-        if invented:
-            named = ", ".join(f"`{flag}`" for flag in invented)
-            problem = f"it names {named}, which nothing in this repo accepts"
-    if not problem:
-        # A diagram nothing can parse is not something to write and hope somebody notices: the
-        # viewer degrades it to a fenced block of source, so it lands as a wall of syntax in the
-        # middle of a doc written for people who don't read syntax.
-        broken = unrenderable_mermaid(body)
-        if broken:
-            problem = "; ".join(broken)
+    problem = doc_problem(repo_root, existing_body, body)
     if problem:
         pending = stage_pending(repo_root, domain, topic, content)
-        return Written(
-            DocSync(
-                doc_path,
-                False,
-                f"refused {rel} — {problem}. Draft kept at {pending.relative_to(repo_root)}",
-            )
+        return _refused(
+            doc_path, f"refused {rel} — {problem}. Draft kept at {pending.relative_to(repo_root)}"
         )
 
     doc_path.parent.mkdir(parents=True, exist_ok=True)
@@ -458,7 +460,7 @@ def document(
     and the docs tree is the only record a re-run needs.
     """
     toolbox = Toolbox(repo_root, scope)
-    if not toolbox._allowed:
+    if not toolbox.allowed:
         print(f"{label}: no tracked source files{f' under {scope}' if scope else ''}")
         return []
 

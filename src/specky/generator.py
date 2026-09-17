@@ -466,6 +466,36 @@ def lost_content(existing_body: str, new_body: str) -> str | None:
     return None
 
 
+def doc_problem(repo_root: Path, existing_body: str | None, body: str) -> str | None:
+    """Why this doc must not reach disk, or None if it may.
+
+    Both write paths ask this — `sync_feature_doc` below and `document.write` — and they have to ask
+    it the same way. The guards are independent, but their *order* is policy: `lost_content` runs
+    first because losing somebody's prose is the worst outcome available and the cheapest to state,
+    and the mermaid check runs last because it is the only one that shells out to Node. An order
+    that lives in two places is an order that drifts, and the drift would be silent — each path
+    would still refuse, just not the same things first, so the two would explain the same bad doc
+    differently.
+
+    Not included here: `repair_mermaid`, which callers run *before* this, because it rewrites the
+    body that everything below is then measured against.
+    """
+    if existing_body:
+        lost = lost_content(existing_body, body)
+        if lost:
+            return lost
+
+    invented = ungrounded_flags(repo_root, body)
+    if invented:
+        named = ", ".join(f"`{flag}`" for flag in invented)
+        return f"it names {named}, which nothing in this repo accepts"
+
+    broken = unrenderable_mermaid(body)
+    if broken:
+        return "; ".join(broken)
+    return None
+
+
 def _strip_own_heading(title: str, text: str) -> str:
     """Drop a leading `## Title` the model included anyway — the splice adds it back itself."""
     lines = text.strip().splitlines()
@@ -784,16 +814,7 @@ def sync_feature_doc(
             meta[key] = existing_meta[key]
     content = frontmatter.render(meta, body)
 
-    problem = lost_content(existing_body, body) if existing_body else None
-    if not problem:
-        invented = ungrounded_flags(repo_root, body)
-        if invented:
-            named = ", ".join(f"`{flag}`" for flag in invented)
-            problem = f"it names {named}, which nothing in this repo accepts"
-    if not problem:
-        broken = unrenderable_mermaid(body)
-        if broken:
-            problem = "; ".join(broken)
+    problem = doc_problem(repo_root, existing_body, body)
     if problem:
         pending = stage_pending(repo_root, classification.domain, classification.topic, content)
         return DocSync(

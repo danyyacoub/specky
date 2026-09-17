@@ -134,9 +134,13 @@ class Toolbox:
     read: list[str] = field(default_factory=list)  # ordered: the model's own reading order
     calls: list[str] = field(default_factory=list)
 
+    # Derived in __post_init__, so they stay out of the dataclass's signature.
+    allowed: set[str] = field(init=False, default_factory=set)
+    listable: list[str] = field(init=False, default_factory=list)
+
     def __post_init__(self) -> None:
         in_scope = source.source_files(self.repo_root, self.scope)
-        self._allowed = set(in_scope)
+        self.allowed = set(in_scope)
         # Tests are reachable even when they sit outside the scope, and they almost always do:
         # `--scope src/billing` says where the feature lives, while its tests live in `tests/`.
         # Excluding them costs the doc its best material — a test case is a statement of expected
@@ -144,10 +148,18 @@ class Toolbox:
         # Tests table the model is being asked to produce. Scope is about where the *subject* is,
         # not about what may be consulted to describe it.
         if self.scope:
-            self._allowed |= {
+            self.allowed |= {
                 path for path in source.source_files(self.repo_root) if source.is_test(path)
             }
-        self._listable = sorted(in_scope)
+        # Already sorted — `source_files` returns a sorted list.
+        self.listable = in_scope
+
+        # Built once. `tools()` used to construct seven `Tool`s and every schema literal on each
+        # call, and `invoke` called it per tool call purely to look a name up — dozens of rebuilds
+        # on a sixteen-turn run, and the list handed to the provider was a different object graph
+        # from the one `invoke` resolved against.
+        self._tools = self._build_tools()
+        self._by_name = {tool.name: tool for tool in self._tools}
 
     # --- budget ---------------------------------------------------------------------------------
 
@@ -188,7 +200,7 @@ class Toolbox:
         except (TypeError, ValueError):
             limit = SEARCH_LIMIT_DEFAULT
         hits = source.grep(
-            self.repo_root, query, allowed=self._allowed, regex=bool(regex), limit=limit
+            self.repo_root, query, allowed=self.allowed, regex=bool(regex), limit=limit
         )
         if not hits:
             return f"No tracked source matches {query!r}."
@@ -208,7 +220,7 @@ class Toolbox:
         given before it asked.
         """
         prefix = _text(prefix).lstrip("./")
-        matched = [path for path in self._listable if not prefix or path.startswith(prefix)]
+        matched = [path for path in self.listable if not prefix or path.startswith(prefix)]
         if not matched:
             where = f" under {prefix!r}" if prefix else ""
             return f"No tracked source files{where}."
@@ -235,7 +247,7 @@ class Toolbox:
         blocks = []
         for rel_path in wanted:
             rel_path = rel_path.lstrip("./")
-            if rel_path not in self._allowed:
+            if rel_path not in self.allowed:
                 blocks.append(f"{rel_path} — not a tracked source file in scope")
                 continue
             text = source.read_source(self.repo_root / rel_path)
@@ -255,7 +267,7 @@ class Toolbox:
         rel_path = _text(path).lstrip("./")
         if not rel_path:
             return "read_file needs a path."
-        if rel_path not in self._allowed:
+        if rel_path not in self.allowed:
             return (
                 f"{rel_path} is not a tracked source file in scope. Use list_files or search_code "
                 "to find the real path."
@@ -336,7 +348,7 @@ class Toolbox:
         rel_path = _text(path).lstrip("./")
         if not rel_path:
             return "history needs a path."
-        if rel_path not in self._allowed:
+        if rel_path not in self.allowed:
             return f"{rel_path} is not a tracked source file in scope."
         if not self.remaining:
             return self._exhausted()
@@ -395,6 +407,9 @@ class Toolbox:
     # --- the list handed to a provider ----------------------------------------------------------
 
     def tools(self) -> list[Tool]:
+        return self._tools
+
+    def _build_tools(self) -> list[Tool]:
         docs = docs_root(self.repo_root).name
         return [
             Tool(
@@ -589,7 +604,7 @@ class Toolbox:
         model sent a bad argument, it can see that it did, and the next turn usually fixes it. The
         one exception is `DocSubmitted`, which is the run ending on purpose.
         """
-        tool = next((t for t in self.tools() if t.name == name), None)
+        tool = self._by_name.get(name)
         shown = ", ".join(f"{k}={v!r}" for k, v in list(arguments.items())[:3])
         self.calls.append(f"{name}({source.clip(shown, 120)})")
         if tool is None:
