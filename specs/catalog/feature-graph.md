@@ -1,6 +1,6 @@
 ---
 type: feature
-tags: [search, documentation, rendering]
+tags: [documentation, search]
 sources: [src/specky/catalog.py, src/specky/cli.py, src/specky/mcp_server.py]
 ---
 
