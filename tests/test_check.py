@@ -17,7 +17,14 @@ import sys
 import pytest
 
 from specky import check, cli, db, indexer
-from specky.check import CheckConfig, Report, Violation, resolve_base, run_check
+from specky.check import (
+    CheckConfig,
+    Report,
+    Violation,
+    report_lines,
+    resolve_base,
+    run_check,
+)
 from specky.indexer import run_index
 
 from conftest import git
@@ -560,3 +567,54 @@ def test_a_bad_base_is_one_stderr_line_not_a_traceback(covered, monkeypatch, cap
 
     assert exit_info.value.code == 1
     assert capsys.readouterr().err.startswith("specky check: ")
+
+
+# --- workflow doc shape ---------------------------------------------------------------------
+
+_WORKFLOW_META = "---\ntype: workflow\ntags: [refunds]\n---\n\n"
+_SHAPELY = (
+    _WORKFLOW_META
+    + "# Billing — Refund Flow\n\n## How It Works\n\n1. **Ask** — the customer asks.\n\n"
+    "```mermaid\nflowchart TD\n  A --> B\n```\n\n## Edge Cases\n\nNone.\n"
+)
+
+
+def _workflow_repo(repo, body: str):
+    """Two documented commits over `src/app.py`, with the covering doc typed `workflow`."""
+    for i in range(2):
+        sha = _commit(repo, f"work {i}", {"src/app.py": f"def refund{i}(): ...\n"})
+        _document(repo, sha, docs={DOC: f"{body}\nRevision {i}.\n"})
+    run_index(repo)
+    return repo
+
+
+def test_a_workflow_doc_with_no_diagram_and_no_edge_cases_is_noted(tmp_repo):
+    repo = _workflow_repo(tmp_repo, _WORKFLOW_META + DOC_BODY)
+    report = run_check(repo, base="HEAD~2")
+
+    assert report.misshapen == ((DOC, "no diagram and no `## Edge Cases` section"),)
+    assert "aren't the shape a workflow doc is meant to be" in "\n".join(report_lines(report))
+
+
+def test_a_workflow_doc_that_is_the_right_shape_is_not_noted(tmp_repo):
+    repo = _workflow_repo(tmp_repo, _SHAPELY)
+
+    assert run_check(repo, base="HEAD~2").misshapen == ()
+
+
+def test_a_feature_doc_owes_neither(tmp_repo):
+    repo = _workflow_repo(tmp_repo, "---\ntype: feature\ntags: [refunds]\n---\n\n" + DOC_BODY)
+
+    assert run_check(repo, base="HEAD~2").misshapen == ()
+
+
+def test_the_shape_note_never_fails_the_build(tmp_repo):
+    """Advice, like `unowned`: a doc predating the template isn't a regression this range
+    introduced."""
+    repo = _workflow_repo(tmp_repo, _WORKFLOW_META + DOC_BODY)
+    report = run_check(repo, base="HEAD~2")
+
+    assert report.misshapen and not report.violations
+    assert report.as_dict()["misshapen"] == [
+        {"doc_path": DOC, "missing": "no diagram and no `## Edge Cases` section"}
+    ]

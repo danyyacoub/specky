@@ -23,7 +23,10 @@ no doc.
   already has one.
 - Write docs in plain language, for a non-technical reader: what it does and why, not how it's
   implemented. Follow the existing docs' shape — `## What It Does`, `## How It Works`, an outcomes
-  table, and an `## Acceptance Tests` table of Given/When/Then rows.
+  table, and an `## Acceptance Tests` table of Given/When/Then rows. A workflow doc has a stricter
+  shape: `## How It Works` is the happy path only, a ```mermaid diagram of it sits directly under
+  the steps, and an `## Edge Cases` table (Situation | What happens | Why) gathers every branch off
+  that path.
 - **Before opening a pull request**, run `specky check --base origin/main`. It's offline, needs no
   API key and takes a second; it fails if this branch changed code covered by a doc it didn't touch.
   Fix what it names rather than pushing and waiting for CI to say the same thing.

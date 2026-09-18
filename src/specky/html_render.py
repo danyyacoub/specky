@@ -457,6 +457,32 @@ a { color: inherit; }
 .doc figure.flow .fx { overflow-x: auto; }
 .doc figure.flow .fx svg { max-width: none; margin: 0; }
 
+/* --- workflow steps: the happy path under `## How It Works`, numbered by a counter rather
+   than by <ol>'s own marker so the number can sit in its own chip on the rail. Only rendered
+   for doc_type == workflow (see `_step_list`); every other list keeps the plain <ol>. */
+.doc ol.steps { counter-reset: step; list-style: none; margin: 20px 0; padding: 0; }
+.doc ol.steps li {
+  counter-increment: step; position: relative; margin: 0; padding: 0 0 18px 42px;
+}
+.doc ol.steps li::before {
+  content: counter(step);
+  position: absolute; left: 0; top: 0;
+  width: 26px; height: 26px; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--workflow-bg); border-radius: 50%;
+  background: var(--workflow-bg); color: var(--workflow);
+  font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+/* The rail joining one step to the next — not drawn past the last one. */
+.doc ol.steps li::after {
+  content: ""; position: absolute; left: 13px; top: 30px; bottom: 4px;
+  border-left: 1px solid var(--border);
+}
+.doc ol.steps li:last-child { padding-bottom: 0; }
+.doc ol.steps li:last-child::after { display: none; }
+.doc ol.steps .st { display: block; color: var(--text-primary); font-weight: 600; line-height: 26px; }
+.doc ol.steps .sd { display: block; color: var(--text-secondary); margin-top: 2px; }
+
 /* --- glossary hover terms: ported from glia's `.gl`/`.tip` (enrichment_render.py) --- */
 .doc .gl { border-bottom: 1px dotted var(--accent); cursor: help; }
 .tip {
@@ -1354,6 +1380,78 @@ def _wrap_tables(body_html: str) -> str:
     return _TABLE.sub(r'<figure class="tw"><table>\1</table></figure>', body_html)
 
 
+# --- workflow steps ---------------------------------------------------------------------
+# A workflow doc's `## How It Works` is its happy path in order, and the order is the whole reason
+# the doc exists — so it gets a stepper rather than the same `<ol>` every other list on the page
+# gets. Only for `doc_type == "workflow"`: on a feature doc the numbered list is one detail among
+# several and promoting it would just be louder, not clearer.
+
+# `head` is tempered against `h2` rather than a plain `.*?`: left greedy-free but unbounded, the
+# first `<h2>` on the page swallows everything up to the *steps*' closing tag, the heading check
+# then fails on the concatenation, and the real heading never gets its own attempt.
+_STEP_SECTION = re.compile(
+    r"(<h2>(?P<head>(?:(?!</?h2>).)*?)</h2>\s*)<ol>(?P<items>.*?)</ol>", re.DOTALL
+)
+_STEP_ITEM = re.compile(r"<li>\s*(?P<body>.*?)\s*</li>", re.DOTALL)
+# The bold label the template asks for, and whatever separator the writer put after it. The label
+# may itself contain markup — `link_glossary` has already run, so a glossary term inside it is a
+# `<span class="gl">` by now.
+_STEP_LABEL = re.compile(r"^<strong>(?P<label>.*?)</strong>\s*[-—–:]?\s*(?P<rest>.*)$", re.DOTALL)
+# A list whose items are separated by blank lines is a *loose* list, and markdown wraps each item's
+# text in its own `<p>`. That is how most of these docs are written, so matching only the tight form
+# would leave the stepper off more docs than it reached.
+_LONE_PARAGRAPH = re.compile(r"^<p>(?P<text>(?:(?!</?p>).)*)</p>$", re.DOTALL)
+_TAGS = re.compile(r"<[^>]+>")
+# A step carrying a sub-list is left alone entirely. `_STEP_ITEM`'s lazy `.*?</li>` would otherwise
+# stop at the *nested* `</li>`, closing the description span inside the sub-list and spilling the
+# leftover `</ul></li>` into the page as stray tags.
+_NESTED_LIST = re.compile(r"<[uo]l[ >]")
+STEP_HEADING = "how it works"
+
+
+def _step_list(body_html: str) -> str:
+    """Turn a workflow's happy-path `<ol>` into `<ol class="steps">` — see `ol.steps` in CSS.
+
+    Left exactly as it was unless the list really is the shape the template asks for: under the
+    `## How It Works` heading, and with bold labels to split on. A doc that writes its steps some
+    other way gets a plain list rather than a stepper full of empty titles, which is the right
+    trade — nothing here is load-bearing, and a hand-written doc predating the template is the
+    common case.
+    """
+
+    def section(match: re.Match[str]) -> str:
+        if _TAGS.sub("", match.group("head")).strip().lower() != STEP_HEADING:
+            return match.group(0)
+        if _NESTED_LIST.search(match.group("items")):
+            return match.group(0)
+        labelled = False
+
+        def item(li: re.Match[str]) -> str:
+            nonlocal labelled
+            body = li.group("body")
+            lone = _LONE_PARAGRAPH.match(body)
+            # Unwrapped only when the item *is* one paragraph. An item carrying a second paragraph
+            # keeps its markup, because splitting a label off the first one would leave the rest
+            # orphaned outside the step it belongs to.
+            parts = _STEP_LABEL.match(lone.group("text") if lone else body)
+            if parts is None:
+                return li.group(0)
+            labelled = True
+            rest = parts.group("rest").strip()
+            return (
+                f'<li><span class="st">{parts.group("label")}</span>'
+                + (f'<span class="sd">{rest}</span>' if rest else "")
+                + "</li>"
+            )
+
+        items = _STEP_ITEM.sub(item, match.group("items"))
+        if not labelled:
+            return match.group(0)
+        return f'{match.group(1)}<ol class="steps">{items}</ol>'
+
+    return _STEP_SECTION.sub(section, body_html)
+
+
 # --- glossary auto-linking -------------------------------------------------------------
 # Ported from glia's `link_glossary` (enrichment_render.py) — same whole-word, longest-
 # term-wins, first-occurrence-per-page algorithm, over plain markdown output rather than
@@ -1557,16 +1655,24 @@ def markdown_html(content: str) -> str:
     return md.markdown(content, extensions=MARKDOWN_EXTENSIONS)
 
 
-def render_doc_body(content: str, glossary: dict[str, str]) -> tuple[str, bool, bool]:
+def render_doc_body(
+    content: str, glossary: dict[str, str], doc_type: str = ""
+) -> tuple[str, bool, bool]:
     """A doc's markdown as the HTML every specky renderer shows: glossary terms wrapped, tables in
     a scrollable figure, ```mermaid``` fences replaced by static SVG.
 
     Returns `(html, any mermaid source, any of it rendered)` — the two flags drive the one-time
     "run `specky setup-diagrams`" hint. `specky export` shares this so a stakeholder's single-page
     HTML or PDF is the same content as the viewer's, not a second renderer's guess at it.
+
+    `doc_type` only ever adds the workflow stepper (`_step_list`). It defaults to "" so a caller
+    with no classification to hand, and every doc that isn't a workflow, gets exactly the rendering
+    it got before.
     """
-    body_html = link_glossary(markdown_html(content), glossary)
-    return _render_mermaid_blocks(_wrap_tables(body_html))
+    body_html = _wrap_tables(link_glossary(markdown_html(content), glossary))
+    if doc_type == "workflow":
+        body_html = _step_list(body_html)
+    return _render_mermaid_blocks(body_html)
 
 
 # --- doc chrome: breadcrumb/tags header, and the "Related" cross-link section ---------
@@ -1818,7 +1924,9 @@ def render_site(repo_root: Path) -> Path:
     any_mermaid_source = False
     any_mermaid_rendered = False
     for doc in docs:
-        body_html, has_source, has_rendered = render_doc_body(doc["content"], glossary)
+        body_html, has_source, has_rendered = render_doc_body(
+            doc["content"], glossary, doc["doc_type"]
+        )
         any_mermaid_source = any_mermaid_source or has_source
         any_mermaid_rendered = any_mermaid_rendered or has_rendered
         body = _doc_header(doc) + body_html + _related_section(doc, path_lookup)

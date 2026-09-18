@@ -51,10 +51,18 @@ Create/update the doc in `specs/<domain>/` using the descriptive filename (Namin
 {2-3 sentences explaining the feature in plain language. Non-technical people should understand this.}
 
 ## How It Works
-{Numbered steps explaining the process. Each step is one sentence with a bold label.}
+{Numbered steps explaining the process. Each step is one sentence with a bold label. On a workflow
+doc this is the happy path and nothing else — see Workflow docs below.}
+
+{Workflow docs only: a ` ```mermaid ` diagram of those same steps, directly under them.}
 
 ## {Outcomes / Statuses / Results}
 {Table showing possible outcomes and their meaning}
+
+## Edge Cases
+{Workflow docs only, and required there. Table: Situation | What happens | Why — every branch off
+the happy path: what is refused, what is skipped silently, what a partial run leaves behind. If
+there genuinely are none, say so in one line rather than omitting the section.}
 
 ## Acceptance Tests
 {Scenario-based tests that pin down the expected behaviour. One row per scenario, Given/When/Then style.
@@ -65,6 +73,18 @@ GLOSSARY.md so a scenario is unambiguous.}
 |---|---|---|---|
 | {short name} | {starting state / inputs, using glossary terms} | {action or trigger} | {observable outcome / computed value} |
 ```
+
+**Workflow docs have a fixed shape** (step 5 classified this as a whole workflow):
+- `## How It Works` is the **happy path only** — the run where everything goes right, numbered in
+  the order it happens. Anything conditional, any failure and any refusal belongs in
+  `## Edge Cases`, not as an aside inside a step.
+- A ` ```mermaid ` diagram is **always** required, directly under the numbered steps: `flowchart`
+  for branching, `sequenceDiagram` for actors handing off to each other, never both in one doc.
+  Keep labels short and reuse the steps' own wording; if the two drift, the steps win.
+- `## Edge Cases` is required, as a Situation | What happens | Why table.
+- `## Acceptance Tests` closes the doc and carries a row for every `## Edge Cases` row.
+- A feature or specific-case doc has neither requirement, and gets a diagram only when the logic
+  really branches or distinct actors hand off to each other.
 
 **Acceptance-tests rules**:
 - **Always include an Acceptance Tests section.** If the domain is purely descriptive with no testable behaviour, say so explicitly in that section rather than omitting it.

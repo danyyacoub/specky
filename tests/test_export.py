@@ -301,3 +301,20 @@ def test_an_unknown_mode_is_rejected_before_anything_is_written(indexed):
     with pytest.raises(ValueError, match="unknown export mode"):
         run_export(indexed, mode="pdf")
     assert not (indexed / EXPORT_DIR).exists()
+
+
+def test_a_workflows_stepper_survives_the_export(tmp_repo, write_doc):
+    """The export shares `render_doc_body`, so the stepper has to come with it — including its
+    CSS, which the single page inlines rather than linking."""
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## How It Works\n\n1. **Request a refund** — the customer asks.\n",
+        {"type": "workflow"},
+    )
+    run_index(tmp_repo)
+    run_export(tmp_repo)
+
+    page = _page(tmp_repo)
+    assert '<ol class="steps">' in page
+    assert '<span class="st">Request a refund</span>' in page
+    assert "ol.steps" in page

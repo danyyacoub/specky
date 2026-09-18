@@ -161,6 +161,13 @@ tbody tr:nth-child(even) { background: #fafbfc; }
 figure.tw { margin: 0 0 1em; overflow-x: auto; }
 figure.flow { margin: 0 0 1em; text-align: center; }
 figure.flow svg { max-width: 100%; height: auto; }
+/* The viewer's workflow stepper (`html_render._step_list`), flattened for print: the same
+   numbered steps, without the chip and rail that assume a screen and a color scheme. */
+ol.steps { counter-reset: step; list-style: none; padding-left: 0; }
+ol.steps li { counter-increment: step; padding-left: 1.9em; text-indent: -1.9em; margin: 0 0 .7em; }
+ol.steps .st { font-weight: 620; }
+ol.steps .st::before { content: counter(step) ". "; color: #63666d; }
+ol.steps .sd { display: block; text-indent: 0; color: #3f4248; }
 abbr[title] { border-bottom: 1px dotted #63666d; text-decoration: none; cursor: help; }
 .cover { border-bottom: 2px solid #e3e5e9; padding-bottom: 18px; margin-bottom: 24px; }
 .cover p { color: #63666d; margin: .4em 0 0; }
@@ -258,7 +265,9 @@ def single_page_html(
     sections = []
     for _, group in groups:
         for doc in group:
-            body, has_source, has_rendered = render_doc_body(doc.content, glossary)
+            body, has_source, has_rendered = render_doc_body(
+                doc.content, glossary, doc.doc_type
+            )
             any_source = any_source or has_source
             any_rendered = any_rendered or has_rendered
             body = inline_glossary_titles(demote_headings(body), glossary)

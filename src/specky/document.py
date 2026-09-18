@@ -52,6 +52,7 @@ from specky.ai_provider import (
 )
 from specky.generator import (
     DOC_STYLE_INSTRUCTIONS,
+    WORKFLOW_STYLE_INSTRUCTIONS,
     DocSync,
     ExistingDocs,
     append_glossary_rows,
@@ -81,7 +82,8 @@ EXISTING_DOCS_CLIP = 8_000
 # is byte-identical across calls, and anything per-call leaking in makes every call a cache miss.
 # That matters more here than anywhere else in specky — a tool conversation resends its prefix on
 # every turn, so on a twelve-turn run this block is read thirteen times and paid for once.
-PROCEDURE = """You are writing one reference document about one feature or workflow of this \
+PROCEDURE = (
+    """You are writing one reference document about one feature or workflow of this \
 codebase, for a reader who is not an engineer. You have tools to search and read the repository. \
 Nothing you write reaches disk until you call submit_doc, and specky validates it before it does.
 
@@ -127,7 +129,18 @@ Ground every claim in code you have read. Where you could not find something, sa
 plainly instead of guessing — a confident sentence about behaviour that does not exist is the one
 failure that cannot be spotted by reading the doc.
 
-""" + DOC_STYLE_INSTRUCTIONS.format(domain_title="<Domain>", topic_title="<Topic>") + """
+Both shapes follow — use the one matching the type you chose in step 6, and follow it exactly.
+
+--- If you classified it as a FEATURE ---
+
+"""
+    + DOC_STYLE_INSTRUCTIONS.format(domain_title="<Domain>", topic_title="<Topic>")
+    + """
+--- If you classified it as a WORKFLOW ---
+
+"""
+    + WORKFLOW_STYLE_INSTRUCTIONS.format(domain_title="<Domain>", topic_title="<Topic>")
+    + """
 Also:
 
 - **Acceptance Tests are required.** Concrete scenarios with real-ish values and named entities,
@@ -139,18 +152,20 @@ Also:
   reader can guess the happy path; they cannot guess the exception, and finding it the hard way is
   what the doc exists to prevent. If a rule has a case it pointedly does not cover, say so in the
   same breath as the rule.
-- **Diagrams.** A workflow doc always gets one, placed right after the numbered steps. A feature doc
-  gets one only when it earns its space: the logic branches into a real decision tree, or distinct
-  actors hand off to each other. A single actor doing a straight sequence does not need one — the
-  numbered list already covers it. Use a fenced ```mermaid block: `flowchart` for branching,
-  `sequenceDiagram` for actors exchanging steps, never both in one doc. Keep labels short and reuse
-  the exact glossary terms, and if the diagram and the numbered steps ever disagree, the steps win.
+- **Diagrams.** A workflow doc always gets one and the workflow template above says where. A
+  feature doc gets one only when it earns its space: the logic branches into a real decision tree,
+  or distinct actors hand off to each other. A single actor doing a straight sequence does not need
+  one — the numbered list already covers it. Use a fenced ```mermaid block: `flowchart` for
+  branching, `sequenceDiagram` for actors exchanging steps, never both in one doc. Keep labels short
+  and reuse the exact glossary terms, and if the diagram and the numbered steps ever disagree, the
+  steps win.
 - **No frontmatter.** Start the markdown at its `# ` heading. The frontmatter is rendered from the
   fields you pass to submit_doc.
 - **Vocabulary.** Reuse the glossary terms below exactly; do not invent a synonym for a concept that
   already has one. Pass `glossary_terms` only for genuinely new shared vocabulary other docs will
   reuse — not for terms local to this one doc.
 """
+)
 
 
 def _section(title: str, body: str) -> str:

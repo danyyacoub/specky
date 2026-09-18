@@ -73,12 +73,18 @@ tags: [kebab-case-business-concept]
 {2-3 sentences explaining the feature in plain language. Non-technical people should understand this.}
 
 ## How It Works
-{Numbered steps explaining the process. Each step is one sentence with a bold label.}
+{Numbered steps explaining the process. Each step is one sentence with a bold label. On a
+`type: workflow` doc this is the happy path and nothing else — see Workflow docs below.}
 
 {Diagram, if this doc qualifies — see Diagrams rules below. Placed right after the numbered steps.}
 
 ## {Outcomes / Statuses / Results}
 {Table showing possible outcomes and their meaning}
+
+## Edge Cases
+{`type: workflow` only, and required there. Table: Situation | What happens | Why — every branch off
+the happy path: what is refused, what is skipped silently, what a partial run leaves behind. If there
+genuinely are none, say so in one line rather than omitting the section.}
 
 ## Acceptance Tests
 {Scenario-based tests that pin down the expected behaviour. One row per scenario, Given/When/Then style.
@@ -89,6 +95,15 @@ GLOSSARY.md so a scenario is unambiguous.}
 |---|---|---|---|
 | {short name} | {starting state / inputs, using glossary terms} | {action or trigger} | {observable outcome / computed value} |
 ```
+
+**Workflow docs have a fixed shape** (`type: workflow`):
+- `## How It Works` is the **happy path only** — the run where everything goes right, numbered in
+  the order it happens. Anything conditional, any failure and any refusal belongs in
+  `## Edge Cases`, not as an aside inside a step.
+- A ` ```mermaid ` diagram is **always** required, directly under the numbered steps.
+- `## Edge Cases` is required, as a Situation | What happens | Why table.
+- `## Acceptance Tests` closes the doc and carries a row for every `## Edge Cases` row.
+- A `type: feature` doc keeps the shape above and has neither requirement.
 
 **Frontmatter rules**:
 - `type`: `feature` for step 5's "Feature" or "Specific case" types, `workflow` for "Workflow".

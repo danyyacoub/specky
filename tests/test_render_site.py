@@ -376,3 +376,100 @@ def test_a_matched_body_shows_its_surrounding_context_in_the_result_row(site):
     assert "hit-context" in app_js
     # Escape first, then promote FTS5's markers — the other order would let doc text inject HTML.
     assert app_js.index("escapeHtml(snippet)") < app_js.index("'<mark>'")
+
+
+# --- the workflow stepper ---------------------------------------------------------------
+
+_STEPS = (
+    "## How It Works\n\n"
+    "1. **Request a refund** — the customer asks.\n"
+    "2. **Check the cap** — the index says how much is left.\n"
+    "3. **Pay it out**\n"
+)
+
+
+@pytest.fixture
+def stepped(tmp_repo, write_doc) -> Path:
+    """The same steps under both classifications, so the only difference is `doc_type`."""
+    write_doc(
+        "billing/refund-flow.md",
+        f"# Billing — Refund Flow\n\n{_STEPS}",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    write_doc(
+        "billing/refund-limits.md",
+        f"# Billing — Refund Limits\n\n{_STEPS}",
+        {"type": "feature", "tags": ["refunds"]},
+    )
+    run_index(tmp_repo)
+    return render_site(tmp_repo).parent
+
+
+def test_a_workflows_happy_path_renders_as_a_stepper(stepped):
+    page = (stepped / "billing-refund-flow.html").read_text()
+
+    assert '<ol class="steps">' in page
+    assert '<span class="st">Request a refund</span>' in page
+    # The em dash between label and sentence is the separator, not content — the two are now
+    # separate elements, so carrying it through would render it hanging at the start of a line.
+    assert '<span class="sd">the customer asks.</span>' in page
+    # A step with a label and nothing after it gets no empty description span.
+    assert '<li><span class="st">Pay it out</span></li>' in page
+
+
+def test_the_same_steps_in_a_feature_doc_stay_a_plain_list(stepped):
+    page = (stepped / "billing-refund-limits.html").read_text()
+
+    assert '<ol class="steps">' not in page
+    assert "<li><strong>Request a refund</strong> — the customer asks.</li>" in page
+
+
+def test_the_stepper_is_styled(stepped):
+    assert ".doc ol.steps" in (stepped / "assets" / "site.css").read_text()
+
+
+def test_a_list_that_is_not_under_how_it_works_is_left_alone(tmp_repo, write_doc):
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## Outcomes\n\n1. **Paid** — money moved.\n",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    run_index(tmp_repo)
+    site = render_site(tmp_repo).parent
+
+    assert '<ol class="steps">' not in (site / "billing-refund-flow.html").read_text()
+
+
+def test_steps_written_without_bold_labels_are_left_alone(tmp_repo, write_doc):
+    """A stepper full of empty titles is worse than the plain list it replaced, and a doc
+    predating the template is the common case."""
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## How It Works\n\n1. The customer asks.\n2. We pay.\n",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    run_index(tmp_repo)
+    site = render_site(tmp_repo).parent
+
+    assert '<ol class="steps">' not in (site / "billing-refund-flow.html").read_text()
+
+
+def test_a_step_carrying_a_sub_list_leaves_the_whole_section_alone(tmp_repo, write_doc):
+    """Regression: `_STEP_ITEM`'s lazy `</li>` stops at a *nested* one, which closed the description
+    span inside the sub-list and spilled the leftover `</ul></li>` into the page as stray tags."""
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## How It Works\n\n"
+        "1. **Request a refund** — the customer asks.\n"
+        "    - via the portal\n"
+        "    - via support\n"
+        "2. **Pay it out** — money moves.\n",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    run_index(tmp_repo)
+    page = (render_site(tmp_repo).parent / "billing-refund-flow.html").read_text()
+
+    assert '<ol class="steps">' not in page
+    # The sub-list is intact and nothing leaked out of it.
+    assert "<li>via the portal</li>" in page
+    assert page.count("<ul>") == page.count("</ul>")

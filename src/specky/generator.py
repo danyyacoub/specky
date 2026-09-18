@@ -115,6 +115,66 @@ Style: plain language, compact, focus on WHAT and WHY not implementation details
 information, no code blocks except formulas/thresholds, understandable by non-technical stakeholders.
 """
 
+# A workflow is a sequence, and the thing a reader needs from it is the order — so its doc is shaped
+# around one: the happy path as numbered steps, the same path drawn once underneath them, and every
+# way it can go otherwise gathered in one place instead of scattered through the steps as asides.
+#
+# Deliberately still `## How It Works` rather than `## Happy Path`. `lost_content` refuses a
+# regeneration that drops a section, so a rename would leave every workflow doc already on disk
+# carrying both headings — the old one frozen, because nothing would ever be asked to update it.
+# What changes is the heading's scope, not its name.
+WORKFLOW_STYLE_INSTRUCTIONS = """Write the doc in this style:
+
+# {domain_title} — {topic_title}
+
+## What It Does
+2-3 sentences, plain language: what starts this flow, what it produces, and who or what it is for.
+Non-technical readers should understand this.
+
+## How It Works
+The happy path and nothing else — the run where everything goes right. Numbered steps in the order
+they happen, each one sentence with a bold label. Anything conditional, any failure and any refusal
+belongs in Edge Cases below, not here.
+
+Immediately after the numbered steps, a fenced ```mermaid``` block drawing that same path: a
+`flowchart` where the shape is a sequence of moves, a `sequenceDiagram` where distinct actors hand
+off to each other. Never both in one doc. Keep labels short, reuse the numbered steps' own wording,
+and if the diagram and the steps ever disagree, the steps win.
+
+## Outcomes
+Table of the distinct end states this flow can reach, and what each one means.
+
+## Edge Cases
+Table: Situation | What happens | Why. Every branch off the happy path — what is refused, what is
+skipped silently, what is retried, what a partial run leaves behind. If there genuinely are none,
+say so in one line rather than omitting the section.
+
+## Acceptance Tests
+Given/When/Then table pinning down expected behaviour: the happy path, plus a row for every Edge
+Cases row above. If nothing testable, say so explicitly rather than omitting the section.
+
+Style: plain language, compact, focus on WHAT and WHY not implementation details, tables for structured
+information, no code blocks except formulas/thresholds, understandable by non-technical stakeholders.
+"""
+
+
+def doc_style(doc_type: str, *, domain_title: str, topic_title: str) -> str:
+    """The doc template for this classification, filled in.
+
+    The one place the fallback is decided, and the fallback is the point: `doc_type` is `""` on any
+    path that never classified, and the answer there has to be the shape that was there before
+    workflows had their own — not a workflow doc's stricter one, which would ask an unclassified
+    doc for a diagram and an Edge Cases table nobody decided it owed.
+
+    `document.py` deliberately does *not* come through here. It has to show the model both templates
+    up front, because the type is chosen mid-run and its prompt prefix is cached.
+    """
+    template = (
+        WORKFLOW_STYLE_INSTRUCTIONS if doc_type == "workflow" else DOC_STYLE_INSTRUCTIONS
+    )
+    return template.format(domain_title=domain_title, topic_title=topic_title)
+
+
 # The update path asks for sections rather than a whole file. A whole-file answer means every
 # untouched paragraph is re-emitted from the model's reading of it, which is how hand-written
 # detail gets quietly dropped and how prose gets reflowed into one line per paragraph (making
@@ -534,8 +594,42 @@ def _commit_block(commit: Commit) -> str:
     )
 
 
+# Sections a doc of this type owes, and what to say when one is missing. The update path only ever
+# sees the sections a doc already has, so a doc predating a template change would never be asked to
+# grow the new one — `merge_sections` appends an unknown heading perfectly well, nothing was telling
+# the model it could.
+#
+# The guidance lives in the table rather than in the sentence below it. A second entry here would
+# otherwise inherit a prompt hardcoded to say "workflow" and to describe Edge Cases' own columns,
+# which is a lie the next person to extend this would have no reason to expect.
+REQUIRED_SECTIONS: dict[str, dict[str, str]] = {
+    "workflow": {
+        "Edge Cases": (
+            "a table of Situation | What happens | Why, covering every branch off the happy path "
+            "— what is refused, what is skipped silently, what a partial run leaves behind. Move "
+            "any such case currently sitting in another section into it."
+        )
+    }
+}
+
+
+def _missing_sections(doc_type: str, titles: list[str]) -> list[tuple[str, str]]:
+    """`(heading, what to write there)` for each section this doc owes and does not have."""
+    have = {title.strip().lower() for title in titles}
+    return [
+        (section, guidance)
+        for section, guidance in REQUIRED_SECTIONS.get(doc_type, {}).items()
+        if section.lower() not in have
+    ]
+
+
 def update_feature_doc(
-    existing_content: str, commit: Commit, domain: str, topic: str, provider: Provider
+    existing_content: str,
+    commit: Commit,
+    domain: str,
+    topic: str,
+    provider: Provider,
+    doc_type: str = "",
 ) -> str:
     """An existing doc's new body, built by replacing only the sections the model names.
 
@@ -553,6 +647,11 @@ def update_feature_doc(
             section_list="\n".join(f"- {title}" for title in titles) or "(no sections yet)"
         )
     )
+    for section, guidance in _missing_sections(doc_type, titles):
+        prompt += (
+            f"\nThis doc is a {doc_type} and has no `## {section}`. Add it in this pass: "
+            f"{guidance}\n"
+        )
     # Frontmatter off first, so an echo of the block the doc it was shown starts with doesn't hide
     # the envelope behind it; the whole-body fallback below wants it gone either way.
     _, raw = frontmatter.parse(strip_code_fence(provider.generate(prompt, task="doc")))
@@ -564,20 +663,32 @@ def update_feature_doc(
 
 
 def generate_feature_doc(
-    existing_content: str | None, commit: Commit, domain: str, topic: str, provider: Provider
+    existing_content: str | None,
+    commit: Commit,
+    domain: str,
+    topic: str,
+    provider: Provider,
+    doc_type: str = "",
 ) -> str:
     """This feature's doc body. A doc that already exists is updated section by section
-    (`update_feature_doc`); one that doesn't is written whole, from this commit alone."""
+    (`update_feature_doc`); one that doesn't is written whole, from this commit alone.
+
+    `doc_type` picks the template (`doc_style`). It comes from this run's classification, which is
+    resolved before either path is entered — unlike `document.py`, where the model decides the type
+    mid-run and so has to be shown both shapes up front.
+    """
     if existing_content:
-        return update_feature_doc(existing_content, commit, domain, topic, provider)
+        return update_feature_doc(existing_content, commit, domain, topic, provider, doc_type)
 
     prompt = (
         f"You maintain specs/{domain}/{topic}.md, the living reference doc for this feature/workflow.\n\n"
         "No existing doc yet — write one from scratch based on this change, staying grounded in "
         "what's actually shown below (don't invent behaviour the diff/message doesn't evidence).\n\n"
         + _commit_block(commit)
-        + DOC_STYLE_INSTRUCTIONS.format(
-            domain_title=domain.replace("-", " ").title(), topic_title=topic.replace("-", " ").title()
+        + doc_style(
+            doc_type,
+            domain_title=domain.replace("-", " ").title(),
+            topic_title=topic.replace("-", " ").title(),
         )
         + "\nOutput ONLY the final markdown content of the doc file, nothing else "
         "(no commentary, no code fences around it)."
@@ -792,7 +903,14 @@ def sync_feature_doc(
     if str(existing_meta.get("authored", "")).strip().lower() == "human":
         return DocSync(doc_path, False, f"left {rel} alone (authored: human) — may need a look")
 
-    body = generate_feature_doc(existing_body, commit, classification.domain, classification.topic, provider)
+    body = generate_feature_doc(
+        existing_body,
+        commit,
+        classification.domain,
+        classification.topic,
+        provider,
+        classification.doc_type,
+    )
     # Same two checks `document.write` applies, for the same reason: this path rewrites whole
     # sections, and a section carrying a diagram can come back with it mangled.
     body, _ = repair_mermaid(body)

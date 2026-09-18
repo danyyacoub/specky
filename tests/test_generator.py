@@ -667,3 +667,88 @@ def test_nothing_is_claimed_when_the_renderer_is_not_installed(monkeypatch):
     monkeypatch.setattr(mermaid_tool, "tool_dir", lambda: None)
 
     assert generator.unrenderable_mermaid("```mermaid\ntotal nonsense\n```") == []
+
+
+# --- the workflow doc shape -------------------------------------------------------------
+
+
+def test_a_workflow_gets_the_workflow_template_and_a_feature_gets_the_other():
+    workflow = generator.doc_style("workflow", domain_title="Billing", topic_title="Refund Flow")
+    feature = generator.doc_style("feature", domain_title="Billing", topic_title="Refund Flow")
+
+    assert "## Edge Cases" in workflow and "mermaid" in workflow
+    assert "## Edge Cases" not in feature and "mermaid" not in feature
+    # Both are filled in, or the model is shown a literal `{domain_title}`.
+    assert "# Billing — Refund Flow" in workflow and "# Billing — Refund Flow" in feature
+
+
+def test_an_unclassified_doc_falls_back_to_the_feature_template():
+    """`doc_type` is "" on any path that never classified — the shape that was there before
+    workflows had their own is the safe answer, not a workflow doc's stricter one."""
+    assert generator.doc_style(
+        "", domain_title="Billing", topic_title="Refund Flow"
+    ) == generator.doc_style("feature", domain_title="Billing", topic_title="Refund Flow")
+
+
+def test_a_new_workflow_doc_is_asked_for_the_workflow_shape(tmp_repo):
+    provider = FakeProvider(
+        [
+            '{"skip": false, "domain": "billing", "topic": "refund-flow", '
+            '"purpose": "Issue refunds", "type": "workflow", "tags": ["refunds"]}',
+            "# Billing — Refund Flow\n\n## What It Does\nIssues refunds.\n",
+        ]
+    )
+    sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert "## Edge Cases" in provider.prompts[-1]
+
+
+def test_a_new_feature_doc_is_not(tmp_repo):
+    provider = FakeProvider(
+        [
+            '{"skip": false, "domain": "billing", "topic": "refund-limits", '
+            '"purpose": "Caps refunds", "type": "feature", "tags": ["refunds"]}',
+            "# Billing — Refund Limits\n\n## What It Does\nCaps refunds.\n",
+        ]
+    )
+    sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert "## Edge Cases" not in provider.prompts[-1]
+
+
+def test_an_existing_workflow_doc_missing_edge_cases_is_told_to_add_it(tmp_repo, write_doc):
+    """The update path only ever lists the sections a doc already has, so a doc predating the
+    workflow template would never be asked to grow the section it now owes."""
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## What It Does\nIssues refunds.\n",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    provider = FakeProvider(
+        [
+            '{"skip": false, "domain": "billing", "topic": "refund-flow", '
+            '"purpose": "Issue refunds", "type": "workflow", "tags": ["refunds"]}',
+            '{"sections": {}}',
+        ]
+    )
+    sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert "`## Edge Cases`" in provider.prompts[-1]
+
+
+def test_a_workflow_doc_that_already_has_edge_cases_is_not_told_twice(tmp_repo, write_doc):
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## What It Does\nIssues refunds.\n\n## Edge Cases\nNone.\n",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    provider = FakeProvider(
+        [
+            '{"skip": false, "domain": "billing", "topic": "refund-flow", '
+            '"purpose": "Issue refunds", "type": "workflow", "tags": ["refunds"]}',
+            '{"sections": {}}',
+        ]
+    )
+    sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert "has no `## Edge Cases`" not in provider.prompts[-1]

@@ -141,6 +141,10 @@ class Report:
     # has nobody to ask. Advice, never a failure — an owner is a fact about the team, and no diff
     # can be said to have broken it.
     unowned: tuple[str, ...] = ()
+    # Workflow docs in play that aren't the shape a workflow doc is meant to be (see
+    # `generator.WORKFLOW_STYLE_INSTRUCTIONS`), as `(doc path, what's missing)`. Advice for the
+    # same reason `unowned` is: the doc predates the template more often than a diff broke it.
+    misshapen: tuple[tuple[str, str], ...] = ()
 
     @property
     def covered(self) -> int:
@@ -166,6 +170,7 @@ class Report:
             "stale": [s.as_dict() for s in self.stale],
             "stale_elsewhere": self.stale_elsewhere,
             "unowned": list(self.unowned),
+            "misshapen": [{"doc_path": path, "missing": missing} for path, missing in self.misshapen],
             "coverage": {
                 "covered": self.covered,
                 "changed": len(self.code_files),
@@ -309,6 +314,42 @@ def _unowned_docs(repo_root: Path) -> set[str]:
     return {path for (path,) in rows}
 
 
+def _misshapen_workflows(repo_root: Path, docs: set[str]) -> dict[str, str]:
+    """`{doc path: what it's missing}` for each of `docs` that is a workflow doc and isn't the shape
+    the template asks for — a diagram of its happy path, and one place gathering the branches off it.
+
+    Read from the indexed content rather than the worktree, like `_stale_docs`, so this says the same
+    thing the viewer is showing. Unlike `_stale_docs` and `_unowned_docs` it is scoped in SQL rather
+    than after the fact, because it is the only one of the three that reads `content`: fetching every
+    workflow doc's full body to report on the handful in this range is the whole corpus in memory for
+    nothing. Only `doc_type = 'workflow'`: a feature doc earns a diagram rather than owing one, and
+    has no Edge Cases section to be missing.
+    """
+    if not docs:
+        return {}
+    conn = connect(repo_root)
+    try:
+        placeholders = ",".join("?" * len(docs))
+        rows = conn.execute(
+            "SELECT path, content FROM documents "
+            f"WHERE doc_type = 'workflow' AND path IN ({placeholders})",
+            sorted(docs),
+        ).fetchall()
+    finally:
+        conn.close()
+    out = {}
+    for path, content in rows:
+        lowered = content.lower()
+        missing = []
+        if "```mermaid" not in lowered:
+            missing.append("no diagram")
+        if "\n## edge cases" not in lowered:
+            missing.append("no `## Edge Cases` section")
+        if missing:
+            out[path] = " and ".join(missing)
+    return out
+
+
 def run_check(repo_root: Path, base: str | None = None, since: str | None = None) -> Report:
     config = CheckConfig.load(repo_root)
     resolved = resolve_base(repo_root, base=base, since=since)
@@ -342,6 +383,10 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
     # exactly who can add the missing line, and the rest of the repo's unowned docs aren't this
     # pull request's business.
     unowned = _unowned_docs(repo_root)
+    # Scoped exactly like `unowned`, and for the same reason: a pull request shouldn't be handed a
+    # list of workflow docs it never opened.
+    in_play = in_range | set(touched_docs)
+    misshapen = _misshapen_workflows(repo_root, in_play)
     return Report(
         base=resolved,
         code_files=tuple(code_files),
@@ -354,7 +399,8 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
         weak_links=sum(1 for _, _, commits in undocumented if commits < config.min_link_commits),
         stale=tuple(StaleDoc(doc, stale[doc]) for doc in relevant),
         stale_elsewhere=len(stale) - len(covers_range),
-        unowned=tuple(sorted(unowned & (in_range | set(touched_docs)))),
+        unowned=tuple(sorted(unowned & in_play)),
+        misshapen=tuple(sorted(misshapen.items())),
         uncovered=tuple(f for f in code_files if f not in covering),
         undocumented_commits=tuple(_undocumented_commits(repo_root, resolved)),
     )
@@ -400,6 +446,18 @@ def report_lines(report: Report) -> list[str]:
         lines += [f"  {path}" for path in report.unowned[:STALE_LIST_LIMIT]]
         if len(report.unowned) > STALE_LIST_LIMIT:
             lines.append(f"  … and {len(report.unowned) - STALE_LIST_LIMIT} more")
+    if report.misshapen:
+        lines.append("")
+        lines.append(
+            f"Note: {len(report.misshapen)} workflow doc(s) in this range aren't the shape a "
+            "workflow doc is meant to be — the happy path under `## How It Works`, a ```mermaid``` "
+            "diagram of it directly below, and the branches off it in `## Edge Cases`:"
+        )
+        lines += [
+            f"  {path} — {missing}" for path, missing in report.misshapen[:STALE_LIST_LIMIT]
+        ]
+        if len(report.misshapen) > STALE_LIST_LIMIT:
+            lines.append(f"  … and {len(report.misshapen) - STALE_LIST_LIMIT} more")
     if report.stale_elsewhere:
         lines.append("")
         lines.append(

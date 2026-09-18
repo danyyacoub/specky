@@ -6,7 +6,8 @@ Providers are configured in specky.toml under an [ai] table and constructed via
 names the kind of call, which `[ai] <task>_model` can route to its own model.
 
 Output length matters here in a way it doesn't for a chat UI: a whole feature doc
-(What It Does / How It Works / Outcomes / Acceptance Tests, with tables) is produced in one
+(What It Does / How It Works / Outcomes / Acceptance Tests, with tables, plus Edge Cases and a
+diagram on a workflow) is produced in one
 call, and a response cut off at the token limit would be written to specs/ as if it were
 complete. So every provider sends an explicit `max_tokens` (DEFAULT_MAX_TOKENS, overridable
 per-repo via `[ai] max_tokens`), and a truncated response raises `TruncatedResponse` rather
