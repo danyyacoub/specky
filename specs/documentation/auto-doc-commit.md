@@ -20,6 +20,24 @@ After generating documentation, the git hooks stage and commit it as a separate 
 9. **Un-stage after a rejected commit**: If the commit is turned down — a `pre-commit` gate rejecting it is the ordinary case, since the pre-commit framework's `end-of-file-fixer` and `trailing-whitespace` both match `.md` — the paths staged in step 5 are dropped from the index again, leaving the files on disk for the ledger's retry. Without that, the docs stay staged and the developer's *next* commit sweeps them into their own feature commit under their name; the ledger's retry is a fire too late to prevent it, because the human commits before the next hook fires. A path the human had already staged themselves before the fire is left alone: their staged content is gone either way, and un-staging it would compound the loss rather than undo it.
 10. **Report result**: On success the user sees "specky commit-doc: committed doc updates". A failure (another hook rejecting the commit) is printed and does not affect the original commit.
 
+```mermaid
+flowchart TD
+    A[Hook fires] --> B{HEAD carries the marker?}
+    B -->|Yes| C[Document nothing new]
+    B -->|No| D[Generate docs, collect written paths]
+    C --> E[Add what the ledger owes]
+    D --> E
+    E --> F[git add -- those paths + MODULES.md]
+    F --> G{Sequencer in progress?}
+    G -->|Yes| H[Write the ledger, leave them uncommitted]
+    G -->|No| I{Anything actually different?}
+    I -->|No| J[No commit]
+    I -->|Yes| K[Clear the ledger, commit with the marker]
+    K --> L{Commit accepted?}
+    L -->|No| M[Un-stage, restore the ledger, print the error]
+    L -->|Yes| N[committed doc updates]
+```
+
 ## What Staging By Path Cannot Do
 Step 5's pathspec is what keeps a human's unrelated drafts out of the bot's commit, but it protects *files*, not *edits*. `git add -- <path>` stages that file's whole working-tree content, so a doc the fire rewrites is committed as it now stands — including whatever the human had already changed in it and not committed. There is no narrower thing to stage: git has no way to commit specky's changes to a file without the human's.
 
@@ -43,6 +61,21 @@ Nothing is destroyed — the content is committed rather than dropped, and the r
 | The user had unrelated staged work | It is still staged after the doc commit |
 | Auto-commit attempt fails | Error printed to output, original commit unaffected; the docs are un-staged, stay on disk, and their paths go to the ledger for the next fire |
 | Hook detects its own marker | Nothing new is documented; a rename or a ledger debt is still committed |
+
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| `HEAD` already carries the marker | Nothing new is documented, but staging still runs | Documenting the hook's own commit would recurse forever; a rebase replays doc-sync commits too, and that is exactly the state a rebase's rename arrives in |
+| A rebase, cherry-pick, revert, merge or bisect is in progress | The paths go to the `.specky/` ledger, the operation is named, nothing is committed | A `git commit` inside someone else's replay confuses the sequencer at best — and a doc left uncommitted forever is worse than no doc, which is why the ledger exists rather than dropping them |
+| A previous fire left a debt in the ledger | This fire commits those paths too | The fire that wrote them couldn't; a path recorded as deleted whose file has since reappeared is deleted again, so the commit removes the orphan rather than resurrecting it |
+| A human has uncommitted edits in a doc this fire **doesn't** write | They are neither staged nor committed | Staging is by path, never a bare `git add specs` — someone mid-sentence would otherwise find their draft committed under specky's name |
+| A human has uncommitted edits in a doc this fire **does** write | They are committed too, under the marker | `git add -- <path>` stages that file's whole working-tree content; git has no way to commit specky's changes to a file without the human's. See [What Staging By Path Cannot Do](#what-staging-by-path-cannot-do) |
+| The docs regenerate byte-for-byte identical | No commit is created | There is nothing staged that differs, and an empty commit says a change happened when none did |
+| A `pre-commit` gate rejects the doc commit | The paths are un-staged and left on disk for the ledger's retry | Left staged, the developer's *next* commit would sweep them into their feature commit under their name — and the retry is a fire too late to prevent it |
+| The human had already staged one of those paths themselves | It is left staged | Their staged content is gone either way, and un-staging it would compound the loss rather than undo it |
+| The user had unrelated staged work | It is still staged afterwards | The commit is a partial one, made with a pathspec |
+| The commit fails for any other reason | The error is printed; the original commit is untouched | A hook must never be able to undo the commit that triggered it |
 
 ## Acceptance Tests
 | Given | When | Then |

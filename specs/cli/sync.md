@@ -85,6 +85,21 @@ flowchart TD
 | Provider configuration is missing or invalid | Exits with error message; no docs are written |
 | Provider call fails (API error, network issue, etc.) | Exits with error; partially written docs remain on disk |
 
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| Bare `sync` on a repo with a long backlog | Only the newest 10 commits (`SYNC_DEFAULT_DEPTH`) are inspected | A first run on an existing repo would otherwise walk its whole history and bill for it — the deliberate backfill is what the range flags are for |
+| Any of `--since` / `--limit` / `--all-branches` | The 10-commit cap is lifted entirely | Passing a range is how you ask for one; `--yes` alone does not lift it, because agreeing to a prompt isn't the same as naming a range |
+| The backlog is over 25 commits | Confirmation is required, and refused outright when stdin isn't a tty | That many commits is real money, and a non-interactive run has nobody to ask |
+| A hook fire or another `sync` holds the writer lock | It says so and exits 0 without writing | Both would pick the same pending commit and write the same file twice; a busy lock is a wait, not a failure |
+| Two commits share the same 8 hex digits | The second is written as `<sha12>.md` and the first's doc is untouched | Eight hex digits aren't unique on a large repo, and overwriting silently marked a documented commit as done |
+| A history doc predates full-sha frontmatter | It falls back to matching on its 8-hex filename | Otherwise every doc written before that field existed would look like a gap and be regenerated |
+| A commit is older than the hooks' 20-commit window | No hook fire will ever reach it | The hook is bounded because it spends money inside a git hook; `sync` is the command with no such bound, which is why `doctor` points here |
+| The commit is one of specky's own `[skip specky]` doc syncs | It is skipped | Documenting the doc commit would document the documentation, forever |
+| The provider fails partway through | The run exits with the error and the docs already written stay on disk | They are correct; discarding them would mean paying for them twice |
+| Docs are written | They are left uncommitted | Unlike a hook fire, a `sync` may have touched hundreds of files — that is a diff somebody should read before it lands |
+
 ## Acceptance Tests
 
 | Scenario | Given | When | Then |

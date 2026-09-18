@@ -222,6 +222,29 @@ otherwise derived from git log, and a doc written about a module nobody has touc
 no commit pairing it with that module at all. The commit path preserves the key across later
 updates.
 
+## Edge Cases
+
+Each of these is one branch off the happy path; [What Stops A Doc Being Written](#what-stops-a-doc-being-written) is
+the same set of refusals stated as guards, with the reasoning behind each one.
+
+| Situation | What happens | Why |
+|---|---|---|
+| The model never opens a file | The submission is refused before anything is written | A doc backed by no read is fabricated end to end and reads exactly like a real one |
+| The subject is already documented | The existing doc is updated in place | A second doc on one subject is a defect: it reads as authoritative, it is the copy nobody updates, and the two drift apart |
+| The update would drop or gut a section | It is refused and the draft is parked in `.specky/pending/` | A model shown an existing doc will sometimes summarise it away. The draft is kept because it may still be the better doc |
+| The target is `authored: human` | `read_doc` says so while the model can still change course; going ahead anyway parks the draft | Unlike the commit path, this can't be checked up front — the model picks the target, so by the time we know, the doc has been written and paid for |
+| The doc names a `--flag` nothing in the repo accepts | Refused and parked | It is the one error class a machine can settle by itself |
+| A diagram's class suffix names no `classDef` | It is repaired in place and the repair is reported | The only diagram defect specky can fix outright, rather than hand back |
+| A diagram the renderer can't parse | Refused and parked | The viewer degrades it into a block of raw syntax, in the middle of a doc written for people who don't read syntax |
+| The diagram renderer isn't installed | No claim is made either way, and diagrams are written as submitted | "Nothing can be said" is not the same as "they are all fine", and treating it as the latter would flag every diagram on a machine without Node |
+| The model answers in prose instead of calling the tool | One nudge, with only `submit_doc` offered; a second time, what it said is parked under `.specky/pending/unsubmitted/` | The turns were paid for, and what a model says on its way out is usually the doc itself, written as prose instead of handed over |
+| Sixteen turns pass with no submission | The last turn is forced to submit | A run that never calls `submit_doc` produces nothing at all |
+| A `--scope` is given | Listing, searching and reading are confined to that subtree — except the repo's tests | A test name is often the clearest statement of a behaviour in the repo, and its cases are the Acceptance Tests being written |
+| A path is outside the repo, gitignored, vendored, or `[check] ignore`d | It is unreachable | The tools resolve against a fixed allowlist rather than filtering what they are asked for |
+| The provider has no tool channel (`provider = "command"`) | It degrades to one call, with a warning, and `sources:` is taken on trust | The command is often an agent with perfectly good tools of its own — they are just invisible to specky, which can neither offer them nor see what was opened |
+| `--dry-run` | The prompt is printed and nothing is called | There is no discovery step to pay for, so a preview has no reason to cost anything |
+| Anything is written | It is left uncommitted | A generated doc is exactly the change somebody should read in `git status` first |
+
 ## Acceptance Tests
 
 | Scenario | Given | When | Then |

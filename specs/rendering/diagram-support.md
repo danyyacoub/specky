@@ -18,6 +18,21 @@ Static diagram rendering at build time using Mermaid (SVG output via Node), auto
 5. **Markdown tables wrapped** — `_wrap_tables()` nests each table in a scrollable `<figure class="tw">` with zebra-stripe CSS.
 6. **Static site output** — Resulting HTML with embedded SVGs, tooltips, and styled tables written to `.specky/site/index.html`, opens via `file://` with zero client JS for diagram rendering.
 
+```mermaid
+flowchart TD
+    A[Markdown body] --> B[Glossary terms auto-linked]
+    B --> C[Tables wrapped in a scrollable figure]
+    C --> D[Find the mermaid fences]
+    D --> E{Renderer located?}
+    E -->|No| F[Leave the fence as readable text, print the setup hint once]
+    E -->|Yes| G[node render.mjs per fence]
+    G --> H{Did it parse?}
+    H -->|No| F
+    H -->|Yes| I[Scrubbed static SVG in a figure]
+    F --> J[Page written to .specky/site/]
+    I --> J
+```
+
 ## Outcomes
 
 | Condition | Behavior |
@@ -29,6 +44,19 @@ Static diagram rendering at build time using Mermaid (SVG output via Node), auto
 | Doc title contains `]` or `"` | Title rendered intact; special characters escaped to mermaid entity codes in diagram |
 | Glossary term appears multiple times on a page | First mention linked to tooltip; rest stay plain text |
 | Markdown table in doc | Wrapped in scrollable `<figure>`; readable on any viewport |
+
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| Node isn't installed, or the renderer's dependencies never were | Every fence stays as readable text and the render still completes, with one hint naming `specky setup-diagrams` | A missing optional tool should cost you the pictures, not the site — and the source of a mermaid diagram reads perfectly well as text |
+| A directory holds `render.mjs` but no `node_modules` | It is skipped and the next candidate tried | Trying it would fail at run time, which looks like a broken diagram rather than an incomplete install |
+| specky is upgraded after `setup-diagrams` | Diagrams keep rendering | The `~/.cache/specky` copy is searched before the package's own, and it is the only one that outlives an upgrade |
+| A diagram doesn't parse | That one fence stays as text; the rest of the page renders | One bad diagram is not a reason to fail a whole site build, and the source is the most useful thing to show instead |
+| A doc title contains `]` or `"` | It is escaped to a mermaid entity and renders intact | Those characters end a node label, so an unescaped title breaks the diagram that quotes it |
+| The same glossary term appears several times on a page | Only the first is wrapped | Marking every mention turns a paragraph into a field of underlines |
+| A glossary term appears inside code, a link or a diagram | It is left alone | There it is a literal or already has its own behaviour |
+| The doc has no diagrams, no tables and no glossary matches | It renders unchanged | Every step is a no-op on content that has nothing for it to do |
 
 ## Acceptance Tests
 

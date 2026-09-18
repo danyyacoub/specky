@@ -19,6 +19,16 @@ Makes specky installable into Claude Code using the standard plugin installation
 
 4. **Installation completes** — Claude Code resolves the plugin definition and installs specky into the user's Claude Code environment.
 
+```mermaid
+flowchart TD
+    A[claude plugin marketplace add path] --> B{.claude-plugin/marketplace.json there?}
+    B -->|No| C[Marketplace file not found]
+    B -->|Yes| D[Read the plugin definition]
+    D --> E{Definition valid?}
+    E -->|No| F[Rejected at validate time]
+    E -->|Yes| G[specky installed from the checkout]
+```
+
 ## Outcomes
 
 | Scenario | Outcome |
@@ -26,6 +36,15 @@ Makes specky installable into Claude Code using the standard plugin installation
 | Manifest present and valid | Installation succeeds; specky available as a Claude Code plugin |
 | Manifest missing | `claude plugin marketplace add` fails with "Marketplace file not found" |
 | Plugin definition invalid | `claude plugin validate` catches it during initial setup |
+
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| The path has no `.claude-plugin/marketplace.json` | The add fails with "Marketplace file not found" | The manifest is what makes a directory a marketplace; without it there is nothing to describe the plugin, and this was the failure the manifest was added to fix |
+| The plugin definition is malformed | `claude plugin validate` rejects it during setup rather than at install time | A manifest that parses but describes nothing installable would fail later, further from the mistake |
+| specky is already installed | The add is idempotent or says so | Re-running an install command is the ordinary response to an unclear first run |
+| The checkout is moved after installing | The plugin stops resolving | `source` points at the checkout directory (`./`), so the install is a reference to a path on this machine, not a copy of it |
 
 ## Acceptance Tests
 

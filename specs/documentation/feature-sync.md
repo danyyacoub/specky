@@ -22,8 +22,6 @@ Because it runs unattended on every commit, it is deliberately hard for it to ma
 6. **Check the flags it names** — Every `--flag` in the new body is compared against the real options `argparse` reports, then against tracked source outside `specs/`, ignoring comment lines. A flag that appears in neither is invented.
 7. **Write, or refuse and park** — With no problem found, the doc is written with frontmatter rendered from this run's classification (hand-written `related`, `owner`, `authored` and `origin` values are carried over — the AI is never asked to produce any of them, and `origin` is where [documentation/doc-adoption.md](doc-adoption.md) recorded the path a doc was imported from; `sources:` is carried over for a different reason — it isn't hand-written but recorded by [cli/document.md](../cli/document.md), and it is the only thing giving such a doc `specky check` coverage, so dropping it here would silently lose that within a day), and `specs/MODULES.md` gains a row if the doc is new. That index is a file humans edit too, so a row is only ever added when the doc is linked nowhere in it, and the domain's section is found by comparing headings on letters and digits alone — a hand-written `## N-Way Match` is the section for domain `nway-match`, not a near-miss to append a `## Nway Match` twin beside. Punctuation is all that's ignored: `## Docs` and `## Documents` stay separate sections. With a problem, the doc on disk is left untouched and the draft goes to `.specky/pending/<domain>/<topic>.md` — gitignored, so a refused rewrite can never reach a commit — with one line saying what it would have cost.
 
-Why the guards are measured rather than guessed: across 33 honest doc updates in this repo's history, no section ever fell below 98% of its previous size, while the two rewrites that destroyed hand-written content ran 46–71% with sections missing outright. The 80% threshold sits in that gap. A false positive costs a refused write and a warning; a false negative costs prose nobody notices is gone.
-
 ```mermaid
 flowchart TD
     A[Commit made] --> B{Affects a documented feature/workflow?}
@@ -41,6 +39,9 @@ flowchart TD
     J -->|No| L[Write doc, update MODULES.md]
     K --> M[specky doctor warns until resolved]
 ```
+
+Why the guards are measured rather than guessed: across 33 honest doc updates in this repo's history, no section ever fell below 98% of its previous size, while the two rewrites that destroyed hand-written content ran 46–71% with sections missing outright. The 80% threshold sits in that gap. A false positive costs a refused write and a warning; a false negative costs prose nobody notices is gone.
+
 
 ## Where A Refusal Shows Up
 
@@ -63,6 +64,21 @@ A refusal is printed once by the hook, into terminal output nobody scrolls back 
 | **Index row reused** | `specs/MODULES.md` already links the doc, under any heading | Nothing is added — the file is left byte-identical |
 | **Index section reused** | The domain's section is titled differently but matches on letters and digits (`## N-Way Match` for `nway-match`) | The row goes into that section; no second section is created |
 | **Conflict on index** | `specs/MODULES.md` has unusual formatting, or a heading carrying extra words (`## Billing (legacy)`) | Best-effort attempt to find or create the matching section; a heading with extra words is a different section and may need a manual fix |
+
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| The commit is a refactor, a reformat, a dependency bump or config-only | It is classified as a skip and no doc moves | The docs are about behaviour; churn in them is what makes `git diff specs/` unreadable and the gate ignorable |
+| The target doc says `authored: human` | Nothing is generated, but the commit is still linked to it | Somebody took ownership of that prose. The link stays because a change to this feature is exactly when its owner should look |
+| The regeneration drops a section, or guts one over 400 characters below 80% | It is refused and the draft is parked in `.specky/pending/` | Across 33 honest updates here no section fell below 98%; the two that destroyed hand-written prose ran 46–71%. The draft is kept because it may still be the better doc, and that is a judgement for a human |
+| The new body names a `--flag` this CLI doesn't accept | Same refusal | A confident sentence about an option that doesn't exist is the one defect a reader cannot spot by reading |
+| A draft is sitting in `.specky/pending/` | `specky doctor` warns while it waits, and `specky pr-comment` carries a block for it | The refusal is printed once into terminal output nobody scrolls back to, and the draft is gitignored — so it is the one thing about the range a reviewer can't otherwise see |
+| The provider's answer isn't the `{"sections": ...}` shape | It is read as a whole replacement body, still held to every guard | The fallback is quiet and the near-misses are common — a trailing brace or an echoed frontmatter block shouldn't cost a paid-for run |
+| The doc's `MODULES.md` row already exists under some other heading | Nothing is added | That file is one humans edit too, and a second row for an indexed doc is a defect rather than a fix |
+| The domain's heading is spelled differently (`## N-Way Match` for `nway-match`) | The row joins it | Headings are matched on letters and digits alone — but only punctuation is ignored, so `## Docs` and `## Documents` stay separate domains |
+| The heading carries extra words (`## Billing (legacy)`) | A second section can still appear | Matching is equality on the normalized form; the only cheap alternative is prefix matching, which would merge domains that are genuinely distinct |
+| The provider is misconfigured or unreachable | The commit still succeeds and the error is reported | A hook must never be able to fail the commit that triggered it |
 
 ## Acceptance Tests
 

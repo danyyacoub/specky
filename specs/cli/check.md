@@ -25,6 +25,21 @@ It fails by default — a doc gate that only warns is a doc gate nobody notices 
 5. **A violation is a file none of whose covering docs the range touched, in a domain the range left untouched**, reported as `src/specky/db.py → specs/search/fts5-syntax-safety.md`, and only when the file/doc pair recurs across at least `[check] min_link_commits` separate commits (default 2). Pairs below that threshold count as coverage but are only tallied as a note — see *Why recurrence* below. Two relaxations aim at the same thing: *any* covering doc counts rather than all of them, because a file described by several docs is changed for one reason at a time; and updating any doc under `specs/<domain>/` satisfies every covering doc in that domain, because a domain is specky's unit of functional grouping and a change most often documents itself by adding a *new* sibling doc, which can't be in `doc_files` yet.
 6. **Report the advice that never fails the build**: commits in the range with no `specs/history/` doc (the hook probably isn't installed), changed files with no covering doc at all, docs covering this range's code that had already fallen behind it, classified docs in play with no `owner:`, weak links that weren't enforced, and the coverage figure. Those are states a repo grows into, not regressions a contributor introduced.
 
+```mermaid
+flowchart TD
+    A[Resolve the range] --> B[git diff --name-only base...HEAD]
+    B --> C[Split: docs under specs/ vs candidate code]
+    C --> D[Look up covering docs in doc_files]
+    D --> E{Covering doc, or its domain, touched?}
+    E -->|Yes| F[Covered]
+    E -->|No| G{Pair seen in min_link_commits commits?}
+    G -->|No| H[Weak link: counted, only noted]
+    G -->|Yes| I[Violation: exit 1]
+    F --> J[Report the advice: stale, unowned, misshapen, coverage]
+    H --> J
+    I --> J
+```
+
 ## How Coverage Is Derived
 
 The file → doc map is precomputed by `specky index`, and derived **from git alone**:
@@ -43,14 +58,15 @@ Git says a commit produced a doc; it doesn't say which of that commit's files th
 
 Measured on specky's own repo, that threshold cut a 6-commit range from 9 reported violations (several plainly wrong) to 1 correct one. The consequence is deliberate leniency on a young repo: with only one doc-producing commit per file, nothing fails. `[check] min_link_commits = 1` opts into the stricter behaviour once a repo's history is dense enough.
 
-## Stale And Unowned Docs
+## Stale, Unowned And Misshapen Docs
 
-Two things the gate reports without ever failing over them, both scoped to the range in front of you rather than to all of `specs/`:
+Three things the gate reports without ever failing over them, all scoped to the range in front of you rather than to all of `specs/`:
 
 - **Stale**: a doc whose code has run ahead of it by more than `[check] stale_after_days` (default 14). The verdict is read from the index, not recomputed, so it costs one query and agrees with the badge the HTML viewer shows. Only docs covering *this range's* files are listed, worst-first, capped at ten; the rest of the repo's stale docs are a single count. A doc this range updated isn't reported whatever the index still says — the update is the fix.
 - **Unowned**: a classified doc with an empty `owner:`, so a reader who lands on it has nobody to ask. Scoped to the docs covering this range plus the docs the range edited — someone with the doc already open is exactly who can add the line. `specs/history/` docs are never asked: they're machine-written, one per commit, and nobody is meant to hand-edit them.
+- **Misshapen**: a `type: workflow` doc that isn't the shape a workflow doc is meant to be — the happy path under `## How It Works`, a ```mermaid``` diagram of it directly below, and the branches off it gathered in `## Edge Cases`. Read from the indexed content, scoped exactly like unowned. A `type: feature` doc owes neither: it earns a diagram rather than owing one, and has no Edge Cases section to be missing.
 
-Neither is a regression a contributor introduced, which is why neither affects the exit code. The `--json` output carries all of them, not just the first ten.
+None of the three is a regression a contributor introduced, which is why none affects the exit code. The `--json` output carries all of them, not just the first ten.
 
 ## Flags
 
@@ -87,6 +103,7 @@ stale_after_days = 14             # how far a doc may lag its code before it's r
 | A doc covering this range's code had already fallen behind it | Listed with its days behind, worst-first, ten at a time; never a failure |
 | Stale docs elsewhere in `specs/` | A count, not a list; never a failure |
 | A classified doc in play carries no `owner:` | Named as a note; never a failure |
+| A workflow doc in play has no diagram or no `## Edge Cases` | Named as a note, with what it's missing; never a failure |
 | The covering doc has since been deleted | Not demanded |
 | A commit in the range has no `specs/history/` doc | Warning pointing at `install-git-hook` and `specky sync` |
 | specky's own `docs: sync specky docs [skip specky]` commits | Never counted as undocumented |
@@ -103,6 +120,22 @@ stale_after_days = 14             # how far a doc may lag its code before it's r
 ```
 
 The checkout needs `fetch-depth: 0`: both the base revision and the `specs/`-limited walk the map is built from need real history, and a shallow clone has neither. specky's own doc-sync commits land in the same pull request range, so a repo with the hook installed passes without extra work.
+
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| The index hasn't been built | The check can't answer at all and says to run `specky index` | The file → doc map lives in the index; without it the gate would report a clean run over a repo it never looked at |
+| The clone is shallow | The base revision and the `specs/`-limited walk both come up short | Both need real history, which is why CI needs `fetch-depth: 0` |
+| A file is covered by several docs and the range updated one | Clean | A file described by several docs is changed for one reason at a time; demanding all of them would make the gate unpassable |
+| The change added a *new* sibling doc in the same domain | Clean, even though the covering doc is untouched | A new doc can't be in `doc_files` yet — that map is built from history, and this change is the history that would put it there |
+| The file/doc pair comes from a single commit | Counted as coverage, tallied as a note, never enforced | Git says a commit produced a doc, not which of its files the doc is about; one pairing is as likely to be the incidental test file as the subject |
+| A commit touched more than 50 files, or rewrote more than 3 covering docs | It contributes no pairs at all | That's a bulk rename, a vendored drop or a batch regeneration — evidence of nothing in particular. Three such commits accounted for 12 of 13 reported violations on this repo |
+| The covering doc has since been deleted | It isn't demanded | The lookup is joined against `documents`, so a doc that no longer exists can't be asked for |
+| The target branch moved on after this branch forked | Those files aren't in the diff | The diff is three-dot, against the merge base, so a pull request isn't blamed for the target's own changes |
+| The repo has a single commit | It is compared against git's empty-tree hash | There is no parent to diff against, and the whole worktree is the honest range |
+| `--base` names something that isn't a revision | One stderr line and exit 1, no traceback | A CI failure should read as a configuration mistake, not a crash |
+| The gate is failing on a repo that was never clean | `--advisory` prints the identical report and exits 0 | Adopting the gate is a project, and a build that can't go green is one nobody adopts |
 
 ## Acceptance Tests
 

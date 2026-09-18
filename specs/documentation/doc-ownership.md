@@ -21,6 +21,14 @@ Each generated document can include an `owner:` field in its frontmatter — a n
 
 5. **`specky features` lists owners**: The `specky features` command prints the owner field for each document in the classified registry.
 
+```mermaid
+flowchart TD
+    A[Add owner: to the frontmatter] --> B[Regeneration preserves it]
+    B --> C[Viewer shows 'Who to ask']
+    B --> D[specky check skips the doc]
+    B --> E[specky features prints the owner]
+```
+
 ## Outcomes
 
 | State | Behavior |
@@ -29,6 +37,16 @@ Each generated document can include an `owner:` field in its frontmatter — a n
 | Document has `owner:` empty or missing | Viewer shows nothing; `specky check` lists it as unowned advice |
 | Document is a history doc (specs/history/) | Owner field is ignored; history docs are never checked |
 | Range touches many unowned docs | `specky check` lists up to 10, then summarizes the rest |
+
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| The doc has no `owner:` at all | The viewer shows no "Who to ask" line and `specky check` lists it as advice | An owner is a fact about the team, so no diff can be said to have broken it — failing the build over one would block work nobody can unblock |
+| A model is asked to write a doc | It never fills in `owner:` | The model has no way to know who to ask, and a guessed owner is worse than none: readers would direct questions at someone who never agreed to take them |
+| The doc is under `specs/history/` | It is never checked for an owner | There is one per commit, its owner is the commit's author, and nobody hand-edits them — asking would be thousands of lines of advice about docs that don't want it |
+| More than ten unowned docs are in the range | The first ten are listed and the rest counted | A list long enough to scroll buries the part of the report that is about the change in front of you |
+| A regeneration rewrites the whole doc | The `owner:` line survives it | `owner:` is hand-authored and is carried through explicitly, alongside `related`, `authored` and `origin` |
 
 ## Acceptance Tests
 

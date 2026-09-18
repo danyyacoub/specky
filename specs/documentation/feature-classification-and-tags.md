@@ -20,6 +20,26 @@ Spec docs get metadata frontmatter (`type`, `tags`, `related`) that AI-classifie
 
 5. **Queryable index**: Frontmatter metadata feeds `specky tags` (list all tags), `specky graph` (draw the docs and the links between them — nodes and edges only, no commits), tag-based search in `specky search`, and MCP endpoints for features, workflows, tags and commit info. Which pairs actually earn an edge is narrower than it sounds and is covered in [catalog/feature-graph.md](../catalog/feature-graph.md).
 
+```mermaid
+flowchart TD
+    A[Doc written with type, tags, related] --> B[Commit lands]
+    B --> C[Feature sync classifies what changed]
+    C --> D[commit_links pairs the commit with the doc]
+    A --> E[specky index reads the frontmatter]
+    D --> E
+    E --> F[specky tags / graph / search / MCP]
+```
+
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| A tag is invented for one doc | It is recorded, and is useless | Tags only work for search and grouping when they are shared; `specky tags` exists so an existing one can be reused before a new one is coined |
+| Two features carry the same tag | `specky tags` lists both, `specky graph` draws no edge between them | An edge is drawn only from a **workflow** to a **feature** — two features sharing a tag are siblings, not a dependency |
+| A doc is regenerated | `related:` survives it untouched | It is hand-authored, and the classifier is never asked for it — regenerating it would quietly delete somebody's cross-link |
+| The classifier decides a commit documents nothing | No `commit_links` row is written | A link to a doc the commit didn't change is worse than no link: it is what `specky check` later enforces |
+| The doc names a tag no other doc uses | Nothing fails | A first use has to start somewhere; the advice is to check `specky tags` first, not a rule the tooling enforces |
+
 ## Acceptance Tests
 
 | Given | When | Then |

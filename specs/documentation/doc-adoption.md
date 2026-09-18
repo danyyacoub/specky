@@ -140,6 +140,21 @@ flowchart TD
 | **Bad root ignored** | The configured root is absolute, escapes the repo, or is empty | Falls back to `specs` rather than writing outside the repo |
 | **Collision caught at init** | `specs/` holds non-markdown files | `specky init` names them, offers another root, writes `[docs] root`, and prints the pyproject lines to commit for CI |
 
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| A file is untracked, gitignored or vendored | It is invisible to discovery | The list comes from `git ls-files`, so `node_modules/`, a `.venv/` and a vendored dependency's docs are excluded by construction rather than by a denylist needing a new entry per ecosystem |
+| The file is repo furniture (`README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`) | It is left alone unless an explicit `--include` names it | Those are about the repo, not about what the product does — importing them would file GitHub's own conventions as product documentation |
+| The destination already exists, or two sources map onto it | Both are skipped and reported with the reason | Overwriting somebody's doc, or silently picking a winner between two, is exactly the damage adoption exists to avoid |
+| More than 20 files match, with no `--yes` | It stops to confirm, and errors out when stdin isn't a terminal | An import this size rearranges where a repo's documentation lives, and there is nobody to ask in a script |
+| The repo has no docs outside the docs root | An empty report, and no next-steps block | Nothing was found, and printing next steps for an import that didn't happen reads as if one did |
+| An adopted doc is reached by feature sync later | It isn't regenerated, but the commit is still linked to it | Every adopted doc gets `authored: human`, the marker sync honours. Deleting that line opts back in |
+| The configured docs root is absolute, escapes the repo, or is empty | It falls back to `specs` | A misconfigured root would otherwise write outside the repository |
+| `specs/` already holds something else — OpenAPI documents, a Rust crate, an ECS module | `specky init` names the files, offers another root and writes `[docs] root` | Generating into it would mix two unrelated trees together in a way no command can unpick afterwards |
+| The import is wrong | Nothing was committed, so `git checkout` undoes it | A one-time rearrangement of a repo's documentation is exactly the change a human should read in `git status` first |
+| `type:` and `tags:` are wanted on the adopted docs | Adoption doesn't fill them in; `specky tag` does | Adoption makes no AI call at all, which is what makes it free, instant and easy to trust |
+
 ## Acceptance Tests
 
 | Given | When | Then |

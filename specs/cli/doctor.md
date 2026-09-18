@@ -130,6 +130,23 @@ flowchart TD
 | Some recent commits have no history doc | `[warn]` with the count, pointing at `specky sync --dry-run` |
 | A check raises an unexpected error | That one section becomes a `[fail]` row; every other check still reports |
 
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| Run outside a git repository | One `[fail]`, and every repo-dependent check is skipped rather than run | Reporting them against the wrong directory would be worse than not reporting them |
+| The clone is shallow | A `[warn]` naming `git fetch --unshallow` | It is the one repo state that makes every check below it *lie* rather than fail: the commits under the depth aren't undocumented, they're absent from `git log`. CI runners and cloud agent VMs clone shallow by default — exactly where nobody reads the output |
+| The clone is not shallow | Nothing is printed for it | An `[ok] not shallow` row would be noise on every developer machine |
+| A credential's environment variable is set | The row says it is set, and never prints the value | In any mode, including `--json` — a diagnostic someone pastes into an issue must be safe to paste |
+| A runtime dependency is missing | A `[fail]` naming the module, what stops working, and the `uv tool install --editable <checkout> --force` that repairs *this* install | `uv tool install --editable` resolves dependencies once, so a dependency added later is absent from the installed tool while the code importing it ships from the checkout — `render-html` dies on `No module named 'markdown'` while every other section reads `[ok]` |
+| Dependencies are probed | They are resolved, not imported | Resolving costs nothing and runs no third-party module's top-level code |
+| A foreign `post-commit` hook is installed | A `[fail]` | `install-git-hook` won't overwrite somebody else's hook, so this is a state only a human can resolve |
+| specky's hook is there but not executable | A `[fail]` | Git silently never runs it, which looks exactly like specky doing nothing |
+| `SPECKY_DISABLE_HOOK` is set | A `[warn]` first in the hook section | Every fire returns without documenting anything, and the rest of the section would otherwise read as healthy |
+| Nothing is configured yet — no config, hook, index or site | Four `[warn]` rows naming their fixes, and exit 0 | Nothing is broken on a fresh repo; a `doctor` that fails on one is a `doctor` nobody runs first |
+| A refused draft is waiting in `.specky/pending/` | A `[warn]` with the count and the first three names, exit 0 | Nothing was lost — a doc is knowingly behind its code until somebody reads the draft and keeps or deletes it |
+| One check raises an unexpected error | That section becomes a `[fail]` and every other check still reports | A diagnostic tool that stops at the first surprise is the least useful exactly when it is most needed |
+
 ## Acceptance Tests
 
 | Scenario | Given | When | Then |

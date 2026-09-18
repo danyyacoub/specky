@@ -115,6 +115,20 @@ flowchart TD
 | `--no-validate` | No provider is constructed and no call is made; the file is written as given |
 | A non-default docs root was chosen | The `[tool.specky.docs]` block is printed, because CI can't read the gitignored `specky.toml` |
 
+## Edge Cases
+
+| Situation | What happens | Why |
+|---|---|---|
+| Neither `--yes` nor `--provider`, and stdin isn't a terminal | It errors naming both flags, before anything is written | `input()` on a closed stdin raises `EOFError` *mid-interview*, naming neither the cause nor a fix — this check is the whole reason those flags exist |
+| `--provider` is given without `--yes` | The run is fully non-interactive anyway | The interview exists to find out which provider; a caller who already said has stopped having a question to answer. There is no partial interview |
+| `openai-compatible` is named with some of its fields missing | One error listing *every* missing flag | A scripted setup shouldn't be fixed one round-trip at a time — and it happens before the write, so the failure isn't a `specky.toml` that only breaks on the first commit |
+| `specs/` already holds non-markdown files | Interactively another root is asked for; non-interactively the collision is reported and accepted, naming `--docs-root` | Generating into it mixes two unrelated trees together and no command unpicks that afterwards — but refusing to write a config at all would be worse than the mixed tree |
+| The docs-root answer is empty, or `specs` again | `specs/` is kept, with a line saying specky's docs will sit alongside what's there | Declining the offer is a real answer, and the consequence is worth stating once rather than discovering later |
+| `--docs-root` is absolute or contains `..` | It raises and nothing is written | The absolute check reads the *raw* answer: stripping the slashes that turn `documentation/` into `documentation` would also turn `/etc/specs` into the innocuous-looking relative `etc/specs` |
+| The validation call fails | The error is raised and `specky.toml` is **not** written | A half-configured repo is worse than an unconfigured one: it fails at the first commit, far from this command |
+| There is no credential in the environment yet | `--no-validate` writes the file without constructing a provider or making a call | A snapshot build that bakes the config in shouldn't fail — or bill — for a key it isn't meant to have |
+| A non-default docs root was chosen | The `[tool.specky.docs]` block is printed for `pyproject.toml` | `specky.toml` is gitignored, so CI never sees it, and a `specky check` pointed at the wrong tree finds no docs and reports no coverage |
+
 ## Acceptance Tests
 
 | Given | When | Then |
