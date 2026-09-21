@@ -159,6 +159,27 @@ def test_the_history_group_is_collapsed_by_default(site):
     assert '<details class="domain-group"><summary><svg class="icon" aria-hidden="true">' in page
 
 
+def test_sidebar_titles_drop_the_module_the_group_already_names(site):
+    page = (site / "index.html").read_text()
+    assert "<span>Refund Flow</span>" in page
+    assert 'title="Billing — Refund Flow"' in page
+    assert "<span>Billing — Refund Flow</span>" not in page
+
+
+def test_sidebar_links_carry_their_type_icon(site):
+    page = (site / "index.html").read_text()
+    links = re.findall(r'<a href="[^"]+" title="[^"]*"[^>]*data-type="(\w*)"[^>]*>.*?</a>', page)
+    assert set(links) == {"feature", "workflow", ""}
+    assert re.search(r'data-type="workflow"[^>]*><svg[^>]*><use href="#icon-cycle">', page)
+    assert re.search(r'data-type="feature"[^>]*><svg[^>]*><use href="#icon-sparkle">', page)
+    assert re.search(r'data-type=""[^>]*><svg[^>]*><use href="#icon-file-text">', page)
+
+
+def test_a_doc_page_is_tinted_by_its_type(site):
+    assert '<div class="doc" data-type="workflow">' in (site / "billing-refund-flow.html").read_text()
+    assert '<div class="doc">' in (site / "index.html").read_text()
+
+
 def test_related_docs_are_linked_by_page_name(site):
     page = (site / "billing-refund-flow.html").read_text()
     assert 'href="billing-refund-limits.html"' in page

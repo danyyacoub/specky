@@ -92,8 +92,12 @@ _RAIL_TEMPLATE = _env.from_string(
     "{% for doc in d.docs %}"
     # No "active" class here: the rail is rendered once for the whole site, so NAV_JS marks
     # the current page from location.pathname instead.
-    '<li><a href="{{ doc.html_name }}" data-tags="{{ doc.data_tags }}" '
-    'data-type="{{ doc.doc_type }}" data-stale="{{ doc.stale }}">{{ doc.title }}</a></li>'
+    # `nav_title` drops the module prefix the group header already shows; the full title stays
+    # on hover.
+    '<li><a href="{{ doc.html_name }}" title="{{ doc.title }}" data-tags="{{ doc.data_tags }}" '
+    'data-type="{{ doc.doc_type }}" data-stale="{{ doc.stale }}"><svg class="icon" '
+    'aria-hidden="true"><use href="#icon-{{ doc.type_icon }}"></use></svg>'
+    "<span>{{ doc.nav_title }}</span></a></li>"
     "{% endfor %}</ul></details>"
     "{% endfor %}"
     "{% if has_features or has_workflows or has_stale or all_tags %}"
@@ -176,7 +180,8 @@ _PAGE_TEMPLATE = _env.from_string(
     '<div id="search-results"></div>'
     "</div></div>"
     '<div class="body-row">{{ rail | safe }}'
-    '<div class="content-pane"><div class="doc">{{ body | safe }}</div></div>'
+    '<div class="content-pane"><div class="doc"{% if doc_type %} data-type="{{ doc_type }}"'
+    '{% endif %}>{{ body | safe }}</div></div>'
     + _ASK_PANEL
     + "</div></div>"
     + _ASK_TOGGLE
@@ -198,6 +203,13 @@ CSS = """
   --border: #e1e3e8;
   --glass-bg: rgb(255 255 255 / 0.7);
   --glass-border: rgb(255 255 255 / 0.6);
+  /* The titlebar and sidebar: glass with a wash of the accent in it, so the frame reads as
+     color rather than gray. Hover/active are accent alphas, not --surface-tertiary/--accent-soft,
+     which both vanish against the tint. */
+  --chrome-bg: rgb(234 241 255 / 0.78);
+  --chrome-border: rgb(1 102 255 / 0.12);
+  --chrome-hover: rgb(1 102 255 / 0.07);
+  --chrome-active: rgb(1 102 255 / 0.14);
   --text-primary: #1d1f23;
   --text-secondary: #63666d;
   --text-tertiary: #8b8e96;
@@ -237,6 +249,10 @@ CSS = """
     --border: #34363c;
     --glass-bg: rgb(23 24 27 / 0.6);
     --glass-border: rgb(255 255 255 / 0.08);
+    --chrome-bg: rgb(22 30 48 / 0.65);
+    --chrome-border: rgb(90 163 255 / 0.14);
+    --chrome-hover: rgb(90 163 255 / 0.08);
+    --chrome-active: rgb(90 163 255 / 0.16);
     --text-primary: #f0f1f3;
     --text-secondary: #a7aab1;
     --text-tertiary: #75787f;
@@ -287,8 +303,8 @@ a { color: inherit; }
 .titlebar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 30;
   display: flex; align-items: center; gap: 20px; height: 52px; padding: 0 18px;
-  background: var(--glass-bg); backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%); border-bottom: 1px solid var(--glass-border);
+  background: var(--chrome-bg); backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%); border-bottom: 1px solid var(--chrome-border);
 }
 .titlebar .brand {
   display: flex; align-items: center; gap: 8px; font-family: var(--font-display);
@@ -313,6 +329,7 @@ a { color: inherit; }
 #search-results:empty { display: none; border: none; box-shadow: none; }
 #search-results .hit { display: block; padding: 8px 12px; text-decoration: none; color: var(--text-primary); }
 #search-results .hit:hover, #search-results .hit:focus-visible { background: var(--surface-tertiary); }
+#search-results .hit .icon { margin-right: 6px; }
 #search-results .hit-domain { color: var(--text-tertiary); font-size: 0.6875rem; }
 #search-results .hit-context {
   color: var(--text-secondary); font-size: 0.6875rem; margin-top: 3px;
@@ -325,8 +342,8 @@ a { color: inherit; }
 
 .body-row { display: flex; height: 100vh; }
 .sidebar {
-  width: 244px; flex-shrink: 0; background: var(--glass-bg); backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%); border-right: 1px solid var(--glass-border);
+  width: 244px; flex-shrink: 0; background: var(--chrome-bg); backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%); border-right: 1px solid var(--chrome-border);
   padding: 66px 14px 20px; overflow-y: auto; height: 100vh; box-sizing: border-box;
 }
 .domain-group { margin-bottom: 18px; }
@@ -340,11 +357,19 @@ a { color: inherit; }
 .domain-group ul { list-style: none; margin: 0; padding: 0; }
 .domain-group li { margin-bottom: 2px; }
 .domain-group a {
-  display: block; padding: 6px 10px; border-radius: var(--radius-md); color: var(--text-primary);
-  text-decoration: none; font-size: 0.8125rem;
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--radius-md);
+  color: var(--text-primary); text-decoration: none; font-size: 0.8125rem;
 }
-.domain-group a:hover { background: var(--surface-tertiary); }
-.domain-group a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.domain-group a:hover { background: var(--chrome-hover); }
+.domain-group a.active { background: var(--chrome-active); color: var(--accent); font-weight: 600; }
+/* Feature vs workflow at a glance: the same icon and color as the doc's type chip. */
+.domain-group a .icon, #search-results .hit .icon { color: var(--text-tertiary); }
+.domain-group a[data-type="feature"] .icon, #search-results .hit[data-type="feature"] .icon {
+  color: var(--feature);
+}
+.domain-group a[data-type="workflow"] .icon, #search-results .hit[data-type="workflow"] .icon {
+  color: var(--workflow);
+}
 
 .tag-filter { margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
 .filter-title {
@@ -380,6 +405,11 @@ a { color: inherit; }
   flex: 1; height: 100vh; overflow-y: auto; display: flex; justify-content: center; background: var(--surface);
 }
 .doc { width: 100%; max-width: 1040px; padding: 66px 48px 72px; }
+/* A doc's body accents follow its type, so a feature reads indigo and a workflow amber
+   everywhere it appears (chip, sidebar icon, page); anything unclassified takes the accent. */
+.doc { --doc-tint: var(--accent); --doc-tint-bg: var(--accent-soft); }
+.doc[data-type="feature"] { --doc-tint: var(--feature); --doc-tint-bg: var(--feature-bg); }
+.doc[data-type="workflow"] { --doc-tint: var(--workflow); --doc-tint-bg: var(--workflow-bg); }
 .breadcrumb {
   display: flex; align-items: center; gap: 6px; font-size: 0.6875rem; color: var(--text-secondary);
   text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;
@@ -397,6 +427,10 @@ a { color: inherit; }
   font-size: 1.125rem; letter-spacing: -0.01em; margin-top: 32px; border-top: 1px solid var(--border);
   padding-top: 20px;
 }
+.doc h2::before {
+  content: ""; display: inline-block; width: 4px; height: 0.95em; margin-right: 10px;
+  border-radius: 2px; background: var(--doc-tint); vertical-align: -0.12em;
+}
 .doc h3 { font-size: 1rem; }
 .doc a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-soft); }
 .doc code {
@@ -408,13 +442,17 @@ a { color: inherit; }
   overflow-x: auto;
 }
 .doc pre code { background: none; color: inherit; padding: 0; }
-.doc blockquote { border-left: 3px solid var(--accent-soft); margin: 0; padding: 4px 16px; color: var(--text-secondary); }
+.doc blockquote {
+  border-left: 3px solid var(--doc-tint); background: var(--doc-tint-bg); margin: 0; padding: 4px 16px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; color: var(--text-secondary);
+}
 
 .related { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); }
 .related h2 {
   font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary);
   margin: 0 0 10px; border: none; padding: 0;
 }
+.related h2::before, .tag-cloud h2::before { content: none; }
 .related ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .related a { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
 .related a:hover { text-decoration: underline; }
@@ -441,7 +479,7 @@ a { color: inherit; }
   padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top;
 }
 .doc figure.tw thead th {
-  background: var(--surface-secondary); color: var(--text-secondary); font-weight: 600;
+  background: var(--doc-tint-bg); color: var(--doc-tint); font-weight: 600;
   font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em;
 }
 .doc figure.tw tbody tr:nth-child(even) { background: var(--surface-secondary); }
@@ -708,13 +746,19 @@ function markSnippet(snippet) {
   return escapeHtml(snippet).replaceAll('&gt;&gt;', '<mark>').replaceAll('&lt;&lt;', '</mark>');
 }
 
+// Same mapping as `_TYPE_ICONS` on the Python side, which draws the sidebar's icons.
+const TYPE_ICONS = { feature: 'sparkle', workflow: 'cycle' };
+
 function showHits(hits) {
   searchResults.innerHTML = '';
   for (const hit of hits) {
     const a = document.createElement('a');
     a.className = 'hit';
     a.href = hit.doc.html_path;
-    a.innerHTML = `${escapeHtml(hit.doc.title)}<div class="hit-domain">${escapeHtml(hit.doc.domain)}</div>`
+    a.dataset.type = hit.doc.doc_type || '';
+    const icon = TYPE_ICONS[hit.doc.doc_type] || 'file-text';
+    a.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`
+      + `${escapeHtml(hit.doc.title)}<div class="hit-domain">${escapeHtml(hit.doc.domain)}</div>`
       + (hit.context ? `<div class="hit-context">${hit.context}</div>` : '');
     searchResults.appendChild(a);
   }
@@ -1262,6 +1306,15 @@ _DOMAIN_ICONS = {
 }
 _DOMAIN_ICON_FALLBACK = "folder"
 
+# Same icons as the type chips; mirrored by TYPE_ICONS in SEARCH_JS for the search results.
+_TYPE_ICONS = {"feature": "sparkle", "workflow": "cycle"}
+_TYPE_ICON_FALLBACK = "file-text"
+
+# A generated doc is titled `# <Domain> — <Topic>` (and a root doc `# <repo> — <Topic>`, see
+# generator.py), which reads right on its own page but repeats the group header in the sidebar.
+# Spaces are required around the dash so a hyphenated word is never split.
+_TITLE_PREFIX = re.compile(r"^(?P<prefix>.+?)\s+[—–-]\s+(?P<rest>\S.*)$")
+
 # Fixed categorical palette for tags (see --tag-N/-N-bg in CSS). A tag's color is a stable
 # hash of its name, not configuration — the actual tag vocabulary is small and open-ended
 # (specs/documentation/feature-classification-and-tags.md), so there's nothing to configure.
@@ -1270,6 +1323,27 @@ _TAG_COLOR_COUNT = 8
 
 def _icon_for_domain(domain: str) -> str:
     return _DOMAIN_ICONS.get(domain, _DOMAIN_ICON_FALLBACK)
+
+
+def _icon_for_type(doc_type: str) -> str:
+    return _TYPE_ICONS.get(doc_type, _TYPE_ICON_FALLBACK)
+
+
+def _words(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _nav_title(title: str, domain: str, project: str) -> str:
+    """`title` without a leading `<module> — `, for the sidebar where the module is the group.
+
+    Stripped only when the prefix *is* the module (or, for a root doc, the repo name) — a title
+    that happens to contain a dash for some other reason is left exactly as written.
+    """
+    match = _TITLE_PREFIX.match(title)
+    owner = project if domain == _DOMAIN_ORDER_FIRST else domain
+    if match and _words(match.group("prefix")) == _words(owner):
+        return match.group("rest")
+    return title
 
 
 def _tag_class(tag: str) -> str:
@@ -1563,7 +1637,7 @@ def _doc_header(doc: dict) -> str:
     ]
     chips = []
     if doc["doc_type"]:
-        type_icon = "sparkle" if doc["doc_type"] == "feature" else "cycle"
+        type_icon = _icon_for_type(doc["doc_type"])
         label = "Feature" if doc["doc_type"] == "feature" else "Workflow"
         chips.append(
             f'<button class="chip type-{doc["doc_type"]}" type="button" data-facet="type" '
@@ -1660,7 +1734,7 @@ def _render_rail(
         {
             "name": domain,
             "icon": _icon_for_domain(domain),
-            "docs": sorted(domains[domain], key=lambda d: d["title"]),
+            "docs": sorted(domains[domain], key=lambda d: d["nav_title"]),
             # "history" entries are commit shas, not meaningful titles — collapsed by
             # default so they don't crowd out the rest of the nav. NAV_JS re-opens the
             # group when the page you're on is one of them.
@@ -1677,8 +1751,8 @@ def _render_rail(
     )
 
 
-def _page(title: str, rail_html: str, body_html: str) -> str:
-    return _PAGE_TEMPLATE.render(title=title, rail=rail_html, body=body_html)
+def _page(title: str, rail_html: str, body_html: str, doc_type: str = "") -> str:
+    return _PAGE_TEMPLATE.render(title=title, rail=rail_html, body=body_html, doc_type=doc_type)
 
 
 def _write_assets(site_dir: Path, search_entries: list[dict], hover: dict[str, str]) -> None:
@@ -1754,9 +1828,11 @@ def render_site(repo_root: Path) -> Path:
         domains.setdefault(domain, []).append(
             {
                 "title": title,
+                "nav_title": _nav_title(title, domain, repo_root.name),
                 "html_name": html_name,
                 "data_tags": ",".join(tags),
                 "doc_type": doc_type,
+                "type_icon": _icon_for_type(doc_type),
                 "stale": "true" if stale_days else "false",
             }
         )
@@ -1807,7 +1883,7 @@ def render_site(repo_root: Path) -> Path:
         any_mermaid_source = any_mermaid_source or has_source
         any_mermaid_rendered = any_mermaid_rendered or has_rendered
         body = _doc_header(doc) + body_html + _related_section(doc, path_lookup)
-        page = _page(doc["title"], rail_html, body)
+        page = _page(doc["title"], rail_html, body, doc["doc_type"])
         (site_dir / doc["html_name"]).write_text(page)
 
     if any_mermaid_source and not any_mermaid_rendered:

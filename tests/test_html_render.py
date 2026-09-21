@@ -3,6 +3,7 @@ import pytest
 from specky import html_render
 from specky.html_render import (
     _excerpt,
+    _nav_title,
     slug,
     _tag_class,
     _wrap_tables,
@@ -61,6 +62,26 @@ def test_tag_class_is_stable_and_in_range():
     for tag in ("billing", "refunds", "onboarding", "search", "docs"):
         index = int(_tag_class(tag).removeprefix("tag-"))
         assert 0 <= index < html_render._TAG_COLOR_COUNT
+
+
+# --- sidebar titles ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title, domain, expected",
+    [
+        ("Billing — Refund Flow", "billing", "Refund Flow"),
+        ("Feature Flags — Rollout", "feature-flags", "Rollout"),
+        ("Cli - Pr Comment", "cli", "Pr Comment"),
+        ("acme — Glossary", "root", "Glossary"),  # a root doc is prefixed with the repo name
+        ("Domain Documentation Workflow", "documentation", "Domain Documentation Workflow"),
+        ("Search — FTS5 Syntax Safety", "billing", "Search — FTS5 Syntax Safety"),
+        ("Pre-commit Hook", "pre", "Pre-commit Hook"),
+        ("Commit abc12345", "history", "Commit abc12345"),
+    ],
+)
+def test_nav_title_drops_only_a_prefix_that_is_the_module(title, domain, expected):
+    assert _nav_title(title, domain, "acme") == expected
 
 
 # --- tables -----------------------------------------------------------------------------
