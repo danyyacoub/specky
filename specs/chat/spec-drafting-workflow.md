@@ -9,6 +9,8 @@ tags: [chat, documentation]
 
 When a reader asks the Spec Assistant to draft a spec, it doesn't write the doc straight away. It first settles where the change belongs, what it changes about what the docs already promise, and how anyone would know it was done — asking the reader wherever a guess would be costly — and only then writes the draft, with the acceptance tests the reader approved. It works from the docs and their git history, never the source code, and nothing is written to disk: the finished draft is for the reader to copy.
 
+Drafting runs over a read-only docs-and-history toolbox (`doc_tools.py`) that the MCP server also exposes, and the explore/draft_spec prompts are built from the same rules as the workflow. The draft's state lives in the reader's tab (`spec_draft.py`), is re-validated on every step, and the server keeps none of its own.
+
 ## How It Works
 
 1. **Reader asks for a draft** — a request like "draft a spec for retrying failed questions" (or any question with the **Draft spec** chip pinned) starts the workflow instead of an ordinary answer.
