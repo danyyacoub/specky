@@ -112,6 +112,12 @@ snapshot is how a run ends up with three docs about one subject.
 For a whole domain at once with an agent that can actually read the tree: `/document-domain billing`
 runs the bundled [`document-domain`](skills/document-domain/SKILL.md) skill.
 
+To browse the docs from Claude Code, `/launch-viewer` runs the bundled
+[`launch-viewer`](skills/launch-viewer/SKILL.md) skill: `index`, `render-html`, then `serve`. In the
+desktop app the viewer opens in the browser pane, via a `specky-serve` entry the skill adds to
+`.claude/launch.json`. In a terminal it runs `specky serve` in the background and opens your
+browser.
+
 Add `owner: <name/team/channel>` to a generated doc's frontmatter to say who to ask about it — shown
 in the viewer as "Who to ask", never overwritten by regeneration.
 

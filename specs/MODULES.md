@@ -4,8 +4,9 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 
 The engine's own behavior is documented per feature, in the sections below — Documentation,
 Cli, Ai, Docs, Chat, Search, Rendering, Integration — rather than per module in `src/specky/`. The
-`document-domain` skill is documented in place, in
-[skills/document-domain/SKILL.md](../skills/document-domain/SKILL.md).
+plugin's skills are documented in place: `document-domain` in
+[skills/document-domain/SKILL.md](../skills/document-domain/SKILL.md), and `launch-viewer` (build and
+open the viewer from Claude Code) in [skills/launch-viewer/SKILL.md](../skills/launch-viewer/SKILL.md).
 
 ## Documentation
 

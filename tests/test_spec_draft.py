@@ -184,7 +184,7 @@ def test_a_feature_mention_matching_nothing_is_a_hint_not_a_scope(repo):
 
     spec_draft.start(repo, provider, "add retries", mention={"kind": "feature", "value": "nope"})
 
-    assert "#feature:nope" in provider.converse_prompts[0]
+    assert "@feature:nope" in provider.converse_prompts[0]
 
 
 def test_a_module_mention_steers_the_scope(repo):

@@ -7,7 +7,7 @@ whether a doc on this already exists), *what* the change does to what the docs a
 that order, and stops to ask the reader wherever a guess would be expensive:
 
 1. **Scope** — the model searches the docs (`doc_tools.DocToolbox`) and either places the change
-   (`set_scope`) or asks the reader to choose (`ask_user`). A `#feature:` mention skips this: the
+   (`set_scope`) or asks the reader to choose (`ask_user`). A `@feature:` mention skips this: the
    reader already said which doc.
 2. **Impact** — with the target doc and its numbered behaviours in hand, the model lists the
    sections that change and the behaviours that change, each with what happens today and after.
@@ -394,7 +394,7 @@ def start(repo_root: Path, provider: Provider, request: str, mention: dict | Non
         if scope:
             state.scope = scope
         else:
-            state.hint = f"The reader pointed at `#feature:{clip(mention.get('value'), 80)}`."
+            state.hint = f"The reader pointed at `@feature:{clip(mention.get('value'), 80)}`."
     _to_impact(repo_root, provider, state)
     return _respond(state)
 
@@ -796,7 +796,7 @@ def _topic_from(request: str) -> str:
 
 
 def _feature_scope(repo_root: Path, slug: str) -> dict | None:
-    """The doc a `#feature:<slug>` mention names, when exactly one doc has that stem."""
+    """The doc a `@feature:<slug>` mention names, when exactly one doc has that stem."""
     slug = kebab(slug)
     root = paths.docs_root(repo_root)
     if not slug or not root.is_dir():
@@ -820,7 +820,7 @@ def _fallback_scope_question(repo_root: Path, request: str) -> dict:
         known += [d["domain"] for d in list_domains(repo_root) if d["domain"] not in known]
     if not known:
         raise DraftError(
-            "There are no docs to place this next to yet. Name a module with #module:<name>."
+            "There are no docs to place this next to yet. Name a module with @module:<name>."
         )
     options = [{"label": domain, "domain": domain} for domain in known[:5]]
     payload = question_payload("Which module does this change belong to?", options)

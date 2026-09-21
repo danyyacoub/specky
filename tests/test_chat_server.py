@@ -38,18 +38,18 @@ def test_parse_scope_without_a_mention():
 
 @pytest.mark.parametrize("kind", ["module", "feature"])
 def test_parse_scope_strips_the_mention_from_the_question(kind):
-    clean, scope = _parse_scope(f"#{kind}:refund-flow how does it work?")
+    clean, scope = _parse_scope(f"@{kind}:refund-flow how does it work?")
     assert clean == "how does it work?"
     assert scope == {"kind": kind, "value": "refund-flow"}
 
 
 def test_parse_scope_collapses_the_whitespace_the_mention_leaves_behind():
-    clean, _ = _parse_scope("what about   #module:billing   limits?")
+    clean, _ = _parse_scope("what about   @module:billing   limits?")
     assert clean == "what about limits?"
 
 
-def test_parse_scope_ignores_a_bare_hash_word():
-    assert _parse_scope("what is #billing") == ("what is #billing", None)
+def test_parse_scope_ignores_a_bare_at_word():
+    assert _parse_scope("what is @billing") == ("what is @billing", None)
 
 
 # --- intent ------------------------------------------------------------------------------
@@ -369,12 +369,12 @@ def test_answer_question_scopes_retrieval_and_reports_sources(indexed_repo, monk
         chat_server, "load_provider_from_toml", lambda _path, _command="": provider
     )
 
-    result = answer_question(indexed_repo, "#module:billing how do refunds work?")
+    result = answer_question(indexed_repo, "@module:billing how do refunds work?")
 
     assert result["answer"] == "Refunds work like this."
     assert result["sources"] == ["specs/billing/refund-flow.md"]
     assert result["intent"] == INTENT_EXPLORE
-    assert "#module:billing" not in provider.prompts[0]  # the mention never reaches the model
+    assert "@module:billing" not in provider.prompts[0]  # the mention never reaches the model
 
 
 def test_answer_question_renders_the_answer_for_the_panel(indexed_repo, monkeypatch):
@@ -407,7 +407,7 @@ def test_a_spec_request_starts_the_draft_workflow(indexed_repo, monkeypatch):
         or {"intent": INTENT_SPEC, "draft": {}},
     )
 
-    result = answer_question(indexed_repo, "#module:billing write a spec for partial refunds")
+    result = answer_question(indexed_repo, "@module:billing write a spec for partial refunds")
 
     assert result["intent"] == INTENT_SPEC
     assert started == [("write a spec for partial refunds", {"kind": "module", "value": "billing"})]

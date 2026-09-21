@@ -182,9 +182,9 @@ _SPEC_INTENT_PATTERNS = tuple(
     )
 )
 
-# "#module:<domain>" or "#feature:<slug>" — inserted by the chat widget's mention
+# "@module:<domain>" or "@feature:<slug>" — inserted by the chat widget's mention
 # autocomplete (see MENTION_JS in html_render.py), stripped before retrieval/prompting.
-_MENTION_RE = re.compile(r"#(module|feature):([\w-]+)")
+_MENTION_RE = re.compile(r"@(module|feature):([\w-]+)")
 
 
 @dataclass(frozen=True)

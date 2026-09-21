@@ -158,7 +158,7 @@ _ASSISTANT_PANEL = (
     '<div class="chat-input-wrap">'
     '<div id="mention-dropdown" class="mention-dropdown"></div>'
     '<input id="chat-input" placeholder="Ask about the docs, or describe a change to draft… '
-    '(# to scope)" autocomplete="off">'
+    '(@ to scope)" autocomplete="off">'
     "</div>"
     '<div class="chat-composer-bar">'
     # Auto is the default and the honest one: the server classifies the question. The other two
@@ -1663,7 +1663,7 @@ if (draftState && chatLog && draftState.stage !== 'final') {
 syncDraftReply();
 """
 
-# '#' mention autocomplete for the chat input: candidates come straight from SPECKY_INDEX
+# '@' mention autocomplete for the chat input: candidates come straight from SPECKY_INDEX
 # (already embedded for the sidebar search box), so this needs no server round-trip and no
 # new data island — one entry per domain ("module") plus one per feature/workflow doc.
 MENTION_JS = """
@@ -1692,9 +1692,10 @@ let mentionMatchEnd = -1;
 function currentMentionQuery() {
   const caret = chatInput.selectionStart ?? chatInput.value.length;
   const upToCaret = chatInput.value.slice(0, caret);
-  const match = /#([\\w-]*)$/.exec(upToCaret);
+  // Only an '@' that starts a word opens the picker, so typing an email address doesn't.
+  const match = /(^|\\s)@([\\w-]*)$/.exec(upToCaret);
   if (!match) return null;
-  return { query: match[1].toLowerCase(), start: match.index, end: caret };
+  return { query: match[2].toLowerCase(), start: match.index + match[1].length, end: caret };
 }
 
 function renderMentionDropdown(candidates) {
@@ -1710,7 +1711,7 @@ function renderMentionDropdown(candidates) {
 }
 
 function selectMention(candidate) {
-  const token = `#${candidate.kind}:${candidate.value} `;
+  const token = `@${candidate.kind}:${candidate.value} `;
   const value = chatInput.value;
   chatInput.value = value.slice(0, mentionMatchStart) + token + value.slice(mentionMatchEnd);
   mentionDropdown.innerHTML = '';
