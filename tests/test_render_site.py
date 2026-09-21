@@ -372,10 +372,16 @@ def test_the_panel_can_be_dragged_wider_and_remembers_it(site):
     # A drag that leaves the handle must keep tracking, and the keyboard must be able to do it too.
     assert "setPointerCapture" in app_js
     assert "ArrowLeft" in app_js and "ArrowRight" in app_js
+    # The drag cap depends on this window and the rail; restoring the saved width on the next page
+    # must not re-cap and re-save it, or one narrow page would shrink it for the rest of the tab.
+    assert "applyAssistantWidth(storedAssistantWidth, ASSISTANT_WIDTH_MAX);" in app_js
+    # The doc column keeps its room beside the rail, and the overlay isn't held to that.
+    assert "max-width: calc(100vw - 360px - var(--rail-width));" in css
+    assert "const overlaid = getComputedStyle(assistantPanel).position === 'fixed';" in app_js
 
 
 def test_a_narrow_window_gets_the_panel_as_an_overlay(site):
-    """Below ~1100px there isn't room for nav + doc + a 440px dock, so the dock stops squeezing
+    """Below ~1100px there isn't room for nav + doc + a 560px dock, so the dock stops squeezing
     the doc column and floats over it instead."""
     css = (site / "assets" / "site.css").read_text()
     assert "@media (max-width: 1100px)" in css
@@ -389,6 +395,40 @@ def test_the_intent_chips_are_in_the_panel_and_reach_the_request(site):
     # Auto means "server, you decide", so it's an absent field rather than a value to parse.
     assert "if (assistantIntent !== 'auto') payload.intent = assistantIntent;" in app_js
     assert "specky-assistant-intent" in app_js
+
+
+def test_the_intent_chips_sit_in_the_composer_next_to_the_input(site):
+    """The answer style is picked where the question is typed, not at the top of the panel."""
+    page = (site / "index.html").read_text()
+    order = ['id="chat-form"', 'id="chat-input"', 'data-intent="auto"', 'class="chat-send"', "</form>"]
+    assert [page.index(marker) for marker in order] == sorted(page.index(marker) for marker in order)
+    # The chips are buttons in the form now, so Send's accent styling must not reach them.
+    assert ".chat-form button {" not in (site / "assets" / "site.css").read_text()
+
+
+def test_the_thinking_line_sits_right_above_the_input(site):
+    page = (site / "index.html").read_text()
+    app_js = (site / "assets" / "app.js").read_text()
+    # Below the log, so no longer in the header above it.
+    order = ['id="chat-log"', 'id="chat-thinking"', 'id="chat-status"', 'id="chat-form"']
+    assert [page.index(marker) for marker in order] == sorted(page.index(marker) for marker in order)
+    assert "chatThinking.hidden = !text;" in app_js
+    # Every status goes through setChatStatus, or the line would show text while still hidden.
+    assert app_js.count("chatStatus.textContent") == 1
+    assert "@keyframes thinking-pulse" in (site / "assets" / "site.css").read_text()
+
+
+def test_opening_the_assistant_collapses_the_nav_rail(site):
+    page = (site / "index.html").read_text()
+    css = (site / "assets" / "site.css").read_text()
+    app_js = (site / "assets" / "app.js").read_text()
+    titlebar = page[page.index('<div class="titlebar">') : page.index('<div class="body-row">')]
+    assert 'id="nav-toggle"' in titlebar and 'aria-controls="nav-rail"' in titlebar
+    assert 'id="nav-rail" class="sidebar"' in page
+    assert "body.nav-collapsed .sidebar { display: none; }" in css
+    assert "specky-nav-collapsed" in app_js
+    # Closing the panel gives the rail back as it was before the panel opened.
+    assert "specky-nav-before-assistant" in app_js
 
 
 def test_an_answer_is_inserted_as_the_html_the_server_sanitized(site):
@@ -418,7 +458,7 @@ def test_a_draft_steps_through_the_panel_and_survives_navigation(site):
     app_js = (site / "assets" / "app.js").read_text()
     assert 'id="draft-reply"' in page and 'id="draft-cancel"' in page
     assert "speckyFetch('/draft'" in app_js
-    assert "chatStore?.setItem('specky-draft'" in app_js
+    assert "tabStore?.setItem('specky-draft'" in app_js
     for action in ("'choose'", "'confirm'", "'approve'", "'rescope'", "'reply'"):
         assert f"sendDraft({action}" in app_js
     # The step in progress is rebuilt on the next page from state — structured data, not markup.

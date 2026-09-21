@@ -80,6 +80,7 @@ ICON_SPRITE = """
 <symbol id="icon-person" viewBox="0 0 20 20"><circle cx="10" cy="7" r="3.2"/><path d="M4 17 A6 6 0 0 1 16 17"/></symbol>
 <symbol id="icon-expand" viewBox="0 0 20 20"><polyline points="12,3 17,3 17,8"/><line x1="17" y1="3" x2="11.5" y2="8.5"/><polyline points="8,17 3,17 3,12"/><line x1="3" y1="17" x2="8.5" y2="11.5"/></symbol>
 <symbol id="icon-send" viewBox="0 0 20 20"><polygon points="3,10 17,4 12,17 9,11"/><line x1="9" y1="11" x2="17" y2="4"/></symbol>
+<symbol id="icon-sidebar" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="1.5"/><line x1="8" y1="4" x2="8" y2="16"/></symbol>
 </svg>
 """
 
@@ -89,7 +90,7 @@ _TYPE_ICONS = {"feature": "sparkle", "workflow": "cycle"}
 _TYPE_ICON_FALLBACK = "file-text"
 
 _RAIL_TEMPLATE = _env.from_string(
-    '<div class="sidebar">'
+    '<div id="nav-rail" class="sidebar">'
     "{% for d in domains %}"
     '<details class="domain-group"{{ " open" if d.open else "" }}>'
     '<summary><svg class="icon" aria-hidden="true">'
@@ -139,10 +140,27 @@ _ASSISTANT_PANEL = (
     '<div class="chat-header">'
     '<span class="chat-title"><svg class="icon" aria-hidden="true">'
     '<use href="#icon-chat"></use></svg>Spec Assistant</span>'
-    '<span class="chat-header-right"><span id="chat-status"></span>'
+    '<span class="chat-header-right">'
     '<button id="chat-reset" class="chat-reset" type="button">New</button>'
     '<button id="assistant-close" class="assistant-close" type="button" aria-label="Close panel">'
     "&#215;</button></span></div>"
+    '<div id="chat-log" class="chat-log"></div>'
+    # Shown while a draft is waiting on the reader: what they type next answers its question or
+    # corrects its current step, rather than starting a new conversation (see DRAFT_JS).
+    '<div id="draft-reply" class="draft-reply" hidden><span>Replying to the draft</span>'
+    '<button id="draft-cancel" class="draft-cancel" type="button">Cancel draft</button></div>'
+    # Right above the input, where the reader's eyes already are after sending — a status in the
+    # header was easy to miss while waiting on a slow answer.
+    '<div id="chat-thinking" class="chat-thinking" role="status" aria-live="polite" hidden>'
+    '<span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>'
+    '<span id="chat-status"></span></div>'
+    '<form id="chat-form" class="chat-form"><div class="chat-composer">'
+    '<div class="chat-input-wrap">'
+    '<div id="mention-dropdown" class="mention-dropdown"></div>'
+    '<input id="chat-input" placeholder="Ask about the docs, or describe a change to draft… '
+    '(# to scope)" autocomplete="off">'
+    "</div>"
+    '<div class="chat-composer-bar">'
     # Auto is the default and the honest one: the server classifies the question. The other two
     # exist for when it reads a question the other way round (see chat_server.classify_intent).
     '<div class="assistant-intent" role="group" aria-label="Answer style">'
@@ -152,20 +170,9 @@ _ASSISTANT_PANEL = (
     "Explore</button>"
     '<button class="chip intent-chip" type="button" data-intent="spec" data-active="false">'
     "Draft spec</button></div>"
-    '<div id="chat-log" class="chat-log"></div>'
-    # Shown while a draft is waiting on the reader: what they type next answers its question or
-    # corrects its current step, rather than starting a new conversation (see DRAFT_JS).
-    '<div id="draft-reply" class="draft-reply" hidden><span>Replying to the draft</span>'
-    '<button id="draft-cancel" class="draft-cancel" type="button">Cancel draft</button></div>'
-    '<form id="chat-form" class="chat-form">'
-    '<div class="chat-input-wrap">'
-    '<div id="mention-dropdown" class="mention-dropdown"></div>'
-    '<input id="chat-input" placeholder="Ask about the docs, or describe a change to draft… '
-    '(# to scope)" autocomplete="off">'
-    "</div>"
-    '<button type="submit" aria-label="Send">'
+    '<button class="chat-send" type="submit" aria-label="Send">'
     '<svg class="icon" aria-hidden="true"><use href="#icon-send"></use></svg></button>'
-    "</form></div></aside>"
+    "</div></div></form></div></aside>"
 )
 
 _ASSISTANT_TOGGLE = (
@@ -180,6 +187,9 @@ _PAGE_TEMPLATE = _env.from_string(
     '<link rel="stylesheet" href="assets/site.css"></head>'
     "<body>" + ICON_SPRITE + diagram_render.GLASS_DEFS + '<div class="shell">'
     '<div class="titlebar">'
+    '<button id="nav-toggle" class="nav-toggle" type="button" aria-controls="nav-rail" '
+    'aria-expanded="true" aria-label="Hide navigation">'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-sidebar"></use></svg></button>'
     '<a class="brand" href="index.html">'
     '<svg class="icon" aria-hidden="true"><use href="#icon-brand"></use></svg>specky docs</a>'
     '<div class="search-wrap">'
@@ -241,6 +251,7 @@ CSS = """
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --rail-width: 244px;
   --shadow-md: 0 6px 16px -4px rgb(0 0 0 / 0.08), 0 2px 6px -2px rgb(0 0 0 / 0.05);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-display: Poppins, var(--font-sans);
@@ -321,6 +332,12 @@ a { color: inherit; }
   text-decoration: none; flex-shrink: 0;
 }
 .titlebar .brand .icon { width: 1.2em; height: 1.2em; color: var(--accent); }
+.nav-toggle {
+  display: inline-flex; align-items: center; border: none; background: none; color: var(--text-secondary);
+  padding: 5px; margin-right: -10px; border-radius: var(--radius-sm); cursor: pointer; flex-shrink: 0;
+}
+.nav-toggle .icon { width: 1.1em; height: 1.1em; }
+.nav-toggle:hover { background: var(--chrome-hover); color: var(--text-primary); }
 .search-wrap { position: relative; flex: 1; max-width: 380px; }
 .search-wrap > .icon {
   position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary);
@@ -351,10 +368,15 @@ a { color: inherit; }
 
 .body-row { display: flex; height: 100vh; }
 .sidebar {
-  width: 244px; flex-shrink: 0; background: var(--chrome-bg); backdrop-filter: blur(20px) saturate(160%);
+  width: var(--rail-width); flex-shrink: 0; background: var(--chrome-bg); backdrop-filter: blur(20px) saturate(160%);
   -webkit-backdrop-filter: blur(20px) saturate(160%); border-right: 1px solid var(--chrome-border);
   padding: 66px 14px 20px; overflow-y: auto; height: 100vh; box-sizing: border-box;
 }
+/* Collapsed from the titlebar, and while the Spec Assistant is open (see NAV_JS/CHAT_JS): the
+   rail's width is worth more to an answer than to a nav the reader isn't using mid-conversation.
+   Zeroing --rail-width tells the panel's max-width the room is free. */
+body.nav-collapsed { --rail-width: 0px; }
+body.nav-collapsed .sidebar { display: none; }
 .domain-group { margin-bottom: 18px; }
 .domain-group summary {
   display: flex; align-items: center; gap: 6px; font-size: 0.6875rem; text-transform: uppercase;
@@ -542,7 +564,10 @@ a { color: inherit; }
 .assistant-panel {
   /* min-width: 0 — a flex item's automatic minimum is its content, and one wide diagram or a long
      code line would otherwise push the dock past the width the reader dragged it to. */
-  position: relative; flex: 0 0 var(--assistant-width, 440px); min-width: 0; height: 100vh; z-index: 20;
+  position: relative; flex: 0 0 var(--assistant-width, 560px); min-width: 0; height: 100vh; z-index: 20;
+  /* A width dragged wide still leaves the doc column 360px to be read in — after the window shrinks,
+     or the reader brings back the rail. */
+  max-width: calc(100vw - 360px - var(--rail-width));
   background: var(--glass-bg); backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%); border-left: 1px solid var(--glass-border);
   display: none;
@@ -559,7 +584,7 @@ body.assistant-open .chat-toggle { display: none; }
   padding: 0 2px; cursor: pointer;
 }
 .assistant-close:hover { color: var(--text-primary); }
-.assistant-intent { display: flex; gap: 6px; padding: 10px 16px 0; }
+.assistant-intent { display: flex; flex-wrap: wrap; gap: 6px; }
 .intent-chip[data-active="true"] { background: var(--accent-soft); color: var(--accent); }
 .chat-header {
   padding: 12px 16px; font-weight: 600; font-size: 0.8125rem; border-bottom: 1px solid var(--border);
@@ -571,11 +596,10 @@ body.assistant-open .chat-toggle { display: none; }
    doc column to an unreadable ribbon. */
 @media (max-width: 1100px) {
   .assistant-panel {
-    position: fixed; top: 0; right: 0; bottom: 0; z-index: 26; flex: none;
-    width: min(var(--assistant-width, 440px), 100vw); box-shadow: var(--shadow-md);
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 26; flex: none; max-width: none;
+    width: min(var(--assistant-width, 560px), 100vw); box-shadow: var(--shadow-md);
   }
 }
-#chat-status { font-weight: 400; color: var(--text-secondary); font-size: 0.6875rem; }
 .chat-header-right { display: flex; align-items: center; gap: 8px; }
 .chat-reset {
   border: 1px solid var(--border); background: none; color: var(--text-secondary);
@@ -589,16 +613,45 @@ body.assistant-open .chat-toggle { display: none; }
 .chat-assistant { align-self: flex-start; background: var(--surface-tertiary); color: var(--text-primary); }
 .chat-sources { align-self: flex-start; color: var(--text-secondary); font-size: 0.6875rem; }
 .chat-error { align-self: flex-start; color: var(--danger); background: var(--danger-bg); }
-.chat-form { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
-.chat-input-wrap { position: relative; flex: 1; }
-.chat-form input {
-  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md);
-  font-family: var(--font-sans); font-size: 0.75rem; background: var(--surface); color: var(--text-primary);
-  box-sizing: border-box;
+/* --- the composer: the input with its options right under it, so what the answer will be
+   (Auto / Explore / Draft spec) is decided where the question is typed, not at the top of the panel. */
+.chat-form { padding: 8px 16px 14px; }
+.chat-composer {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface);
 }
-.chat-form button {
+.chat-composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.chat-input-wrap { position: relative; }
+/* The composer shows focus for the input, so the input itself draws no box or outline. */
+.chat-form input {
+  width: 100%; padding: 6px 4px; border: none; outline: none; background: transparent;
+  font-family: var(--font-sans); font-size: 0.8125rem; color: var(--text-primary); box-sizing: border-box;
+}
+.chat-composer-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.chat-send {
   background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--radius-md);
-  padding: 8px 12px; display: inline-flex; align-items: center; cursor: pointer;
+  padding: 7px 12px; display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0;
+}
+/* --- waiting on the server: a line directly above the composer, animated so it reads as
+   "working" at a glance. DRAFT_STATUS names the draft step in the same spot. */
+.chat-thinking {
+  display: flex; align-items: center; gap: 8px; padding: 8px 20px 0;
+  font-size: 0.75rem; font-weight: 600; color: var(--accent);
+}
+.chat-thinking[hidden] { display: none; }
+.thinking-dots { display: inline-flex; gap: 3px; }
+.thinking-dots span {
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  animation: thinking-pulse 1.2s ease-in-out infinite;
+}
+.thinking-dots span:nth-child(2) { animation-delay: 0.15s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes thinking-pulse {
+  0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dots span { animation: none; opacity: 0.6; }
 }
 .mention-dropdown {
   position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 25;
@@ -941,6 +994,37 @@ if (currentLink) {
   currentLink.classList.add('active');
   currentLink.closest('details')?.setAttribute('open', '');
 }
+
+// The tab's own state — the rail here, the conversation and panel in CHAT_JS — lives in
+// sessionStorage. A file:// page may refuse storage outright, and a sandboxed iframe always does.
+// Failing that probe costs the reader continuity, not function: the rail and panel start from their
+// defaults on every page, and a follow-up asked after navigating starts a fresh conversation.
+const tabStore = (() => {
+  try {
+    window.sessionStorage.getItem('specky-chat-session');
+    return window.sessionStorage;
+  } catch (err) {
+    return null;
+  }
+})();
+
+// --- collapsing the rail: remembered for the tab, like the assistant panel's own state.
+const navToggle = document.getElementById('nav-toggle');
+const navRail = document.getElementById('nav-rail');
+
+function isNavCollapsed() {
+  return document.body.classList.contains('nav-collapsed');
+}
+
+function setNavCollapsed(collapsed) {
+  document.body.classList.toggle('nav-collapsed', collapsed);
+  tabStore?.setItem('specky-nav-collapsed', collapsed ? '1' : '0');
+  navToggle?.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  navToggle?.setAttribute('aria-label', collapsed ? 'Show navigation' : 'Hide navigation');
+}
+
+navToggle?.addEventListener('click', () => setNavCollapsed(!isNavCollapsed()));
+setNavCollapsed(tabStore?.getItem('specky-nav-collapsed') === '1');
 """
 
 # The viewer is many pages, and the reader navigates between them mid-conversation, so both halves
@@ -948,7 +1032,7 @@ if (currentLink) {
 # the transcript the panel shows. sessionStorage holds both — the tab, not the browser, is the right
 # lifetime for "the conversation I'm having now", and it's the reader's own tab either way. The
 # panel's own state (open, width, pinned intent) lives there too, for the same reason: a reader who
-# clicks a cited source shouldn't find the panel gone and 440px back to its default.
+# clicks a cited source shouldn't find the panel gone and 560px back to its default.
 CHAT_JS = """
 const chatToggle = document.getElementById('chat-toggle');
 const assistantPanel = document.getElementById('assistant-panel');
@@ -958,24 +1042,15 @@ const chatLog = document.getElementById('chat-log');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatStatus = document.getElementById('chat-status');
+const chatThinking = document.getElementById('chat-thinking');
 const chatReset = document.getElementById('chat-reset');
 const intentChips = [...document.querySelectorAll('.intent-chip')];
 const CHAT_LOG_MAX = 24;
 const CHAT_PERSISTED = new Set(['user', 'assistant', 'sources']);
 const ASSISTANT_WIDTH_MIN = 320;
-const ASSISTANT_WIDTH_MAX = 720;
+const ASSISTANT_WIDTH_MAX = 1200;
+const ASSISTANT_DOC_MIN = 360;
 const ASSISTANT_OFFLINE = 'The Spec Assistant is not reachable. Run `specky serve` in this repo, then try again.';
-
-// A file:// page may refuse storage outright, and a sandboxed iframe always does. Failing that
-// probe costs the reader one thing: a follow-up asked after navigating starts a fresh conversation.
-const chatStore = (() => {
-  try {
-    window.sessionStorage.getItem('specky-chat-session');
-    return window.sessionStorage;
-  } catch (err) {
-    return null;
-  }
-})();
 
 function chatNewSessionId() {
   // crypto.randomUUID() needs a secure context, which http:// on a real hostname isn't.
@@ -983,12 +1058,12 @@ function chatNewSessionId() {
     : `s-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-let chatSession = chatStore?.getItem('specky-chat-session') || chatNewSessionId();
-chatStore?.setItem('specky-chat-session', chatSession);
+let chatSession = tabStore?.getItem('specky-chat-session') || chatNewSessionId();
+tabStore?.setItem('specky-chat-session', chatSession);
 
 function readChatLog() {
   try {
-    return JSON.parse(chatStore?.getItem('specky-chat-log') || '[]');
+    return JSON.parse(tabStore?.getItem('specky-chat-log') || '[]');
   } catch (err) {
     return [];
   }
@@ -996,23 +1071,49 @@ function readChatLog() {
 
 function setAssistantOpen(open) {
   document.body.classList.toggle('assistant-open', open);
-  chatStore?.setItem('specky-assistant-open', open ? '1' : '0');
+  tabStore?.setItem('specky-assistant-open', open ? '1' : '0');
   if (open) chatInput?.focus();
 }
 
-chatToggle?.addEventListener('click', () => setAssistantOpen(true));
-assistantClose?.addEventListener('click', () => setAssistantOpen(false));
-if (chatStore?.getItem('specky-assistant-open') === '1') setAssistantOpen(true);
+// Opening the panel hands it the nav rail's width; closing gives back whatever the rail was before.
+// Only the click does this — reopening on the next page leaves the rail as the reader last set it,
+// so one who brought the nav back mid-conversation keeps it.
+chatToggle?.addEventListener('click', () => {
+  tabStore?.setItem('specky-nav-before-assistant', isNavCollapsed() ? '1' : '0');
+  setNavCollapsed(true);
+  setAssistantOpen(true);
+});
+assistantClose?.addEventListener('click', () => {
+  setAssistantOpen(false);
+  setNavCollapsed(tabStore?.getItem('specky-nav-before-assistant') === '1');
+});
+if (tabStore?.getItem('specky-assistant-open') === '1') setAssistantOpen(true);
 
 // --- panel width: one custom property on <html>, dragged and remembered ------------------
-function setAssistantWidth(px) {
-  const width = Math.min(Math.max(Math.round(px), ASSISTANT_WIDTH_MIN), ASSISTANT_WIDTH_MAX);
-  document.documentElement.style.setProperty('--assistant-width', `${width}px`);
-  chatStore?.setItem('specky-assistant-width', String(width));
+// A drag stops where the doc column would drop below ASSISTANT_DOC_MIN beside the rail, when it's
+// showing. Overlaid on a narrow window (the 1100px media query) the panel covers the page rather
+// than sharing the row, so only the window bounds it.
+function assistantWidthMax() {
+  const overlaid = getComputedStyle(assistantPanel).position === 'fixed';
+  const reserved = overlaid ? 0 : (navRail?.getBoundingClientRect().width || 0) + ASSISTANT_DOC_MIN;
+  return Math.max(ASSISTANT_WIDTH_MIN, Math.min(ASSISTANT_WIDTH_MAX, window.innerWidth - reserved));
 }
 
-const storedAssistantWidth = Number(chatStore?.getItem('specky-assistant-width'));
-if (storedAssistantWidth) setAssistantWidth(storedAssistantWidth);
+function applyAssistantWidth(px, max) {
+  const width = Math.min(Math.max(Math.round(px), ASSISTANT_WIDTH_MIN), max);
+  document.documentElement.style.setProperty('--assistant-width', `${width}px`);
+  return width;
+}
+
+function setAssistantWidth(px) {
+  tabStore?.setItem('specky-assistant-width', String(applyAssistantWidth(px, assistantWidthMax())));
+}
+
+// Restored as saved, not re-capped: this window's cap depends on its size and on the rail, and
+// saving that back would shrink the width for every page after this one. CSS's max-width keeps a
+// wide saved width off the doc column in the meantime.
+const storedAssistantWidth = Number(tabStore?.getItem('specky-assistant-width'));
+if (storedAssistantWidth) applyAssistantWidth(storedAssistantWidth, ASSISTANT_WIDTH_MAX);
 
 assistantResize?.addEventListener('pointerdown', (event) => {
   event.preventDefault();
@@ -1038,11 +1139,11 @@ assistantResize?.addEventListener('keydown', (event) => {
 });
 
 // --- intent: Auto lets the server classify the question; the other two pin it -------------
-let assistantIntent = chatStore?.getItem('specky-assistant-intent') || 'auto';
+let assistantIntent = tabStore?.getItem('specky-assistant-intent') || 'auto';
 
 function setAssistantIntent(value) {
   assistantIntent = value;
-  chatStore?.setItem('specky-assistant-intent', value);
+  tabStore?.setItem('specky-assistant-intent', value);
   for (const chip of intentChips) {
     chip.dataset.active = chip.dataset.intent === value ? 'true' : 'false';
   }
@@ -1052,11 +1153,17 @@ for (const chip of intentChips) {
   chip.addEventListener('click', () => setAssistantIntent(chip.dataset.intent));
 }
 
+// The thinking line shows only while there's a status to show; an empty one hides it.
+function setChatStatus(text) {
+  if (chatStatus) chatStatus.textContent = text;
+  if (chatThinking) chatThinking.hidden = !text;
+}
+
 function persistChatEntry(role, text) {
-  if (!chatStore || !CHAT_PERSISTED.has(role)) return;
+  if (!tabStore || !CHAT_PERSISTED.has(role)) return;
   const log = readChatLog();
   log.push({ role, text });
-  chatStore.setItem('specky-chat-log', JSON.stringify(log.slice(-CHAT_LOG_MAX)));
+  tabStore.setItem('specky-chat-log', JSON.stringify(log.slice(-CHAT_LOG_MAX)));
 }
 
 function addChatMessage(role, text, persist = true) {
@@ -1187,7 +1294,7 @@ chatForm?.addEventListener('submit', async (event) => {
     await sendDraft('reply', { reply: question });
     return;
   }
-  chatStatus.textContent = assistantIntent === 'spec' ? DRAFT_STATUS.scope : 'Thinking…';
+  setChatStatus(assistantIntent === 'spec' ? DRAFT_STATUS.scope : 'Thinking…');
   const payload = { question, session: chatSession };
   if (assistantIntent !== 'auto') payload.intent = assistantIntent;
   try {
@@ -1197,7 +1304,7 @@ chatForm?.addEventListener('submit', async (event) => {
       body: JSON.stringify(payload),
     });
     const data = await res.json();
-    chatStatus.textContent = '';
+    setChatStatus('');
     if (!res.ok) {
       addChatMessage('error', data.error || 'Something went wrong.');
       return;
@@ -1208,7 +1315,7 @@ chatForm?.addEventListener('submit', async (event) => {
     }
     addChatAnswer(data);
   } catch (err) {
-    chatStatus.textContent = '';
+    setChatStatus('');
     addChatMessage('error', ASSISTANT_OFFLINE);
   }
 });
@@ -1218,10 +1325,10 @@ chatReset?.addEventListener('click', async () => {
   // for a blank slate, and a new id means the old transcript can't be reached again anyway.
   const previous = chatSession;
   chatLog.innerHTML = '';
-  chatStore?.removeItem('specky-chat-log');
+  tabStore?.removeItem('specky-chat-log');
   clearDraft();
   chatSession = chatNewSessionId();
-  chatStore?.setItem('specky-chat-session', chatSession);
+  tabStore?.setItem('specky-chat-session', chatSession);
   chatInput.focus();
   try {
     await speckyFetch('/chat/reset', {
@@ -1279,7 +1386,7 @@ const CHAT_PLACEHOLDER = chatInput?.placeholder || '';
 
 function readDraft() {
   try {
-    const state = JSON.parse(chatStore?.getItem('specky-draft') || 'null');
+    const state = JSON.parse(tabStore?.getItem('specky-draft') || 'null');
     return state && typeof state === 'object' && typeof state.request === 'string' ? state : null;
   } catch (err) {
     return null;
@@ -1304,8 +1411,8 @@ function syncDraftReply() {
 
 function saveDraft(state) {
   draftState = state;
-  if (state) chatStore?.setItem('specky-draft', JSON.stringify(state));
-  else chatStore?.removeItem('specky-draft');
+  if (state) tabStore?.setItem('specky-draft', JSON.stringify(state));
+  else tabStore?.removeItem('specky-draft');
   syncDraftReply();
 }
 
@@ -1347,7 +1454,7 @@ async function sendDraft(action, extra = {}) {
   if (!draftState || draftBusy) return;
   draftBusy = true;
   retireDraftCards();
-  chatStatus.textContent = draftStatusFor(action);
+  setChatStatus(draftStatusFor(action));
   try {
     const res = await speckyFetch('/draft', {
       method: 'POST',
@@ -1355,7 +1462,7 @@ async function sendDraft(action, extra = {}) {
       body: JSON.stringify({ action, state: draftState, ...extra }),
     });
     const data = await res.json();
-    chatStatus.textContent = '';
+    setChatStatus('');
     if (!res.ok) {
       addChatMessage('error', data.error || 'Something went wrong.');
       reviveLatestDraftCard();
@@ -1363,7 +1470,7 @@ async function sendDraft(action, extra = {}) {
     }
     showDraft(data);
   } catch (err) {
-    chatStatus.textContent = '';
+    setChatStatus('');
     addChatMessage('error', ASSISTANT_OFFLINE);
     reviveLatestDraftCard();
   } finally {
