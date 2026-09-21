@@ -11,9 +11,9 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 
 ## How It Works
 
-1. **Reader opens the panel** — the **Spec Assistant** button opens a docked sidebar on the right edge, 320–720px wide, which the reader can resize by dragging its edge.
+1. **Reader opens the panel** — the **Spec Assistant** button opens a docked sidebar on the right edge, 560px wide, which the reader can resize by dragging its edge. Its width is capped relative to the window so the doc column keeps at least 360px to be read in, even after the window shrinks or the nav rail comes back. Opening the panel also collapses the nav rail; a titlebar button brings it back, and closing the panel restores it.
 
-2. **The question is routed by intent** — the server recognises whether the reader is exploring the docs or asking for a spec to be drafted, and the **Auto / Explore / Draft spec** chips can pin that choice when it reads a question the other way round.
+2. **The question is routed by intent** — the server recognises whether the reader is exploring the docs or asking for a spec to be drafted, and the **Auto / Explore / Draft spec** chips in the composer bar, beside Send, can pin that choice when it reads a question the other way round.
 
 3. **An explore answer leads with the short version** — the model writes a short answer that stands on its own (the fact, name or yes/no, and the doc it comes from), then the details. The panel shows the short answer, with a **Read more** button that expands the details and **Show less** that folds them away again.
 
@@ -26,6 +26,8 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 7. **The panel follows the reader** — width, open state and pinned intent are remembered for the tab. A draft's current step is rebuilt on the next page, so its buttons keep working after the reader follows a cited source.
 
 8. **The panel adapts to screen size** — below 1100px wide it overlays the content instead of pushing it aside.
+
+9. **Waiting is visible where the reader is looking** — while an answer is pending, an animated status line shows right above the input (the header status span was easy to miss).
 
 ## Outcomes
 
