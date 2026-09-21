@@ -150,7 +150,8 @@ def render_mermaid_blocks(body_html: str, limit: int | None = None) -> tuple[str
 # --surface, --border and the rest redefines these along with them.
 _TOKENS_CSS = """
 :root {
-  --diagram-bg: var(--surface-secondary);
+  /* The page's own color, so a diagram sits in the page rather than in a gray box. */
+  --diagram-bg: var(--surface);
   --diagram-node: var(--surface);
   --diagram-stroke: var(--border);
   --diagram-text: var(--text-primary);
@@ -178,9 +179,9 @@ _TOKENS_CSS = """
      figure gets a few soft washes of the site's own colors, faint enough to stay behind the text.
      Mixed from the tokens rather than fixed, so each follows the scheme. */
   --diagram-backdrop:
-    radial-gradient(70% 60% at 0% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%),
-    radial-gradient(60% 55% at 100% 100%, color-mix(in srgb, var(--feature) 14%, transparent), transparent 70%),
-    radial-gradient(50% 50% at 100% 0%, color-mix(in srgb, var(--tag-0) 12%, transparent), transparent 70%),
+    radial-gradient(70% 60% at 0% 0%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 70%),
+    radial-gradient(60% 55% at 100% 100%, color-mix(in srgb, var(--feature) 3%, transparent), transparent 70%),
+    radial-gradient(50% 50% at 100% 0%, color-mix(in srgb, var(--tag-0) 3%, transparent), transparent 70%),
     var(--diagram-bg);
 }
 @media (prefers-color-scheme: dark) {
@@ -201,7 +202,7 @@ _TOKENS_CSS = """
   :root {
     --diagram-glass-hi: var(--diagram-node);
     --diagram-glass-lo: var(--diagram-node);
-    --diagram-glass-group: var(--diagram-bg);
+    --diagram-glass-group: var(--surface-secondary);
     --diagram-glass-tint: var(--surface-tertiary);
     --diagram-glass-edge: var(--diagram-stroke);
     --diagram-backdrop: var(--diagram-bg);
@@ -313,10 +314,10 @@ DIAGRAM_CSS = (
     _TOKENS_CSS
     + """
 /* --- diagrams: a static <svg> from vendor/mermaid-render, pre-rendered once server-side. The
-   figure is the tinted backdrop its glass panes sit on (--diagram-backdrop), framed like a
-   table's figure.tw. */
+   figure is the tinted backdrop its glass panes sit on (--diagram-backdrop). No border: the
+   backdrop is the page's own color, so the diagram sits in the page rather than framed on it. */
 figure.flow {
-  position: relative; border: 1px solid var(--border); border-radius: var(--radius-md);
+  position: relative; border-radius: var(--radius-md);
   background: var(--diagram-backdrop); text-align: center;
 }
 figure.flow svg { max-width: 100%; height: auto; }
