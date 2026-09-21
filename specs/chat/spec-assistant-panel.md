@@ -11,9 +11,9 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 
 ## How It Works
 
-1. **Reader opens the panel** — the **Spec Assistant** button opens a docked sidebar on the right edge, 560px wide, which the reader can resize by dragging its edge. Its width is capped relative to the window so the doc column keeps at least 360px to be read in, even after the window shrinks or the nav rail comes back. Opening the panel also collapses the nav rail; a titlebar button brings it back, and closing the panel restores it.
+1. **Reader opens the panel** — the **Spec Assistant** button (bottom right, showing its shortcut) or **⌘ .** / **Ctrl .** from anywhere on the page opens a docked sidebar on the right edge, 560px wide, which the reader can resize by dragging its edge. The same shortcut closes it, and so does Esc while focus is inside it. Its width is capped relative to the window so the doc column keeps at least 360px to be read in, even after the window shrinks or the nav rail comes back. Opening the panel also collapses the nav rail; a titlebar button brings it back, and closing the panel restores it.
 
-2. **The question is routed by intent** — the server recognises whether the reader is exploring the docs or asking for a spec to be drafted, and the **Auto / Explore / Draft spec** chips in the composer bar, beside Send, can pin that choice when it reads a question the other way round.
+2. **The question is routed by intent** — the server recognises whether the reader is exploring the docs or asking for a spec to be drafted, and the **Auto / Explore / Draft spec** switch in the composer bar, beside Send, can pin that choice when it reads a question the other way round. The input grows with what's typed: Enter sends, Shift+Enter starts a new line.
 
 3. **An explore answer leads with the short version** — the model writes a short answer that stands on its own (the fact, name or yes/no, and the doc it comes from), then the details. The panel shows the short answer, with a **Read more** button that expands the details and **Show less** that folds them away again.
 
@@ -27,7 +27,9 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 
 8. **The panel adapts to screen size** — below 1100px wide it overlays the content instead of pushing it aside.
 
-9. **Waiting is visible where the reader is looking** — while an answer is pending, an animated status line shows right above the input (the header status span was easy to miss).
+9. **Waiting is visible where the reader is looking** — while an answer is pending, a floating status pill shows right above the input (the header status span was easy to miss), naming what's happening ("Thinking…", or the draft step), counting the seconds, with a **Stop** button. Stop gives up on the wait in the browser only: a stopped draft step leaves the draft where it was, but the server still finishes a stopped question and keeps that answer in the conversation, so a follow-up can refer to it.
+
+10. **An empty conversation offers a way in** — a new or reset conversation shows a short welcome and a few suggested prompts drawn from the page being read. Clicking one fills the input; it is never sent on its own.
 
 ## Outcomes
 
@@ -56,3 +58,8 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 | Model writes `<script>` tag in answer | Sanitizer processes the response | `<script>` tag and its contents are removed; text after it remains |
 | Reader resizes panel to 550px | Reader navigates to another page in the same tab | Panel reopens at 550px (width remembered in session storage) |
 | A draft is waiting on the Impact step | Reader navigates to another page | The Impact card is rebuilt there and its buttons still work |
+| Panel is closed | Reader presses ⌘ . (Ctrl . off a Mac) | Panel opens; pressing it again closes it |
+| Panel is open, focus in the input | Reader presses Esc | Panel closes and focus returns to the **Spec Assistant** button |
+| Reader typed a line | Reader presses Shift+Enter | A new line starts in the input; nothing is sent |
+| A question is pending | Reader clicks **Stop** | The status pill hides and a "Stopped." note appears in the conversation |
+| Conversation is empty on a feature doc | Reader clicks a suggested prompt | The prompt fills the input and is not sent |

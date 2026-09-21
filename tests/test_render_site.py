@@ -356,7 +356,7 @@ def test_the_assistant_panel_is_a_column_of_the_page_not_a_popup_over_it(site):
 
 def test_the_panel_is_called_the_spec_assistant(site):
     page = (site / "index.html").read_text()
-    assert '</svg>Spec Assistant</button>' in page
+    assert '</svg>Spec Assistant<kbd class="chat-kbd"' in page
     assert 'aria-label="Spec Assistant"' in page
     assert "</svg>Ask</button>" not in page
     assert "Ask about these docs" not in page
@@ -409,13 +409,73 @@ def test_the_intent_chips_sit_in_the_composer_next_to_the_input(site):
 def test_the_thinking_line_sits_right_above_the_input(site):
     page = (site / "index.html").read_text()
     app_js = (site / "assets" / "app.js").read_text()
-    # Below the log, so no longer in the header above it.
-    order = ['id="chat-log"', 'id="chat-thinking"', 'id="chat-status"', 'id="chat-form"']
+    css = (site / "assets" / "site.css").read_text()
+    # Below the log, so no longer in the header above it — and floated over the log's bottom edge
+    # by the stage they share, rather than taking a row of its own.
+    order = [
+        'class="chat-stage"', 'id="chat-log"', 'id="chat-thinking"', 'id="chat-status"',
+        'id="chat-elapsed"', 'id="chat-stop"', 'id="chat-form"',
+    ]
     assert [page.index(marker) for marker in order] == sorted(page.index(marker) for marker in order)
     assert "chatThinking.hidden = !text;" in app_js
     # Every status goes through setChatStatus, or the line would show text while still hidden.
     assert app_js.count("chatStatus.textContent") == 1
-    assert "@keyframes thinking-pulse" in (site / "assets" / "site.css").read_text()
+    assert "@keyframes thinking-shimmer" in css
+    # The overlay never covers the message it's waiting to answer.
+    assert ".chat-stage:has(> .chat-thinking:not([hidden])) .chat-log" in css
+    assert "prefers-reduced-motion" in css
+
+
+def test_stop_gives_up_on_the_wait_without_moving_the_api(site):
+    app_js = (site / "assets" / "app.js").read_text()
+    assert "chatAbort = new AbortController();" in app_js
+    assert "chatStop?.addEventListener('click', () => chatAbort?.abort());" in app_js
+    # Both requests that show the overlay can be stopped: the question and a draft step.
+    assert app_js.count("signal: beginChatRequest(),") == 2
+    assert app_js.count("if (isStopped(err)) addChatMessage('note', 'Stopped.', false);") == 2
+    # Stopping the first request on a served page must not be read as "this origin isn't the API".
+    assert "if (speckyApiSettled || err.name === 'AbortError') throw err;" in app_js
+
+
+def test_the_composer_grows_and_sends_on_enter(site):
+    page = (site / "index.html").read_text()
+    app_js = (site / "assets" / "app.js").read_text()
+    assert '<textarea id="chat-input" rows="1"' in page
+    assert "event.key !== 'Enter' || event.shiftKey || event.isComposing" in app_js
+    assert "chatForm.requestSubmit();" in app_js
+    # An open @ picker keeps Enter for itself.
+    assert "if (mentionHits.length) return;" in app_js
+    assert "chatSend.disabled = !chatInput.value.trim();" in app_js
+
+
+def test_the_panel_opens_from_the_keyboard_and_esc_closes_it(site):
+    page = (site / "index.html").read_text()
+    app_js = (site / "assets" / "app.js").read_text()
+    assert 'aria-keyshortcuts="Meta+. Control+."' in page
+    assert "(event.metaKey || event.ctrlKey) && event.key === '.'" in app_js
+    assert "event.key === 'Escape' && isAssistantOpen()" in app_js
+    # Esc in the @ picker closes only the picker: it marks the key handled, and the panel checks.
+    assert "if (event.defaultPrevented) return;" in app_js
+    # Only the reader's own open slides the panel in, not a restore on the next page.
+    assert "assistantPanel?.classList.add('is-entering');" in app_js
+
+
+def test_an_empty_conversation_offers_ways_in(site):
+    page = (site / "billing-refund-flow.html").read_text()
+    app_js = (site / "assets" / "app.js").read_text()
+    assert 'id="chat-empty"' in page and 'id="chat-suggestions"' in page
+    assert "new MutationObserver(syncChatEmpty).observe(chatLog, { childList: true });" in app_js
+    # A suggestion is text, and it only fills the composer — sending stays the reader's call.
+    assert "button.textContent = text;" in app_js
+    assert "button.addEventListener('click', () => fillComposer(text));" in app_js
+
+
+def test_the_mention_picker_is_keyboard_driven_and_builds_no_markup(site):
+    app_js = (site / "assets" / "app.js").read_text()
+    mention_js = app_js[app_js.index("const mentionDropdown") : app_js.index("const tip =")]
+    assert "innerHTML" not in mention_js
+    assert "event.key === 'ArrowDown'" in mention_js
+    assert "selectMention(mentionHits[mentionActive]);" in mention_js
 
 
 def test_opening_the_assistant_collapses_the_nav_rail(site):

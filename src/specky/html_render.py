@@ -67,7 +67,7 @@ ICON_SPRITE = """
 <symbol id="icon-brand" viewBox="0 0 20 20"><line x1="10" y1="2" x2="10" y2="18"/><line x1="3.1" y1="6" x2="16.9" y2="14"/><line x1="3.1" y1="14" x2="16.9" y2="6"/></symbol>
 <symbol id="icon-search" viewBox="0 0 20 20"><circle cx="9" cy="9" r="6"/><line x1="13.5" y1="13.5" x2="18" y2="18"/></symbol>
 <symbol id="icon-home" viewBox="0 0 20 20"><polyline points="3,10 10,3 17,10"/><path d="M5 9.5 V17 H15 V9.5"/><rect x="8.5" y="12.5" width="3" height="4.5"/></symbol>
-<symbol id="icon-chat" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="10" rx="2.5"/><polyline points="7,14 7,17 10.5,14"/></symbol>
+<symbol id="icon-chat" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="10" rx="2.5"/><polyline points="7,14 7,17 10.5,14"/><polygon points="10,6.3 10.8,8.2 12.7,9 10.8,9.8 10,11.7 9.2,9.8 7.3,9 9.2,8.2"/></symbol>
 <symbol id="icon-terminal" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="1.5"/><polyline points="6.5,8.5 9.5,10.5 6.5,12.5"/><line x1="10.5" y1="13.5" x2="14" y2="13.5"/></symbol>
 <symbol id="icon-book" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="13" rx="1"/><line x1="10" y1="4" x2="10" y2="17"/><line x1="5" y1="7.5" x2="8" y2="7.5"/><line x1="5" y1="10.5" x2="8" y2="10.5"/><line x1="12" y1="7.5" x2="15" y2="7.5"/><line x1="12" y1="10.5" x2="15" y2="10.5"/></symbol>
 <symbol id="icon-file-text" viewBox="0 0 20 20"><path d="M6 3 H12 L16 7 V17 H6 Z"/><polyline points="12,3 12,7 16,7"/><line x1="8" y1="10.5" x2="14" y2="10.5"/><line x1="8" y1="13" x2="14" y2="13"/></symbol>
@@ -79,8 +79,13 @@ ICON_SPRITE = """
 <symbol id="icon-link" viewBox="0 0 20 20"><line x1="7" y1="13" x2="13" y2="7"/><polyline points="9,7 13,7 13,11"/></symbol>
 <symbol id="icon-person" viewBox="0 0 20 20"><circle cx="10" cy="7" r="3.2"/><path d="M4 17 A6 6 0 0 1 16 17"/></symbol>
 <symbol id="icon-expand" viewBox="0 0 20 20"><polyline points="12,3 17,3 17,8"/><line x1="17" y1="3" x2="11.5" y2="8.5"/><polyline points="8,17 3,17 3,12"/><line x1="3" y1="17" x2="8.5" y2="11.5"/></symbol>
-<symbol id="icon-send" viewBox="0 0 20 20"><polygon points="3,10 17,4 12,17 9,11"/><line x1="9" y1="11" x2="17" y2="4"/></symbol>
 <symbol id="icon-sidebar" viewBox="0 0 20 20"><rect x="3" y="4" width="14" height="12" rx="1.5"/><line x1="8" y1="4" x2="8" y2="16"/></symbol>
+<symbol id="icon-x" viewBox="0 0 20 20"><line x1="5.5" y1="5.5" x2="14.5" y2="14.5"/><line x1="14.5" y1="5.5" x2="5.5" y2="14.5"/></symbol>
+<symbol id="icon-plus" viewBox="0 0 20 20"><line x1="10" y1="4.5" x2="10" y2="15.5"/><line x1="4.5" y1="10" x2="15.5" y2="10"/></symbol>
+<symbol id="icon-arrow-up" viewBox="0 0 20 20"><line x1="10" y1="16" x2="10" y2="4.5"/><polyline points="5,9.5 10,4.5 15,9.5"/></symbol>
+<symbol id="icon-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="10" height="10" rx="1.5"/><polyline points="13,4.5 13,3 3,3 3,13 4.5,13"/></symbol>
+<symbol id="icon-check" viewBox="0 0 20 20"><polyline points="4,10.5 8,14.5 16,5.5"/></symbol>
+<symbol id="icon-stop" viewBox="0 0 20 20"><rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/></symbol>
 </svg>
 """
 
@@ -138,46 +143,68 @@ _ASSISTANT_PANEL = (
     'aria-orientation="vertical" aria-label="Resize panel" tabindex="0"></div>'
     '<div class="assistant-body">'
     '<div class="chat-header">'
-    '<span class="chat-title"><svg class="icon" aria-hidden="true">'
-    '<use href="#icon-chat"></use></svg>Spec Assistant</span>'
+    '<span class="chat-title"><span class="assistant-mark" aria-hidden="true"><svg class="icon">'
+    '<use href="#icon-chat"></use></svg></span>'
+    '<span class="chat-title-text"><span class="chat-title-name">Spec Assistant</span>'
+    '<span id="assistant-subtitle" class="chat-subtitle"></span></span></span>'
     '<span class="chat-header-right">'
-    '<button id="chat-reset" class="chat-reset" type="button">New</button>'
-    '<button id="assistant-close" class="assistant-close" type="button" aria-label="Close panel">'
-    "&#215;</button></span></div>"
+    '<button id="chat-reset" class="chat-header-button" type="button" title="New conversation">'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-plus"></use></svg>New</button>'
+    '<button id="assistant-close" class="chat-header-button icon-only" type="button" '
+    'aria-label="Close panel" title="Close (Esc)">'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-x"></use></svg></button></span></div>'
+    # The log and the thinking overlay share a stage: the overlay floats over the log's bottom edge,
+    # right above the input, where the reader's eyes already are after sending.
+    '<div class="chat-stage">'
+    # Shown only while the log is empty (see CHAT_JS): a first-time reader gets a way in.
+    '<div id="chat-empty" class="chat-empty" hidden>'
+    '<span class="assistant-mark large" aria-hidden="true"><svg class="icon">'
+    '<use href="#icon-chat"></use></svg></span>'
+    '<p class="chat-empty-title">Ask the docs, or draft a change</p>'
+    '<p class="chat-empty-hint">Answers cite the docs they come from. Type @ to scope a question.</p>'
+    '<div id="chat-suggestions" class="chat-suggestions"></div></div>'
     '<div id="chat-log" class="chat-log"></div>'
+    '<div id="chat-thinking" class="chat-thinking" role="status" aria-live="polite" hidden>'
+    '<span class="thinking-orb" aria-hidden="true"></span>'
+    '<span id="chat-status" class="thinking-text"></span>'
+    '<span id="chat-elapsed" class="thinking-elapsed" aria-hidden="true"></span>'
+    '<button id="chat-stop" class="chat-stop" type="button">'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-stop"></use></svg>Stop</button>'
+    "</div></div>"
     # Shown while a draft is waiting on the reader: what they type next answers its question or
     # corrects its current step, rather than starting a new conversation (see DRAFT_JS).
     '<div id="draft-reply" class="draft-reply" hidden><span>Replying to the draft</span>'
     '<button id="draft-cancel" class="draft-cancel" type="button">Cancel draft</button></div>'
-    # Right above the input, where the reader's eyes already are after sending — a status in the
-    # header was easy to miss while waiting on a slow answer.
-    '<div id="chat-thinking" class="chat-thinking" role="status" aria-live="polite" hidden>'
-    '<span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span>'
-    '<span id="chat-status"></span></div>'
     '<form id="chat-form" class="chat-form"><div class="chat-composer">'
     '<div class="chat-input-wrap">'
-    '<div id="mention-dropdown" class="mention-dropdown"></div>'
-    '<input id="chat-input" placeholder="Ask about the docs, or describe a change to draft… '
-    '(@ to scope)" autocomplete="off">'
+    '<div id="mention-dropdown" class="mention-dropdown" role="listbox" '
+    'aria-label="Scope to a module or feature"></div>'
+    '<textarea id="chat-input" rows="1" placeholder="Ask about the docs, or describe a change to '
+    'draft…" aria-label="Message the Spec Assistant" autocomplete="off"></textarea>'
     "</div>"
     '<div class="chat-composer-bar">'
     # Auto is the default and the honest one: the server classifies the question. The other two
     # exist for when it reads a question the other way round (see chat_server.classify_intent).
     '<div class="assistant-intent" role="group" aria-label="Answer style">'
-    '<button class="chip intent-chip" type="button" data-intent="auto" data-active="true">'
-    "Auto</button>"
-    '<button class="chip intent-chip" type="button" data-intent="explore" data-active="false">'
-    "Explore</button>"
-    '<button class="chip intent-chip" type="button" data-intent="spec" data-active="false">'
-    "Draft spec</button></div>"
-    '<button class="chat-send" type="submit" aria-label="Send">'
-    '<svg class="icon" aria-hidden="true"><use href="#icon-send"></use></svg></button>'
-    "</div></div></form></div></aside>"
+    '<button class="chip intent-chip" type="button" data-intent="auto" data-active="true" '
+    'aria-pressed="true">Auto</button>'
+    '<button class="chip intent-chip" type="button" data-intent="explore" data-active="false" '
+    'aria-pressed="false">Explore</button>'
+    '<button class="chip intent-chip" type="button" data-intent="spec" data-active="false" '
+    'aria-pressed="false">Draft spec</button></div>'
+    '<button class="chat-send" type="submit" aria-label="Send" disabled>'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-arrow-up"></use></svg></button>'
+    "</div></div>"
+    '<p class="chat-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · '
+    "<kbd>@</kbd> scope</p>"
+    "</form></div></aside>"
 )
 
+# The shortcut hint starts hidden and empty: CHAT_JS fills in ⌘ or Ctrl for this platform.
 _ASSISTANT_TOGGLE = (
-    '<button id="chat-toggle" class="chat-toggle" type="button">'
-    '<svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>Spec Assistant</button>'
+    '<button id="chat-toggle" class="chat-toggle" type="button" aria-keyshortcuts="Meta+. Control+.">'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>Spec Assistant'
+    '<kbd class="chat-kbd" hidden></kbd></button>'
 )
 
 _PAGE_TEMPLATE = _env.from_string(
@@ -253,6 +280,12 @@ CSS = """
   --radius-lg: 12px;
   --rail-width: 244px;
   --shadow-md: 0 6px 16px -4px rgb(0 0 0 / 0.08), 0 2px 6px -2px rgb(0 0 0 / 0.05);
+  /* The Spec Assistant's identity — launcher, header mark, thinking orb — and nothing else: its
+     buttons and links stay the plain accent, so blue still means "clickable" across the viewer.
+     White text holds AA contrast on both ends. */
+  --assistant-from: #0166ff;
+  --assistant-to: #7c3aed;
+  --assistant-glow: rgb(98 60 240 / 0.32);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-display: Poppins, var(--font-sans);
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -293,6 +326,8 @@ CSS = """
     --tag-6: #fbbf24; --tag-6-bg: #3a2f0f;
     --tag-7: #22d3ee; --tag-7-bg: #0f2c33;
     --shadow-md: 0 6px 20px -4px rgb(0 0 0 / 0.5), 0 2px 8px -2px rgb(0 0 0 / 0.35);
+    --assistant-from: #2563eb;
+    --assistant-glow: rgb(124 92 255 / 0.4);
   }
 }
 
@@ -552,12 +587,31 @@ body.nav-collapsed .sidebar { display: none; }
 }
 .tip[hidden] { display: none; }
 
+/* --- the launcher: the assistant's one piece of fixed chrome, and the first place its gradient
+   shows. The shortcut hint inside it is filled in by CHAT_JS for this platform. */
 .chat-toggle {
-  position: fixed; bottom: 24px; right: 24px; z-index: 20; display: inline-flex; align-items: center; gap: 6px;
-  background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--radius-lg);
-  padding: 10px 18px; font-family: var(--font-sans); font-size: 0.8125rem; font-weight: 600;
-  box-shadow: var(--shadow-md); cursor: pointer;
+  position: fixed; bottom: 24px; right: 24px; z-index: 20; display: inline-flex; align-items: center; gap: 8px;
+  background: linear-gradient(135deg, var(--assistant-from), var(--assistant-to)); color: #fff;
+  border: none; border-radius: 999px; padding: 10px 14px 10px 16px;
+  font-family: var(--font-sans); font-size: 0.8125rem; font-weight: 600; letter-spacing: -0.005em;
+  box-shadow: 0 8px 24px -8px var(--assistant-glow), 0 2px 6px -2px rgb(0 0 0 / 0.18),
+    inset 0 1px 0 rgb(255 255 255 / 0.18);
+  cursor: pointer; transition: transform 150ms ease, box-shadow 150ms ease;
 }
+.chat-toggle .icon { width: 1.15em; height: 1.15em; }
+.chat-toggle:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 30px -8px var(--assistant-glow), 0 3px 8px -2px rgb(0 0 0 / 0.2),
+    inset 0 1px 0 rgb(255 255 255 / 0.18);
+}
+.chat-toggle:active { transform: translateY(0) scale(0.98); }
+.chat-toggle:focus-visible { outline-offset: 3px; border-radius: 999px; }
+.chat-kbd {
+  font-family: var(--font-sans); font-size: 0.6875rem; font-weight: 600; line-height: 1;
+  padding: 3px 6px; border-radius: 6px; background: rgb(255 255 255 / 0.2); color: #fff;
+}
+/* No keyboard to press it on. */
+@media (hover: none) { .chat-kbd { display: none; } }
 /* --- the Spec Assistant dock: a column of .body-row, so opening it reflows the content pane instead of
    covering it. Width is a custom property the drag handle writes (see CHAT_JS), and the
    titlebar clearance mirrors .sidebar's — both scroll under the fixed bar. */
@@ -574,24 +628,54 @@ body.nav-collapsed .sidebar { display: none; }
 }
 body.assistant-open .assistant-panel { display: block; }
 body.assistant-open .chat-toggle { display: none; }
+/* Only when the reader opens it (see openAssistant) — a panel restored on the next page is already
+   where they left it, and sliding it in again on every cited source they follow would be noise. */
+.assistant-panel.is-entering { animation: assistant-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes assistant-in {
+  from { opacity: 0; transform: translateX(16px); }
+}
 .assistant-body { display: flex; flex-direction: column; height: 100%; padding-top: 52px; }
+/* The grab area stays 7px wide; what shows is a hairline that thickens to the accent on hover. */
 .assistant-resize {
   position: absolute; top: 0; bottom: 0; left: -3px; width: 7px; z-index: 2; cursor: col-resize;
 }
-.assistant-resize:hover, .assistant-resize:focus-visible { background: var(--accent-soft); }
-.assistant-close {
-  border: none; background: none; color: var(--text-secondary); font-size: 1.125rem; line-height: 1;
-  padding: 0 2px; cursor: pointer;
+.assistant-resize::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent;
+  transition: background 120ms ease, width 120ms ease, left 120ms ease;
 }
-.assistant-close:hover { color: var(--text-primary); }
-.assistant-intent { display: flex; flex-wrap: wrap; gap: 6px; }
-.intent-chip[data-active="true"] { background: var(--accent-soft); color: var(--accent); }
+.assistant-resize:hover::after, .assistant-resize:focus-visible::after {
+  left: 2px; width: 3px; background: var(--accent);
+}
+.assistant-resize:focus-visible { outline: none; }
 .chat-header {
-  padding: 12px 16px; font-weight: 600; font-size: 0.8125rem; border-bottom: 1px solid var(--border);
+  padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--border);
   display: flex; justify-content: space-between; align-items: center; gap: 8px;
 }
-.chat-title { display: flex; align-items: center; gap: 6px; }
-.chat-title .icon { color: var(--accent); }
+.chat-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.assistant-mark {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 28px; height: 28px; border-radius: 8px; color: #fff;
+  background: linear-gradient(135deg, var(--assistant-from), var(--assistant-to));
+  box-shadow: 0 4px 12px -4px var(--assistant-glow), inset 0 1px 0 rgb(255 255 255 / 0.2);
+}
+.assistant-mark .icon { width: 16px; height: 16px; }
+.assistant-mark.large { width: 44px; height: 44px; border-radius: 12px; }
+.assistant-mark.large .icon { width: 24px; height: 24px; }
+.chat-title-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.chat-title-name {
+  font-family: var(--font-display); font-weight: 600; font-size: 0.875rem; letter-spacing: -0.01em;
+}
+.chat-subtitle { font-size: 0.6875rem; color: var(--text-tertiary); }
+.chat-subtitle:empty { display: none; }
+.chat-header-right { display: flex; align-items: center; gap: 2px; }
+.chat-header-button {
+  display: inline-flex; align-items: center; gap: 5px; border: none; background: none;
+  color: var(--text-secondary); font-family: var(--font-sans); font-size: 0.75rem; font-weight: 500;
+  padding: 5px 8px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.chat-header-button.icon-only { padding: 5px; }
+.chat-header-button .icon { width: 1.15em; height: 1.15em; }
+.chat-header-button:hover { background: var(--surface-tertiary); color: var(--text-primary); }
 /* Narrow windows have no width to give: the dock overlays the content instead of crushing the
    doc column to an unreadable ribbon. */
 @media (max-width: 1100px) {
@@ -600,83 +684,199 @@ body.assistant-open .chat-toggle { display: none; }
     width: min(var(--assistant-width, 560px), 100vw); box-shadow: var(--shadow-md);
   }
 }
-.chat-header-right { display: flex; align-items: center; gap: 8px; }
-.chat-reset {
-  border: 1px solid var(--border); background: none; color: var(--text-secondary);
-  font: inherit; font-weight: 400; font-size: 0.6875rem; padding: 2px 8px;
-  border-radius: var(--radius-sm); cursor: pointer;
+/* --- the log and the thinking overlay share a stage, so the overlay can float over the log's
+   bottom edge — right above the input, where the reader's eyes already are after sending. */
+.chat-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.chat-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 6px; padding: 24px; text-align: center;
 }
-.chat-reset:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
-.chat-log { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; min-height: 120px; min-width: 0; }
-.chat-msg { font-size: 0.75rem; line-height: 1.5; padding: 6px 10px; border-radius: var(--radius-md); max-width: 90%; min-width: 0; white-space: pre-wrap; }
-.chat-user { align-self: flex-end; background: var(--accent-soft); color: var(--text-primary); }
-.chat-assistant { align-self: flex-start; background: var(--surface-tertiary); color: var(--text-primary); }
+.chat-empty[hidden] { display: none; }
+.chat-empty .assistant-mark { margin-bottom: 8px; }
+.chat-empty-title {
+  margin: 0; font-family: var(--font-display); font-size: 1rem; font-weight: 600; letter-spacing: -0.01em;
+}
+.chat-empty-hint { margin: 0 0 12px; max-width: 36ch; color: var(--text-secondary); font-size: 0.75rem; }
+.chat-suggestions { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 380px; }
+.chat-suggestion {
+  display: block; width: 100%; text-align: left; border: 1px solid var(--border); background: var(--surface);
+  color: var(--text-primary); font-family: var(--font-sans); font-size: 0.75rem; padding: 8px 12px;
+  border-radius: 10px; cursor: pointer; transition: border-color 120ms ease, background 120ms ease;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-suggestion:hover { border-color: var(--accent); background: var(--accent-soft); }
+.chat-log {
+  flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px;
+  min-height: 120px; min-width: 0;
+}
+/* Room under the last message for the overlay, so it never sits on top of what was just said. */
+.chat-stage:has(> .chat-thinking:not([hidden])) .chat-log { padding-bottom: 64px; }
+.chat-log > * { animation: chat-in 160ms ease-out both; }
+@keyframes chat-in {
+  from { opacity: 0; transform: translateY(4px); }
+}
+.chat-msg {
+  font-size: 0.8125rem; line-height: 1.55; max-width: 90%; min-width: 0; white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-user {
+  align-self: flex-end; background: var(--accent-soft); color: var(--text-primary);
+  padding: 8px 12px; border-radius: 16px 16px 4px 16px;
+}
+.chat-assistant { align-self: flex-start; color: var(--text-primary); }
 .chat-sources { align-self: flex-start; color: var(--text-secondary); font-size: 0.6875rem; }
-.chat-error { align-self: flex-start; color: var(--danger); background: var(--danger-bg); }
+.chat-error {
+  align-self: stretch; max-width: 100%; color: var(--danger); background: var(--danger-bg);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent); border-radius: 10px;
+  padding: 8px 12px; font-size: 0.75rem; white-space: normal;
+}
+.chat-error code, .chat-note code {
+  font-family: var(--font-mono); font-size: 0.9em; padding: 1px 4px; border-radius: 4px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+/* A note is a divider in the conversation ("Stopped.", "Draft cancelled."), not something said. */
+.chat-note {
+  align-self: stretch; max-width: 100%; display: flex; align-items: center; gap: 10px;
+  color: var(--text-tertiary); font-size: 0.6875rem; white-space: normal; text-align: center;
+}
+.chat-note::before, .chat-note::after { content: ""; flex: 1; min-width: 16px; height: 1px; background: var(--border); }
 /* --- the composer: the input with its options right under it, so what the answer will be
    (Auto / Explore / Draft spec) is decided where the question is typed, not at the top of the panel. */
-.chat-form { padding: 8px 16px 14px; }
+.chat-form { padding: 6px 16px 10px; }
 .chat-composer {
-  display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px;
-  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface);
+  display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 8px 10px;
+  border: 1px solid var(--border); border-radius: 16px; background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 6px 18px -10px rgb(0 0 0 / 0.14);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 .chat-composer:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .chat-input-wrap { position: relative; }
-/* The composer shows focus for the input, so the input itself draws no box or outline. */
-.chat-form input {
-  width: 100%; padding: 6px 4px; border: none; outline: none; background: transparent;
-  font-family: var(--font-sans); font-size: 0.8125rem; color: var(--text-primary); box-sizing: border-box;
+/* The composer shows focus for the input, so the input itself draws no box or outline. It grows with
+   what's typed (see CHAT_JS) up to max-height, then scrolls. */
+.chat-form textarea {
+  display: block; width: 100%; min-height: 28px; max-height: 180px; margin: 0; padding: 4px;
+  border: none; outline: none; background: transparent; resize: none; overflow-y: auto;
+  font-family: var(--font-sans); font-size: 0.8125rem; line-height: 1.5; color: var(--text-primary);
+  box-sizing: border-box;
 }
+.chat-form textarea::placeholder { color: var(--text-tertiary); }
 .chat-composer-bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.chat-send {
-  background: var(--accent); color: var(--accent-fg); border: none; border-radius: var(--radius-md);
-  padding: 7px 12px; display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0;
-}
-/* --- waiting on the server: a line directly above the composer, animated so it reads as
-   "working" at a glance. DRAFT_STATUS names the draft step in the same spot. */
-.chat-thinking {
-  display: flex; align-items: center; gap: 8px; padding: 8px 20px 0;
-  font-size: 0.75rem; font-weight: 600; color: var(--accent);
-}
-.chat-thinking[hidden] { display: none; }
-.thinking-dots { display: inline-flex; gap: 3px; }
-.thinking-dots span {
-  width: 6px; height: 6px; border-radius: 50%; background: currentColor;
-  animation: thinking-pulse 1.2s ease-in-out infinite;
-}
-.thinking-dots span:nth-child(2) { animation-delay: 0.15s; }
-.thinking-dots span:nth-child(3) { animation-delay: 0.3s; }
-@keyframes thinking-pulse {
-  0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
-  40% { opacity: 1; transform: scale(1); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .thinking-dots span { animation: none; opacity: 0.6; }
-}
-.mention-dropdown {
-  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 25;
-  background: var(--glass-bg); backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%); border: 1px solid var(--glass-border);
-  border-radius: var(--radius-md); box-shadow: var(--shadow-md); overflow: hidden;
-  max-height: 180px; overflow-y: auto;
-}
-.mention-dropdown:empty { display: none; border: none; box-shadow: none; }
-.mention-dropdown .mention-item {
-  display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 8px;
-  padding: 6px 10px; border: none; background: none; text-align: left; cursor: pointer;
-  font-family: var(--font-sans); font-size: 0.75rem; color: var(--text-primary);
-}
-.mention-dropdown .mention-item:hover, .mention-dropdown .mention-item:focus-visible {
+/* The answer style is one choice of three, so it reads as a segmented control, not as filters. */
+.assistant-intent {
+  display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; border-radius: 999px;
   background: var(--surface-tertiary);
 }
-.mention-dropdown .mention-item .kind { color: var(--text-tertiary); font-size: 0.6875rem; flex-shrink: 0; }
+.intent-chip {
+  background: transparent; color: var(--text-secondary); padding: 4px 10px;
+  transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+.intent-chip:hover { color: var(--text-primary); }
+.intent-chip[data-active="true"] {
+  background: var(--surface); color: var(--text-primary);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.12), 0 0 0 1px var(--border);
+}
+.chat-send {
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  width: 32px; height: 32px; padding: 0; border: none; border-radius: 50%;
+  background: var(--accent); color: var(--accent-fg); cursor: pointer;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.chat-send .icon { width: 16px; height: 16px; stroke-width: 2; }
+.chat-send:hover:not(:disabled) { transform: translateY(-1px); }
+.chat-send:disabled { opacity: 0.35; cursor: default; }
+.chat-hint { margin: 6px 4px 0; font-size: 0.625rem; color: var(--text-tertiary); }
+.chat-hint kbd {
+  font-family: var(--font-sans); font-size: 0.625rem; padding: 0 4px; border: 1px solid var(--border);
+  border-bottom-width: 2px; border-radius: 4px; background: var(--surface-secondary); color: var(--text-secondary);
+}
+/* --- the thinking overlay: a glass pill floating over the bottom of the log while the server works.
+   The orb spins, the status shimmers, the clock counts, and Stop gives up on the wait. DRAFT_STATUS
+   names the draft step in the same spot. */
+.chat-thinking {
+  position: absolute; left: 50%; bottom: 12px; z-index: 3; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 10px; max-width: calc(100% - 32px);
+  padding: 5px 5px 5px 12px; border-radius: 999px; white-space: nowrap;
+  background: var(--glass-bg); backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid var(--border);
+  box-shadow: var(--shadow-md), 0 0 28px -10px var(--assistant-glow);
+  font-size: 0.75rem; font-weight: 500;
+  animation: thinking-in 180ms ease-out;
+}
+.chat-thinking[hidden] { display: none; }
+@keyframes thinking-in {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+}
+.thinking-orb {
+  width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0deg, var(--assistant-from) 110deg,
+    var(--assistant-to) 300deg, transparent 360deg);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2.5px));
+  animation: thinking-spin 0.9s linear infinite;
+}
+@keyframes thinking-spin {
+  to { transform: rotate(1turn); }
+}
+.thinking-text {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-secondary);
+  background: linear-gradient(90deg, var(--text-secondary) 35%, var(--assistant-to) 50%, var(--text-secondary) 65%);
+  background-size: 250% 100%; -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: thinking-shimmer 1.8s linear infinite;
+}
+@keyframes thinking-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+.thinking-elapsed { color: var(--text-tertiary); font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
+.thinking-elapsed:empty { display: none; }
+.chat-stop {
+  display: inline-flex; align-items: center; gap: 4px; border: none; border-radius: 999px;
+  background: var(--surface-tertiary); color: var(--text-primary); font-family: var(--font-sans);
+  font-size: 0.6875rem; font-weight: 600; padding: 4px 10px 4px 8px; cursor: pointer;
+}
+.chat-stop .icon { width: 0.95em; height: 0.95em; fill: currentColor; }
+.chat-stop:hover { background: var(--border); }
+@media (prefers-reduced-motion: reduce) {
+  .thinking-orb { animation: none; }
+  .thinking-text { animation: none; background: none; -webkit-text-fill-color: currentColor; }
+  .assistant-panel.is-entering, .chat-log > *, .chat-thinking { animation: none; }
+  .chat-toggle, .chat-send, .chat-composer, .intent-chip { transition: none; }
+  .chat-toggle:hover, .chat-toggle:active, .chat-send:hover:not(:disabled) { transform: none; }
+}
+/* --- the @ picker: arrow keys move .active, Enter or Tab takes it (see MENTION_JS). */
+.mention-dropdown {
+  position: absolute; bottom: calc(100% + 12px); left: -10px; right: -8px; z-index: 25;
+  background: var(--glass-bg); backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-md); padding: 4px;
+  max-height: 240px; overflow-y: auto;
+}
+.mention-dropdown:empty { display: none; border: none; box-shadow: none; }
+.mention-label {
+  padding: 4px 8px 2px; font-size: 0.625rem; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text-tertiary);
+}
+.mention-dropdown .mention-item {
+  display: flex; width: 100%; align-items: center; gap: 8px; padding: 6px 8px; border: none;
+  border-radius: var(--radius-md); background: none; text-align: left; cursor: pointer;
+  font-family: var(--font-sans); font-size: 0.75rem; color: var(--text-primary);
+}
+.mention-dropdown .mention-item.active, .mention-dropdown .mention-item:focus-visible {
+  background: var(--accent-soft);
+}
+.mention-item .icon { color: var(--text-tertiary); }
+.mention-item[data-type="feature"] .icon { color: var(--feature); }
+.mention-item[data-type="workflow"] .icon { color: var(--workflow); }
+.mention-item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-item .kind { color: var(--text-tertiary); font-size: 0.6875rem; flex-shrink: 0; }
 /* --- a rendered answer: the panel's version of `.doc`, not a chat bubble. Full width of the
    log (a table or diagram has nowhere to go in a 90% bubble), normal wrapping (the markdown is
    real HTML now, not preformatted text), and the doc page's own figure/table/diagram styling
    reused as-is — the same server-side pipeline produced both. */
 .chat-rich {
   align-self: stretch; max-width: 100%; white-space: normal; background: none; padding: 2px 0;
-  font-size: 0.8125rem;
+  font-size: 0.8125rem; line-height: 1.6;
 }
 .chat-rich > :first-child { margin-top: 0; }
 .chat-rich > :last-child { margin-bottom: 0; }
@@ -715,6 +915,7 @@ body.assistant-open .chat-toggle { display: none; }
 .chat-rich figure.tw tbody tr:nth-child(even) { background: var(--surface-secondary); }
 .chat-rich .gl { border-bottom: 1px dotted var(--accent); cursor: help; }
 
+/* --- under an answer: a quiet toolbar (style badge, Copy, the cited docs as pills). */
 .chat-actions {
   align-self: stretch; display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
   font-size: 0.6875rem; color: var(--text-secondary);
@@ -725,30 +926,51 @@ body.assistant-open .chat-toggle { display: none; }
 }
 .chat-actions .intent-badge[data-intent="spec"] { background: var(--feature-bg); color: var(--feature); }
 .chat-copy {
-  border: 1px solid var(--border); background: none; color: var(--text-secondary); font: inherit;
-  padding: 2px 8px; border-radius: var(--radius-sm); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 4px; border: none; background: none;
+  color: var(--text-secondary); font-family: var(--font-sans); font-size: 0.6875rem; font-weight: 500;
+  padding: 3px 6px; border-radius: var(--radius-sm); cursor: pointer;
 }
-.chat-copy:hover { color: var(--text-primary); border-color: var(--text-tertiary); }
-.chat-source-link { color: var(--accent); text-decoration: none; }
-.chat-source-link:hover { text-decoration: underline; }
-.chat-note { align-self: stretch; color: var(--text-tertiary); font-size: 0.6875rem; font-style: italic; }
+.chat-copy:hover { background: var(--surface-tertiary); color: var(--text-primary); }
+.chat-sources-label { margin-left: 2px; color: var(--text-tertiary); }
+.chat-source {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 8px 2px 6px;
+  border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--text-secondary); text-decoration: none; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-source .icon { color: var(--text-tertiary); }
+a.chat-source { color: var(--accent); }
+a.chat-source:hover { border-color: var(--accent); background: var(--accent-soft); }
 /* --- Explore: the short answer shows, the details wait behind "Read more". */
 .chat-details[hidden] { display: none; }
 .chat-details { border-top: 1px dashed var(--border); margin-top: 8px; padding-top: 4px; }
 .chat-more {
-  align-self: flex-start; border: none; background: none; color: var(--accent); font: inherit;
-  font-size: 0.75rem; font-weight: 600; padding: 0; cursor: pointer;
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; border: none;
+  background: none; color: var(--accent); font-family: var(--font-sans); font-size: 0.75rem;
+  font-weight: 600; padding: 0; cursor: pointer;
 }
+/* A CSS chevron, so the JS can keep setting the label with textContent. */
+.chat-more::after {
+  content: ""; width: 5px; height: 5px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg);
+  transition: transform 150ms ease;
+}
+.chat-more[aria-expanded="true"]::after { transform: translateY(1px) rotate(-135deg); }
 .chat-more:hover { text-decoration: underline; }
 /* --- a draft step: built from structured data in the browser (DRAFT_JS), styled like an answer. */
-.draft-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; }
-.draft-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; font-size: 0.625rem; }
-.draft-step {
-  border-radius: 999px; padding: 2px 8px; background: var(--surface-tertiary);
-  color: var(--text-tertiary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+.draft-card {
+  border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px;
+  background: var(--surface);
 }
-.draft-step[data-state="done"] { color: var(--text-secondary); }
-.draft-step[data-state="active"] { background: var(--feature-bg); color: var(--feature); }
+.draft-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; font-size: 0.625rem; }
+.draft-step {
+  border-radius: 999px; padding: 2px 8px; border: 1px solid var(--border); color: var(--text-tertiary);
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.draft-step[data-state="done"] { border-color: transparent; background: var(--feature-bg); color: var(--feature); opacity: 0.7; }
+.draft-step[data-state="active"] {
+  border-color: currentColor; background: var(--feature-bg); color: var(--feature);
+}
 .draft-target { font-size: 0.75rem; color: var(--text-secondary); margin: 0 0 6px; }
 .draft-target code { font-size: 0.6875rem; }
 .draft-target .draft-kind {
@@ -756,14 +978,17 @@ body.assistant-open .chat-toggle { display: none; }
   background: var(--accent-soft); color: var(--accent);
 }
 .chat-rich .draft-card-title { margin: 10px 0 4px; font-size: 0.8125rem; }
-.draft-options, .draft-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.draft-options, .draft-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .draft-action {
-  border: 1px solid var(--border); background: none; color: var(--text-primary); font: inherit;
-  font-size: 0.75rem; padding: 4px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-primary);
+  font-family: var(--font-sans); font-size: 0.75rem; font-weight: 500; padding: 6px 12px;
+  border-radius: var(--radius-md); cursor: pointer; transition: background 120ms ease, border-color 120ms ease;
 }
+.draft-action:hover:not(:disabled) { background: var(--surface-tertiary); }
 .draft-action.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.draft-action.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 .draft-action:disabled { opacity: 0.45; cursor: default; }
-.draft-hint { color: var(--text-tertiary); font-size: 0.6875rem; margin: 6px 0 0; }
+.draft-hint { color: var(--text-tertiary); font-size: 0.6875rem; margin: 8px 0 0; }
 .draft-warning {
   color: var(--danger); background: var(--danger-bg); border-radius: var(--radius-sm);
   padding: 6px 8px; font-size: 0.75rem; margin: 6px 0;
@@ -775,14 +1000,19 @@ body.assistant-open .chat-toggle { display: none; }
 .draft-kind-removed, .draft-kind-remove { color: var(--danger); }
 .draft-reply {
   display: flex; justify-content: space-between; align-items: center; gap: 8px;
-  padding: 6px 16px; border-top: 1px solid var(--border); font-size: 0.6875rem;
-  color: var(--feature); background: var(--feature-bg);
+  margin: 0 16px 4px; padding: 6px 6px 6px 12px; border-radius: 10px; font-size: 0.6875rem;
+  font-weight: 600; color: var(--feature); background: var(--feature-bg);
 }
 .draft-reply[hidden] { display: none; }
-.draft-cancel {
-  border: none; background: none; color: var(--text-secondary); font: inherit; cursor: pointer;
-  text-decoration: underline;
+.draft-reply > span::before {
+  content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; border-radius: 50%;
+  background: currentColor; vertical-align: 1px;
 }
+.draft-cancel {
+  border: none; background: none; color: var(--text-secondary); font-family: var(--font-sans);
+  font-size: 0.6875rem; font-weight: 500; padding: 3px 8px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.draft-cancel:hover { color: var(--text-primary); background: var(--surface); }
 """
 
 # Finding the companion server from wherever this page was opened. `specky serve` serves this page
@@ -809,7 +1039,8 @@ async function speckyFetch(path, init) {
       return res;
     }
   } catch (err) {
-    if (speckyApiSettled) throw err;
+    // The reader pressing Stop says nothing about where the API lives, so it mustn't move the base.
+    if (speckyApiSettled || err.name === 'AbortError') throw err;
   }
   speckyApiBase = SPECKY_API_FALLBACK;
   speckyApiSettled = true;
@@ -1043,7 +1274,12 @@ const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
 const chatStatus = document.getElementById('chat-status');
 const chatThinking = document.getElementById('chat-thinking');
+const chatElapsed = document.getElementById('chat-elapsed');
+const chatStop = document.getElementById('chat-stop');
+const chatSend = chatForm?.querySelector('.chat-send');
 const chatReset = document.getElementById('chat-reset');
+const chatEmpty = document.getElementById('chat-empty');
+const chatSuggestions = document.getElementById('chat-suggestions');
 const intentChips = [...document.querySelectorAll('.intent-chip')];
 const CHAT_LOG_MAX = 24;
 const CHAT_PERSISTED = new Set(['user', 'assistant', 'sources']);
@@ -1051,6 +1287,7 @@ const ASSISTANT_WIDTH_MIN = 320;
 const ASSISTANT_WIDTH_MAX = 1200;
 const ASSISTANT_DOC_MIN = 360;
 const ASSISTANT_OFFLINE = 'The Spec Assistant is not reachable. Run `specky serve` in this repo, then try again.';
+const CHAT_INPUT_MAX = 180;
 
 function chatNewSessionId() {
   // crypto.randomUUID() needs a secure context, which http:// on a real hostname isn't.
@@ -1075,19 +1312,53 @@ function setAssistantOpen(open) {
   if (open) chatInput?.focus();
 }
 
+function isAssistantOpen() {
+  return document.body.classList.contains('assistant-open');
+}
+
 // Opening the panel hands it the nav rail's width; closing gives back whatever the rail was before.
-// Only the click does this — reopening on the next page leaves the rail as the reader last set it,
-// so one who brought the nav back mid-conversation keeps it.
-chatToggle?.addEventListener('click', () => {
+// Only the reader's own open/close does this — reopening on the next page leaves the rail as the
+// reader last set it, so one who brought the nav back mid-conversation keeps it. Likewise only this
+// open slides the panel in; a restored one is already where the reader left it.
+function openAssistant() {
   tabStore?.setItem('specky-nav-before-assistant', isNavCollapsed() ? '1' : '0');
   setNavCollapsed(true);
+  assistantPanel?.classList.add('is-entering');
   setAssistantOpen(true);
-});
-assistantClose?.addEventListener('click', () => {
+}
+
+function closeAssistant() {
   setAssistantOpen(false);
   setNavCollapsed(tabStore?.getItem('specky-nav-before-assistant') === '1');
+  chatToggle?.focus();
+}
+
+chatToggle?.addEventListener('click', openAssistant);
+assistantClose?.addEventListener('click', closeAssistant);
+assistantPanel?.addEventListener('animationend', (event) => {
+  if (event.target === assistantPanel) assistantPanel.classList.remove('is-entering');
 });
 if (tabStore?.getItem('specky-assistant-open') === '1') setAssistantOpen(true);
+
+// ⌘. / Ctrl+. toggles the panel from anywhere on the page; Esc closes it from inside. The @ picker
+// claims Esc first (MENTION_JS marks it handled), so Esc there closes only the picker.
+const ASSISTANT_ON_MAC = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform || '');
+const assistantKbd = chatToggle?.querySelector('.chat-kbd');
+if (assistantKbd) {
+  assistantKbd.textContent = ASSISTANT_ON_MAC ? '⌘ .' : 'Ctrl .';
+  assistantKbd.hidden = false;
+}
+document.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented) return;
+  if ((event.metaKey || event.ctrlKey) && event.key === '.') {
+    event.preventDefault();
+    if (isAssistantOpen()) closeAssistant();
+    else openAssistant();
+  } else if (event.key === 'Escape' && isAssistantOpen() && assistantPanel?.contains(document.activeElement)) {
+    event.preventDefault();
+    closeAssistant();
+  }
+});
 
 // --- panel width: one custom property on <html>, dragged and remembered ------------------
 // A drag stops where the doc column would drop below ASSISTANT_DOC_MIN beside the rail, when it's
@@ -1145,7 +1416,9 @@ function setAssistantIntent(value) {
   assistantIntent = value;
   tabStore?.setItem('specky-assistant-intent', value);
   for (const chip of intentChips) {
-    chip.dataset.active = chip.dataset.intent === value ? 'true' : 'false';
+    const active = chip.dataset.intent === value;
+    chip.dataset.active = active ? 'true' : 'false';
+    chip.setAttribute('aria-pressed', active ? 'true' : 'false');
   }
 }
 setAssistantIntent(assistantIntent);
@@ -1153,11 +1426,41 @@ for (const chip of intentChips) {
   chip.addEventListener('click', () => setAssistantIntent(chip.dataset.intent));
 }
 
-// The thinking line shows only while there's a status to show; an empty one hides it.
+// The thinking overlay shows only while there's a status to show; an empty one hides it. Its clock
+// runs for the whole wait: a draft moving from one step's status to the next keeps counting.
+let thinkingClock = null;
+
 function setChatStatus(text) {
   if (chatStatus) chatStatus.textContent = text;
   if (chatThinking) chatThinking.hidden = !text;
+  if (text && !thinkingClock) {
+    const started = Date.now();
+    if (chatElapsed) chatElapsed.textContent = '';
+    thinkingClock = setInterval(() => {
+      const seconds = Math.floor((Date.now() - started) / 1000);
+      if (chatElapsed) chatElapsed.textContent = seconds ? `${seconds}s` : '';
+    }, 1000);
+    if (chatLog) chatLog.scrollTop = chatLog.scrollHeight;
+  } else if (!text && thinkingClock) {
+    clearInterval(thinkingClock);
+    thinkingClock = null;
+  }
 }
+
+// One request at a time is in flight, the /chat question or a draft step; Stop gives up on it. The
+// server isn't told — a stopped /chat answer still joins the conversation it keeps for this session.
+let chatAbort = null;
+
+function beginChatRequest() {
+  chatAbort = new AbortController();
+  return chatAbort.signal;
+}
+
+function isStopped(err) {
+  return err?.name === 'AbortError';
+}
+
+chatStop?.addEventListener('click', () => chatAbort?.abort());
 
 function persistChatEntry(role, text) {
   if (!tabStore || !CHAT_PERSISTED.has(role)) return;
@@ -1166,10 +1469,27 @@ function persistChatEntry(role, text) {
   tabStore.setItem('specky-chat-log', JSON.stringify(log.slice(-CHAT_LOG_MAX)));
 }
 
+// `code` spans in an error or a note ("Run `specky serve`…") become <code>, built from text nodes —
+// never markup, since an error's text can come from the server.
+function textWithCode(node, text) {
+  text.split('`').forEach((part, i) => {
+    if (!part) return;
+    if (i % 2) {
+      const code = document.createElement('code');
+      code.textContent = part;
+      node.appendChild(code);
+    } else {
+      node.appendChild(document.createTextNode(part));
+    }
+  });
+}
+
 function addChatMessage(role, text, persist = true) {
   const div = document.createElement('div');
   div.className = `chat-msg chat-${role}`;
-  div.textContent = text;
+  if (role === 'note') textWithCode(div.appendChild(document.createElement('span')), text);
+  else if (role === 'error') textWithCode(div, text);
+  else div.textContent = text;
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
   if (persist) persistChatEntry(role, text);
@@ -1181,24 +1501,29 @@ function addChatMessage(role, text, persist = true) {
 // page predates) has no entry here and stays plain text.
 function sourceLink(source) {
   const hit = SPECKY_INDEX.find((d) => d.path === source);
-  if (!hit) {
-    const span = document.createElement('span');
-    span.textContent = source;
-    return span;
+  const pill = document.createElement(hit ? 'a' : 'span');
+  pill.className = 'chat-source';
+  pill.title = source;
+  if (hit) {
+    pill.href = hit.html_path;
+    pill.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-file-text"></use></svg>';
   }
-  const link = document.createElement('a');
-  link.className = 'chat-source-link';
-  link.href = hit.html_path;
-  link.textContent = hit.title;
-  link.title = source;
-  return link;
+  pill.appendChild(document.createTextNode(hit ? hit.title : source));
+  return pill;
+}
+
+// A static icon plus a text label: the markdown being copied never goes near innerHTML.
+function setCopyLabel(button, icon, label) {
+  button.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`;
+  button.appendChild(document.createTextNode(label));
 }
 
 function copyMarkdownButton(markdown) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'chat-copy';
-  button.textContent = 'Copy markdown';
+  button.title = 'Copy the answer as markdown';
+  setCopyLabel(button, 'copy', 'Copy');
   button.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(markdown);
@@ -1211,8 +1536,8 @@ function copyMarkdownButton(markdown) {
       document.execCommand('copy');
       area.remove();
     }
-    button.textContent = 'Copied';
-    setTimeout(() => { button.textContent = 'Copy markdown'; }, 1500);
+    setCopyLabel(button, 'check', 'Copied');
+    setTimeout(() => setCopyLabel(button, 'copy', 'Copy'), 1500);
   });
   return button;
 }
@@ -1220,16 +1545,10 @@ function copyMarkdownButton(markdown) {
 function appendSources(actions, sources) {
   if (!sources.length) return;
   const label = document.createElement('span');
-  label.textContent = 'Sources:';
+  label.className = 'chat-sources-label';
+  label.textContent = 'Sources';
   actions.appendChild(label);
-  sources.forEach((source, i) => {
-    actions.appendChild(sourceLink(source));
-    if (i < sources.length - 1) {
-      const comma = document.createElement('span');
-      comma.textContent = ',';
-      actions.appendChild(comma);
-    }
-  });
+  for (const source of sources) actions.appendChild(sourceLink(source));
 }
 
 // The answer HTML was rendered and sanitized by the server (see answer_render.py), which is the
@@ -1281,13 +1600,38 @@ function addChatAnswer(data) {
   if (sources.length) persistChatEntry('sources', `Sources: ${sources.join(', ')}`);
 }
 
+// --- the composer: a textarea that grows with what's typed, Enter to send, Shift+Enter for a newline.
+function syncComposer() {
+  if (!chatInput) return;
+  chatInput.style.height = 'auto';
+  chatInput.style.height = `${Math.min(chatInput.scrollHeight, CHAT_INPUT_MAX)}px`;
+  if (chatSend) chatSend.disabled = !chatInput.value.trim();
+}
+
+function fillComposer(text) {
+  chatInput.value = text;
+  syncComposer();
+  chatInput.focus();
+  chatInput.setSelectionRange(text.length, text.length);
+}
+
+chatInput?.addEventListener('input', syncComposer);
+chatInput?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
+  // An open @ picker owns Enter: it picks the highlighted item (MENTION_JS).
+  if (mentionHits.length) return;
+  event.preventDefault();
+  chatForm.requestSubmit();
+});
+
 chatForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const question = chatInput.value.trim();
   if (!question) return;
-  mentionDropdown.innerHTML = '';
+  closeMentions();
   addChatMessage('user', question);
   chatInput.value = '';
+  syncComposer();
   // A draft waiting on the reader takes what they type as its answer or correction — unless they
   // pinned Explore, which is how to ask the docs something mid-draft without derailing it.
   if (draftWaiting()) {
@@ -1302,6 +1646,7 @@ chatForm?.addEventListener('submit', async (event) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: beginChatRequest(),
     });
     const data = await res.json();
     setChatStatus('');
@@ -1316,7 +1661,10 @@ chatForm?.addEventListener('submit', async (event) => {
     addChatAnswer(data);
   } catch (err) {
     setChatStatus('');
-    addChatMessage('error', ASSISTANT_OFFLINE);
+    if (isStopped(err)) addChatMessage('note', 'Stopped.', false);
+    else addChatMessage('error', ASSISTANT_OFFLINE);
+  } finally {
+    chatAbort = null;
   }
 });
 
@@ -1354,13 +1702,54 @@ if (chatLog) {
     }
   }
   if (replayed) {
-    const note = document.createElement('div');
-    note.className = 'chat-note';
-    note.textContent = 'Earlier answers are replayed as plain text. The next one renders in full.';
-    chatLog.appendChild(note);
-    chatLog.scrollTop = chatLog.scrollHeight;
+    addChatMessage('note', 'Earlier answers are replayed as plain text. The next one renders in full.', false);
   }
 }
+
+// --- an empty conversation: a welcome and a few ways in, drawn from the page the reader is on --------
+// A suggestion only fills the composer. Sending is still the reader's call — each one costs a model call.
+function chatSuggestionsFor(page) {
+  const doc = SPECKY_INDEX.find((d) => d.html_path === page);
+  if (!doc) {
+    return ['What are the main modules?', 'Which features does this repo document?', 'Draft a spec for a new feature'];
+  }
+  const out = [`What does "${doc.title}" cover?`];
+  if (doc.doc_type === 'feature' || doc.doc_type === 'workflow') {
+    out.push(`@feature:${doc.slug} what are the edge cases?`);
+    out.push(`Draft a change to @feature:${doc.slug} — `);
+  } else {
+    out.push(`@module:${doc.domain} what does this module cover?`);
+  }
+  return out;
+}
+
+for (const text of chatSuggestionsFor(currentPage)) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'chat-suggestion';
+  button.textContent = text;
+  button.title = text;
+  button.addEventListener('click', () => fillComposer(text));
+  chatSuggestions?.appendChild(button);
+}
+
+// Every path that fills or clears the log (an answer, a draft card, a replay, New) is a child-list
+// change, so one observer keeps the welcome in step with all of them.
+function syncChatEmpty() {
+  if (chatEmpty && chatLog) chatEmpty.hidden = chatLog.childElementCount > 0;
+}
+if (chatLog) new MutationObserver(syncChatEmpty).observe(chatLog, { childList: true });
+syncChatEmpty();
+
+// What the assistant answers from, at a glance. Commit summaries (the history domain) are indexed
+// too, but they'd swamp a count of the docs, and root holds the glossary, not a module.
+const assistantSubtitle = document.getElementById('assistant-subtitle');
+const assistantDocs = SPECKY_INDEX.filter((d) => d.domain !== 'history');
+if (assistantSubtitle && assistantDocs.length) {
+  const modules = new Set(assistantDocs.map((d) => d.domain).filter((domain) => domain !== 'root')).size;
+  assistantSubtitle.textContent = `${assistantDocs.length} docs · ${modules} modules`;
+}
+syncComposer();
 """
 
 # The draft-spec workflow's half of the panel (chat_server's `/draft`, spec_draft.py on the server).
@@ -1460,6 +1849,7 @@ async function sendDraft(action, extra = {}) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, state: draftState, ...extra }),
+      signal: beginChatRequest(),
     });
     const data = await res.json();
     setChatStatus('');
@@ -1471,10 +1861,14 @@ async function sendDraft(action, extra = {}) {
     showDraft(data);
   } catch (err) {
     setChatStatus('');
-    addChatMessage('error', ASSISTANT_OFFLINE);
+    // A step is stateless on the server (the state travels with each request), so stopping one
+    // leaves the draft exactly where it was: the current card's buttons work again.
+    if (isStopped(err)) addChatMessage('note', 'Stopped.', false);
+    else addChatMessage('error', ASSISTANT_OFFLINE);
     reviveLatestDraftCard();
   } finally {
     draftBusy = false;
+    chatAbort = null;
   }
 }
 
@@ -1675,12 +2069,15 @@ const MENTION_CANDIDATES = (() => {
   for (const d of SPECKY_INDEX) {
     if (!seenModules.has(d.domain)) {
       seenModules.add(d.domain);
-      out.push({ kind: 'module', value: d.domain, label: d.domain });
+      out.push({ kind: 'module', value: d.domain, label: d.domain, icon: 'folder' });
     }
   }
   for (const d of SPECKY_INDEX) {
     if (d.doc_type === 'feature' || d.doc_type === 'workflow') {
-      out.push({ kind: 'feature', value: d.slug, label: d.title });
+      out.push({
+        kind: 'feature', value: d.slug, label: d.title, type: d.doc_type,
+        icon: TYPE_ICONS[d.doc_type] || TYPE_ICON_FALLBACK,
+      });
     }
   }
   return out;
@@ -1688,6 +2085,8 @@ const MENTION_CANDIDATES = (() => {
 
 let mentionMatchStart = -1;
 let mentionMatchEnd = -1;
+let mentionHits = [];
+let mentionActive = 0;
 
 function currentMentionQuery() {
   const caret = chatInput.selectionStart ?? chatInput.value.length;
@@ -1698,32 +2097,77 @@ function currentMentionQuery() {
   return { query: match[2].toLowerCase(), start: match.index + match[1].length, end: caret };
 }
 
+function closeMentions() {
+  mentionDropdown.replaceChildren();
+  mentionHits = [];
+}
+
+// Built from text nodes: a label is a doc title, and a doc title is the repo's text, not markup.
 function renderMentionDropdown(candidates) {
-  mentionDropdown.innerHTML = '';
-  for (const c of candidates.slice(0, 8)) {
+  closeMentions();
+  mentionHits = candidates.slice(0, 8);
+  mentionActive = 0;
+  if (!mentionHits.length) return;
+  const label = document.createElement('div');
+  label.className = 'mention-label';
+  label.textContent = 'Scope to…';
+  mentionDropdown.appendChild(label);
+  mentionHits.forEach((c, i) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'mention-item';
-    btn.innerHTML = `<span>${c.label}</span><span class="kind">${c.kind}</span>`;
+    btn.id = `mention-${i}`;
+    btn.tabIndex = -1;
+    btn.setAttribute('role', 'option');
+    if (c.type) btn.dataset.type = c.type;
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('class', 'icon');
+    icon.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', `#icon-${c.icon}`);
+    icon.appendChild(use);
+    const name = document.createElement('span');
+    name.className = 'label';
+    name.textContent = c.label;
+    const kind = document.createElement('span');
+    kind.className = 'kind';
+    kind.textContent = c.kind;
+    btn.append(icon, name, kind);
+    btn.addEventListener('mousedown', (event) => event.preventDefault());  // keep the caret in the input
+    // mousemove, not mouseenter: a list that opens under a resting pointer would otherwise steal the
+    // highlight from the arrow keys before the reader has touched the mouse.
+    btn.addEventListener('mousemove', () => { if (mentionActive !== i) setMentionActive(i); });
     btn.addEventListener('click', () => selectMention(c));
     mentionDropdown.appendChild(btn);
-  }
+  });
+  setMentionActive(0);
+}
+
+function setMentionActive(index) {
+  mentionActive = (index + mentionHits.length) % mentionHits.length;
+  mentionDropdown.querySelectorAll('.mention-item').forEach((btn, i) => {
+    const active = i === mentionActive;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    if (active) btn.scrollIntoView({ block: 'nearest' });
+  });
 }
 
 function selectMention(candidate) {
   const token = `@${candidate.kind}:${candidate.value} `;
   const value = chatInput.value;
   chatInput.value = value.slice(0, mentionMatchStart) + token + value.slice(mentionMatchEnd);
-  mentionDropdown.innerHTML = '';
+  closeMentions();
   chatInput.focus();
   const caret = mentionMatchStart + token.length;
   chatInput.setSelectionRange(caret, caret);
+  syncComposer();
 }
 
 chatInput?.addEventListener('input', () => {
   const state = currentMentionQuery();
   if (!state) {
-    mentionDropdown.innerHTML = '';
+    closeMentions();
     mentionMatchStart = -1;
     mentionMatchEnd = -1;
     return;
@@ -1734,15 +2178,23 @@ chatInput?.addEventListener('input', () => {
   renderMentionDropdown(hits);
 });
 
+// Arrow keys move the highlight; Enter or Tab takes the highlighted item, not always the first.
+// Handled keys are marked defaultPrevented, which is how Esc here closes only the picker and not
+// the panel behind it (see CHAT_JS).
 chatInput?.addEventListener('keydown', (event) => {
-  if (mentionDropdown.children.length === 0) return;
+  if (!mentionHits.length) return;
   if (event.key === 'Escape') {
-    mentionDropdown.innerHTML = '';
-  } else if (event.key === 'Enter') {
     event.preventDefault();
-    mentionDropdown.firstElementChild?.click();
+    closeMentions();
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    setMentionActive(mentionActive + (event.key === 'ArrowDown' ? 1 : -1));
+  } else if (event.key === 'Enter' || event.key === 'Tab') {
+    event.preventDefault();
+    selectMention(mentionHits[mentionActive]);
   }
 });
+chatInput?.addEventListener('blur', () => setTimeout(closeMentions, 150));
 """
 
 # Ported from glia's `_TOOLTIP_SCRIPT` (enrichment_render.py) — same hover, minus the
