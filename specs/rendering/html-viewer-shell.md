@@ -1,6 +1,6 @@
 ---
 type: feature
-tags: [rendering, documentation]
+tags: [rendering, search, documentation]
 ---
 
 # Rendering — Html Viewer Shell

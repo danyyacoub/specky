@@ -1,5 +1,5 @@
 ---
-type: feature
+type: workflow
 tags: [rendering, documentation]
 ---
 
