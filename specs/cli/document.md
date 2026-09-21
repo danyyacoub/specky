@@ -103,6 +103,7 @@ invisibly — prose reads the same whether or not it is true. So the guards are 
 | **Nothing read** | A doc backed by no `read_file` call at all. Such a doc is fabricated end to end and reads exactly like a real one |
 | **Ungrounded flags** | A doc naming a `--flag` neither the CLI accepts nor any real code mentions — the one error class a machine can settle by itself |
 | **Lost content** | An update that drops a `##` section, guts one, or keeps less than 80% of the doc. A model shown an existing doc will sometimes summarise it away |
+| **Repeated section** | A doc carrying a `##` heading twice when the doc it replaces didn't: two docs stacked. Nothing is lost, so the lost-content check can't see it |
 | **`authored: human`** | Any doc somebody took ownership of. Unlike the commit path, this cannot be checked up front — the model picks the target — so `read_doc` says a doc is frozen while that can still change course, and the draft is parked if it goes ahead anyway |
 | **Unparseable diagram** | A fenced ```mermaid block the renderer cannot read. The viewer degrades one into a block of raw syntax, dropped into the middle of a doc written for people who don't read syntax |
 
@@ -232,6 +233,7 @@ the same set of refusals stated as guards, with the reasoning behind each one.
 | The model never opens a file | The submission is refused before anything is written | A doc backed by no read is fabricated end to end and reads exactly like a real one |
 | The subject is already documented | The existing doc is updated in place | A second doc on one subject is a defect: it reads as authoritative, it is the copy nobody updates, and the two drift apart |
 | The update would drop or gut a section | It is refused and the draft is parked in `.specky/pending/` | A model shown an existing doc will sometimes summarise it away. The draft is kept because it may still be the better doc |
+| The doc repeats a `##` heading the existing one didn't | Refused and parked | A doc stacked on itself loses nothing, so no size check notices it |
 | The target is `authored: human` | `read_doc` says so while the model can still change course; going ahead anyway parks the draft | Unlike the commit path, this can't be checked up front — the model picks the target, so by the time we know, the doc has been written and paid for |
 | The doc names a `--flag` nothing in the repo accepts | Refused and parked | It is the one error class a machine can settle by itself |
 | A diagram's class suffix names no `classDef` | It is repaired in place and the repair is reported | The only diagram defect specky can fix outright, rather than hand back |

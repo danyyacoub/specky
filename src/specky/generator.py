@@ -187,6 +187,8 @@ SECTION_UPDATE_INSTRUCTIONS = """Respond with ONLY a JSON object, no other text:
   as it already is, which is the right outcome for anything this change didn't touch.
 - To replace a section, use its heading exactly as listed below. To add one, use a new heading —
   it's appended at the end.
+- Each value is that one section and nothing else. Never put another section's `##` heading inside
+  a value; a section you change goes under its own key.
 - A section you do rewrite must carry its existing content through. It may hold hand-written
   detail, tables or diagrams that are still correct; edit around them rather than summarising them
   away. A rewrite that shortens a section is rejected outright and the doc is left alone.
@@ -526,13 +528,34 @@ def lost_content(existing_body: str, new_body: str) -> str | None:
     return None
 
 
+def repeated_sections(existing_body: str | None, body: str) -> list[str]:
+    """`##` headings `body` carries more than once that `existing_body` didn't already repeat.
+
+    A doc with two `## How It Works` is two docs stacked, and nothing else here notices: no section
+    is lost — the original copies are usually the ones still there, untouched. Only a repeat the
+    update *introduced* counts, so a doc that already had one can still be updated past it.
+    """
+
+    def repeats(text: str) -> list[str]:
+        seen: dict[str, list[str]] = {}
+        for title, _ in split_sections(text):
+            if title:
+                seen.setdefault(title.strip().lower(), []).append(title.strip())
+        return [titles[0] for titles in seen.values() if len(titles) > 1]
+
+    already = {title.lower() for title in repeats(existing_body or "")}
+    return [title for title in repeats(body) if title.lower() not in already]
+
+
 def doc_problem(repo_root: Path, existing_body: str | None, body: str) -> str | None:
     """Why this doc must not reach disk, or None if it may.
 
     Both write paths ask this — `sync_feature_doc` below and `document.write` — and they have to ask
     it the same way. The guards are independent, but their *order* is policy: `lost_content` runs
-    first because losing somebody's prose is the worst outcome available and the cheapest to state,
-    and the mermaid check runs last because it is the only one that shells out to Node. An order
+    first because losing somebody's prose is the worst outcome available and the cheapest to state
+    — after `repeated_sections`, whose repeats would otherwise hide a loss from it (it measures a
+    repeated heading by one copy) — and the mermaid check runs last because it is the only one that
+    shells out to Node. An order
     that lives in two places is an order that drifts, and the drift would be silent — each path
     would still refuse, just not the same things first, so the two would explain the same bad doc
     differently.
@@ -540,6 +563,10 @@ def doc_problem(repo_root: Path, existing_body: str | None, body: str) -> str | 
     Not included here: `repair_mermaid`, which callers run *before* this, because it rewrites the
     body that everything below is then measured against.
     """
+    repeated = repeated_sections(existing_body, body)
+    if repeated:
+        return "it repeats " + ", ".join(f"`## {title}`" for title in repeated)
+
     if existing_body:
         lost = lost_content(existing_body, body)
         if lost:
@@ -563,17 +590,41 @@ def _strip_own_heading(title: str, text: str) -> str:
     return "\n".join(lines[1:]).strip() if heading == title.strip().lower() else text.strip()
 
 
+def _lift_nested_sections(updates: dict) -> dict[str, str]:
+    """`updates` with every `##` section nested inside another's value lifted out to its own key.
+
+    The model is asked for one section per key and sometimes sends the rest of the doc under the
+    first one anyway: DeepSeek answered a one-sentence change to `## What It Does` with a value that
+    carried its own `## How It Works` through `## Acceptance Tests`. Spliced as one section, that put
+    every section in the doc twice — the new copies inside What It Does, the untouched originals
+    after them. Lifted out, each nested section replaces its namesake in place. A heading the model
+    also sent as a key of its own keeps that value: the key is the deliberate answer, the nested
+    copy the echo. A value that is *only* nested sections leaves its own section alone rather than
+    blanking it.
+    """
+    own: dict[str, str] = {}
+    nested: dict[str, str] = {}
+    for title, text in updates.items():
+        if not (isinstance(title, str) and isinstance(text, str)):
+            continue
+        (_, preamble), *sections = split_sections(_strip_own_heading(title, text))
+        body = "\n".join(preamble).strip()
+        if body or not sections:
+            own[title] = body
+        for heading, lines in sections:
+            nested.setdefault(heading, "\n".join(lines[1:]).strip())
+    sent = {title.strip().lower() for title in own}
+    return own | {title: text for title, text in nested.items() if title.strip().lower() not in sent}
+
+
 def merge_sections(existing_body: str, updates: dict) -> str:
     """Splice replacement sections into a doc, leaving every other section byte-identical.
 
     An update naming a heading the doc doesn't have is appended in the order the model sent it —
     that's how a new `## Outcomes` arrives on a doc that never had one.
     """
-    replacements = {
-        title.strip().lower(): text
-        for title, text in updates.items()
-        if isinstance(title, str) and isinstance(text, str)
-    }
+    updates = _lift_nested_sections(updates)
+    replacements = {title.strip().lower(): text for title, text in updates.items()}
     out: list[str] = []
     for title, lines in split_sections(existing_body):
         replacement = replacements.pop(title.strip().lower(), None) if title else None
@@ -582,7 +633,7 @@ def merge_sections(existing_body: str, updates: dict) -> str:
         else:
             out += [lines[0], "", _strip_own_heading(title, replacement), ""]
     for title, text in updates.items():
-        if isinstance(title, str) and title.strip().lower() in replacements:
+        if title.strip().lower() in replacements:
             out += [f"## {title.strip()}", "", _strip_own_heading(title, text), ""]
     return "\n".join(out).rstrip("\n") + "\n"
 

@@ -12,6 +12,7 @@ from specky.generator import (
     classify_change,
     lost_content,
     merge_sections,
+    repeated_sections,
     sync_feature_doc,
     update_modules_index,
 )
@@ -524,6 +525,71 @@ def test_merge_sections_matches_a_heading_case_insensitively_and_strips_a_repeat
     assert merged.count("## How It Works") == 1
     assert "1. **New.** Different." in merged
     assert _WHAT.strip() in merged
+
+
+def test_a_section_nested_in_another_ones_value_replaces_its_namesake_in_place(tmp_repo, write_doc):
+    """The real failure: asked to change one sentence of What It Does, DeepSeek sent the rest of the
+    doc inside that one value. Spliced as-is, every section appeared twice and nothing refused it,
+    because nothing was lost — the untouched originals were still there under the new copies."""
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    new_what = _WHAT + "Partial refunds are allowed too."
+    new_how = "1. **Check.** The request is now examined against the refund policy as well. " * 8
+    value = f"{new_what}\n\n## How It Works\n{new_how}\n\n## Acceptance Tests\n{_TESTS}"
+    provider = FakeProvider([_CLASSIFY, json.dumps({"sections": {"What It Does": value}})])
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert result.written
+    text = doc.read_text()
+    assert [title for title, _ in split_sections(text) if title] == [
+        "What It Does",
+        "How It Works",
+        "Acceptance Tests",
+    ]
+    now = _sections(text)
+    assert "Partial refunds" in now["What It Does"] and "## How It Works" not in now["What It Does"]
+    assert "refund policy" in now["How It Works"]
+
+
+def test_a_nested_copy_loses_to_the_same_section_sent_under_its_own_key():
+    """The key is the model's deliberate answer; the copy inside another value is the echo."""
+    merged = merge_sections(
+        _BIG_DOC,
+        {
+            "What It Does": f"{_WHAT}\n\n## How It Works\nThe echo.\n",
+            "How It Works": "1. **Meant.** This one.\n",
+        },
+    )
+    assert "This one." in _sections(merged)["How It Works"]
+    assert "The echo." not in merged
+
+
+def test_a_value_holding_only_nested_sections_leaves_its_own_section_alone():
+    merged = merge_sections(_BIG_DOC, {"What It Does": "## How It Works\n1. **New.** Different.\n"})
+    assert _sections(merged)["What It Does"] == _sections(_BIG_DOC)["What It Does"]
+    assert "1. **New.** Different." in _sections(merged)["How It Works"]
+
+
+def test_a_whole_body_that_repeats_a_heading_is_refused_and_staged(tmp_repo, write_doc):
+    """The backstop for the paths the splice can't fix: a response that isn't the section envelope
+    is read as a whole body, and a doc stacked on top of itself loses nothing `lost_content` can
+    measure."""
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    before = doc.read_text()
+    provider = FakeProvider([_CLASSIFY, _BIG_DOC + f"\n\n## How It Works\n{_HOW}\n"])
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert doc.read_text() == before
+    assert not result.written
+    assert "repeats `## How It Works`" in result.note
+    assert (tmp_repo / PENDING_DIR / "billing" / "refund-flow.md").exists()
+
+
+def test_repeated_sections_ignores_a_repeat_the_doc_already_had():
+    """Only a repeat the update introduced is refused, so a doc that already carries one can still
+    be updated past it rather than being frozen until someone notices."""
+    stacked = _BIG_DOC + f"\n\n## How It Works\n{_HOW}\n"
+    assert repeated_sections(stacked, stacked + "\nOne more line.\n") == []
+    assert repeated_sections(_BIG_DOC, stacked) == ["How It Works"]
 
 
 def test_backfill_tags_skips_already_tagged_and_meta_domains(tmp_repo, write_doc):
