@@ -3,7 +3,7 @@
 Render-time-only Node tool: turns one mermaid source string into an SVG via
 [`beautiful-mermaid`](https://www.npmjs.com/package/beautiful-mermaid) (MIT, zero DOM
 dependencies — runs in plain Node, no jsdom/browser needed). Called by
-[`html_render.py`](../../html_render.py)'s `render_mermaid_svg()` via subprocess, once per
+[`diagram_render.py`](../../diagram_render.py)'s `render_mermaid_svg()` via subprocess, once per
 ```mermaid``` fence, at `specky render-html` time.
 
 Not shipped to readers of the generated site — the output is a plain `<svg>` embedded
@@ -20,7 +20,7 @@ specky setup-diagrams                             # any install; populates ~/.ca
 npm install --prefix src/specky/vendor/mermaid-render   # or, in a checkout, straight into here
 ```
 
-If neither has been run, `render_mermaid_svg()` returns `None` and `html_render.py`
+If neither has been run, `render_mermaid_svg()` returns `None` and `diagram_render.py`
 leaves the fenced source as plain text instead of failing the render — same behavior as
 a doc with no diagrams. `specky render-html` prints a one-time hint if it detects this.
 

@@ -122,7 +122,7 @@ INTENT_EXPLORE = "explore"
 INTENT_SPEC = "spec"
 INTENTS = (INTENT_EXPLORE, INTENT_SPEC)
 
-# Diagram types the viewer can actually draw — `beautiful-mermaid` via html_render.render_mermaid_svg.
+# Diagram types the viewer can actually draw — `beautiful-mermaid` via diagram_render.render_mermaid_svg.
 # Named in the prompt because a diagram in a type it can't render degrades to fenced source text,
 # which is a worse answer than no diagram at all.
 _MERMAID_TYPES = (

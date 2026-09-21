@@ -3,7 +3,6 @@ import pytest
 from specky import html_render
 from specky.html_render import (
     _excerpt,
-    _scrub_svg,
     slug,
     _tag_class,
     _wrap_tables,
@@ -121,26 +120,3 @@ def test_load_glossary_reads_bold_term_rows(tmp_repo):
 
 def test_load_glossary_missing_file(tmp_repo):
     assert load_glossary(tmp_repo) == {}
-
-
-# --- svg scrubbing ----------------------------------------------------------------------
-
-
-def test_scrub_svg_strips_scripts_handlers_and_imports():
-    svg = (
-        '<svg width="100"><script>alert(1)</script>'
-        '<style>@import url(http://evil/x.css);</style>'
-        '<rect onclick="steal()" onload="x()"/>'
-        "<foreignObject><b>x</b></foreignObject></svg>"
-    )
-    out = _scrub_svg(svg)
-    assert "<script" not in out
-    assert "@import" not in out
-    assert "onclick" not in out and "onload" not in out
-    assert "foreignObject" not in out
-    assert '<svg width="100">' in out
-
-
-def test_scrub_svg_leaves_clean_markup_alone():
-    svg = '<svg width="20"><rect x="1" y="2"/></svg>'
-    assert _scrub_svg(svg) == svg

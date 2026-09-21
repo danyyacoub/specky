@@ -7,17 +7,18 @@ tags: [rendering, documentation]
 
 ## What It Does
 
-Static diagram rendering at build time using Mermaid (SVG output via Node), auto-linking of glossary terms to hover tooltips, and styled markdown tables. Diagrams degrade to plain-text source if dependencies aren't installed; glossary linking and table styling always work. In the viewer, any rendered diagram can be opened on its own in a new tab, fitted to the window, to zoom and pan around it.
+Static diagram rendering at build time using Mermaid (SVG output via Node), auto-linking of glossary terms to hover tooltips, and styled markdown tables. Diagrams degrade to plain-text source if dependencies aren't installed; glossary linking and table styling always work. In the viewer, a diagram follows the reader's light or dark scheme, its boxes drawn as frosted glass panes over a softly tinted backdrop, and any rendered diagram can be opened on its own in a new tab, fitted to the window, to zoom and pan around it.
 
 ## How It Works
 
-1. **Diagram fences identified** — `html_render.py` finds ` ```mermaid ` blocks in markdown source.
+1. **Diagram fences identified** — `diagram_render.py` finds ` ```mermaid ` blocks in markdown source.
 2. **The renderer is located** — The Node tool that draws diagrams is looked up at render time: `$SPECKY_MERMAID_DIR` first, then `~/.cache/specky/mermaid-render` (what `specky setup-diagrams` fills in, and the only copy that survives upgrading specky), then the copy inside the installed package (which is where a source checkout's own `npm install` puts it). A location holding the script but not its dependencies is skipped rather than tried and failed.
 3. **Mermaid diagrams render to SVG** — Node + beautiful-mermaid converts each diagram to static `<svg>` at `render-html` time. Doc titles in diagram nodes are escaped (e.g., `]` becomes `#93;`, `"` becomes `#quot;`) to prevent special characters from breaking the mermaid syntax; if the renderer isn't installed anywhere, diagram source stays as plain text and the render completes anyway, with one printed hint naming `specky setup-diagrams`.
 4. **Glossary terms auto-linked** — `link_glossary()` finds first mention of each `specs/GLOSSARY.md` term on each page, wraps it in a tooltip trigger; subsequent mentions left plain.
 5. **Markdown tables wrapped** — `_wrap_tables()` nests each table in a scrollable `<figure class="tw">` with zebra-stripe CSS.
 6. **Static site output** — Resulting HTML with embedded SVGs, tooltips, and styled tables written to `.specky/site/index.html`, opens via `file://` with zero client JS for diagram rendering.
-7. **A reader opens a diagram full screen** — Every rendered diagram in the viewer carries a Full screen button (shown on hover or keyboard focus); it opens that diagram alone in a new tab, fitted to the window, where the mouse wheel zooms about the cursor, dragging pans, and a double-click fits it back to the window.
+7. **The viewer paints it in the reader's scheme** — The SVG carries light colors of its own; the viewer's stylesheet re-points them at the site's light or dark palette and draws every box (flowchart and state nodes, sequence actors and notes, class and ER boxes, subgraphs) as a translucent glass pane with rounded corners, a soft sheen and a hairline edge, lifted off a backdrop washed with the site's own colors by a small two-layer shadow. Diamonds, hexagons and sequence notes are polygons and keep their points. Arrowheads are gray rather than the link blue; a chart's bars keep the accent.
+8. **A reader opens a diagram full screen** — Every rendered diagram in the viewer carries a Full screen button (shown on hover or keyboard focus); it opens that diagram alone in a new tab, fitted to the window and in the same scheme and glass as the page, where the mouse wheel zooms about the cursor, dragging pans, and a double-click fits it back to the window.
 
 ```mermaid
 flowchart TD
@@ -32,7 +33,8 @@ flowchart TD
     H -->|Yes| I[Scrubbed static SVG in a figure]
     F --> J[Page written to .specky/site/]
     I --> J
-    J --> K[Reader clicks Full screen: the diagram alone in a new tab]
+    J --> T[Viewer paints it in the reader's light or dark scheme, boxes as glass]
+    T --> K[Reader clicks Full screen: the diagram alone in a new tab]
 ```
 
 ## Outcomes
@@ -50,6 +52,9 @@ flowchart TD
 | Diagram 600px wide or less that doesn't fit its column | Shrunk to the column's width |
 | Diagram wider than 600px that doesn't fit its column | Keeps its natural size and scrolls sideways rather than being shrunk until its labels are unreadable |
 | Reader clicks a diagram's Full screen button | The diagram opens alone in a new tab, fitted to the window, with wheel zoom, drag to pan and double-click to refit |
+| Reader's system is in dark mode | Diagrams use the site's dark palette — light text on dark glass panes — in the page and in the full-screen tab |
+| Reader has asked for reduced transparency or more contrast | Diagram boxes are solid and the backdrop plain: the same diagram without the glass, still rounded and raised |
+| Doc exported with `specky export` (single page or PDF) | Diagrams keep the flat light colors they were rendered with, for print |
 
 ## Edge Cases
 
@@ -65,6 +70,10 @@ flowchart TD
 | The doc has no diagrams, no tables and no glossary matches | It renders unchanged | Every step is a no-op on content that has nothing for it to do |
 | A diagram appears in an Ask panel answer | It gets the same Full screen button | Answers can carry diagrams too, and the panel is the narrowest place one is ever shown |
 | The site is opened straight from disk (`file://`) | Full screen works as it does under `specky serve` | The new tab is built in the browser from the diagram already on the page, so there is nothing to fetch and no file per diagram to write |
+| A diagram is copied out of the viewer (the export, a PDF) | It shows the light colors it was rendered with | The viewer's theme comes from its stylesheet and is never written into the SVG, so the diagram still stands on its own anywhere that stylesheet isn't |
+| A diagram colors its own boxes (`classDef` or `style`, as `specky graph`'s does) | Those boxes keep their colors and get no glass, but are rounded and raised like the rest; their labels stay dark in both schemes | The colors were picked against the light diagram, and the dark scheme's light text would all but vanish on them |
+| An Ask panel answer contains a bar or line chart | Its bars keep the accent color while every other diagram's arrowheads are gray | Arrowheads and chart series are drawn through the same color; gray arrows keep blue meaning "you can click this", but a gray chart would lose its data |
+| The full-screen tab | Opens in the reader's scheme, glass included | It has no stylesheet of its own, so it is handed the page's colors as they resolve at the moment the button is clicked |
 | The full-screen tab is reloaded after the page that opened it is closed | It no longer loads | Its address is a temporary `blob:` link that belongs to the page that made it; open the diagram again from the doc |
 
 ## Acceptance Tests
@@ -85,3 +94,6 @@ flowchart TD
 | The full-screen tab | Reader scrolls the wheel, drags, then double-clicks | The diagram zooms about the cursor, pans with the pointer, then fits back to the window |
 | An Ask panel answer containing a diagram | The answer appears | Its diagram has a Full screen button too |
 | The site opened via `file://` | Reader clicks Full screen | The tab opens and works as it does under `specky serve` |
+| A rendered diagram, reader's system in dark mode | The page is viewed | Diagram text is light on a dark backdrop; no light box sits on the dark page |
+| Reader's browser set to reduce transparency | The page is viewed | Diagram boxes are solid, the backdrop plain |
+| A doc with a diagram | `specky export` writes the single page | The diagram has its flat light colors and no glass |

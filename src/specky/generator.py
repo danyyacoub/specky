@@ -471,7 +471,7 @@ def unrenderable_mermaid(body: str) -> list[str]:
     if tool_dir() is None:
         return []
 
-    from specky.html_render import render_mermaid_svg
+    from specky.diagram_render import render_mermaid_svg
 
     broken = []
     for index, block in enumerate(_MERMAID_BLOCK.findall(body), 1):

@@ -720,7 +720,7 @@ def test_a_diagram_the_renderer_cannot_parse_is_reported(monkeypatch):
     import specky.mermaid_tool as mermaid_tool
 
     monkeypatch.setattr(mermaid_tool, "tool_dir", lambda: pathlib.Path("/tmp"))
-    monkeypatch.setattr("specky.html_render.render_mermaid_svg", lambda source: None)
+    monkeypatch.setattr("specky.diagram_render.render_mermaid_svg", lambda source: None)
 
     broken = generator.unrenderable_mermaid('```mermaid\nbananachart LR\n  A --> B\n```')
 

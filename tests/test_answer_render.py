@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from specky import answer_render, html_render
+from specky import answer_render, diagram_render
 from specky.answer_render import render_answer, sanitize_fragment
 
 # --- the sanitizer: what a model may put on the reader's screen ---------------------------
@@ -154,14 +154,14 @@ def test_a_glossary_term_gets_the_hover_span_a_doc_page_would_get(repo, monkeypa
 
 
 def test_a_mermaid_fence_becomes_a_rendered_figure(repo, monkeypatch):
-    monkeypatch.setattr(html_render, "render_mermaid_svg", lambda src: f"<svg>{src.strip()}</svg>")
+    monkeypatch.setattr(diagram_render, "render_mermaid_svg", lambda src: f"<svg>{src.strip()}</svg>")
     body = render_answer(repo, "Flow:\n\n```mermaid\ngraph TD\n  A --> B\n```")
     assert '<figure class="flow"><svg>graph TD\n  A --> B</svg></figure>' in body
 
 
 def test_a_fence_the_renderer_cannot_draw_degrades_to_its_own_source(repo, monkeypatch):
     """What a machine without `specky setup-diagrams` gets: the source text, not an error."""
-    monkeypatch.setattr(html_render, "render_mermaid_svg", lambda _src: None)
+    monkeypatch.setattr(diagram_render, "render_mermaid_svg", lambda _src: None)
     body = render_answer(repo, "```mermaid\ngraph TD\n  A --> B\n```")
     assert "figure" not in body
     assert "graph TD" in body
@@ -175,7 +175,7 @@ def test_only_the_first_few_fences_are_drawn(repo, monkeypatch):
         calls.append(source)
         return "<svg>x</svg>"
 
-    monkeypatch.setattr(html_render, "render_mermaid_svg", fake)
+    monkeypatch.setattr(diagram_render, "render_mermaid_svg", fake)
     fences = "\n\n".join(
         f"```mermaid\ngraph TD\n  A{n} --> B{n}\n```"
         for n in range(answer_render.MAX_ANSWER_DIAGRAMS + 2)
@@ -189,7 +189,7 @@ def test_only_the_first_few_fences_are_drawn(repo, monkeypatch):
 def test_the_svg_a_model_writes_is_dropped_while_the_renderers_survives(repo, monkeypatch):
     """The reason the sanitizer runs *before* the diagram step: it never has to understand SVG,
     because the only SVG in the output is the one this codebase produced."""
-    monkeypatch.setattr(html_render, "render_mermaid_svg", lambda _src: "<svg>drawn</svg>")
+    monkeypatch.setattr(diagram_render, "render_mermaid_svg", lambda _src: "<svg>drawn</svg>")
     body = render_answer(
         repo,
         '<svg onload="alert(1)"><path d="M0 0"/></svg>\n\n```mermaid\ngraph TD\n  A --> B\n```',

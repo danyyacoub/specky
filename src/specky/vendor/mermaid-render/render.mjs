@@ -5,7 +5,7 @@
 //
 // Protocol: read one JSON object from stdin `{ source, options }`, write the
 // resulting SVG to stdout on success, or a message to stderr + exit(1) on failure.
-// html_render.py treats a non-zero exit as "leave the doc's fenced source as-is".
+// diagram_render.py treats a non-zero exit as "leave the doc's fenced source as-is".
 import { renderMermaidSVGAsync } from "beautiful-mermaid";
 
 async function readStdin() {

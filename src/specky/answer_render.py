@@ -3,12 +3,12 @@
 An answer is the one thing in the viewer written by a model rather than by this codebase, and it
 lands in the reader's page as markup. So it goes through the same pipeline a doc page does —
 markdown, glossary hover terms, scrollable tables, ```mermaid``` fences as static SVG (see
-html_render) — with one step the doc path doesn't need: everything the model wrote is scrubbed
+html_render and diagram_render) — with one step the doc path doesn't need: everything the model wrote is scrubbed
 against an allowlist first.
 
 Order matters, and it's the reason the sanitizer can be small. The model's markup is sanitized
 *before* the diagram step, so the only `<svg>` in the output is the one our own renderer produced
-(itself already run through `html_render._scrub_svg`). The sanitizer therefore never has to
+(itself already run through `diagram_render._scrub_svg`). The sanitizer therefore never has to
 understand SVG, and an `<svg>` the model wrote itself is escaped to text like any other tag it
 isn't allowed to use.
 
@@ -24,9 +24,9 @@ from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 
-from specky import html_render
+from specky import diagram_render, html_render
 
-# Each fence is a `node` subprocess (html_render.render_mermaid_svg), so one answer must not be
+# Each fence is a `node` subprocess (diagram_render.render_mermaid_svg), so one answer must not be
 # able to fan out into a dozen of them. The prompt asks for at most one; this is the bound that
 # doesn't depend on the model honouring it. Fences past it are left as their own source text.
 MAX_ANSWER_DIAGRAMS = 2
@@ -189,7 +189,7 @@ def render_answer(repo_root: Path, markdown_text: str) -> str:
     """
     fragment = sanitize_fragment(html_render.markdown_html(markdown_text))
     fragment = html_render.link_glossary(fragment, dict(_glossary(str(repo_root))))
-    body, _source, _rendered = html_render._render_mermaid_blocks(
+    body, _source, _rendered = diagram_render.render_mermaid_blocks(
         html_render._wrap_tables(fragment), limit=MAX_ANSWER_DIAGRAMS
     )
     return body

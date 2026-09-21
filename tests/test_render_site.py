@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from specky import chat_server
+from specky.diagram_render import GLASS_DEFS
 from specky.html_render import render_site
 from specky.indexer import run_index
 
@@ -129,6 +130,13 @@ def test_reading_the_site_needs_no_server(site):
     # ...and on file:// that endpoint resolves to the companion server's own port, since a
     # file:// page has no origin for a relative URL to hang off.
     assert "`http://127.0.0.1:${SPECKY_CHAT_PORT}`" in app_js
+
+
+def test_every_page_carries_the_diagram_glass_defs_once(site):
+    """The Ask panel can put a diagram on any page, so every page needs the gradient and shadow
+    its glass references — once, since a second copy would be a duplicate id."""
+    for page in site.glob("*.html"):
+        assert page.read_text().count(GLASS_DEFS) == 1, page.name
 
 
 def test_the_unread_search_index_json_is_gone(site):

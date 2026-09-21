@@ -17,11 +17,8 @@ One thing reaches outside a page itself: the optional chat widget, which POSTs t
 identically whether or not that server is running.
 
 A ```mermaid``` fence in a doc is rendered to a plain static `<svg>` at `render-html`
-time (via the mermaid-render Node tool wrapping `beautiful-mermaid` — see mermaid_tool.py
-for which copy of it gets used) rather than shipping a diagram-rendering library to every
-reader. If Node or that tool's dependencies aren't set up, the fenced source is left as
-plain-text fallback rather than failing the whole render — same as any doc with no
-diagrams at all.
+time rather than shipping a diagram-rendering library to every reader — see diagram_render.py,
+which owns that render and the CSS/JS that frame it.
 
 Glossary terms from `specs/GLOSSARY.md` are auto-linked to a hover tooltip on first
 mention per page, and tables get a scrollable, zebra-striped treatment — both patterns
@@ -47,14 +44,13 @@ import hashlib
 import html
 import json
 import re
-import subprocess
 import shutil
 from pathlib import Path
 
 import markdown as md
 from jinja2 import Environment
 
-from specky import mermaid_tool, paths
+from specky import diagram_render, paths
 from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
 from specky.staleness import days_behind
@@ -169,7 +165,7 @@ _PAGE_TEMPLATE = _env.from_string(
     '<meta name="color-scheme" content="light dark">'
     "<title>{{ title }}</title>"
     '<link rel="stylesheet" href="assets/site.css"></head>'
-    "<body>" + ICON_SPRITE + '<div class="shell">'
+    "<body>" + ICON_SPRITE + diagram_render.GLASS_DEFS + '<div class="shell">'
     '<div class="titlebar">'
     '<a class="brand" href="index.html">'
     '<svg class="icon" aria-hidden="true"><use href="#icon-brand"></use></svg>specky docs</a>'
@@ -284,9 +280,10 @@ a { color: inherit; }
 
 /* --- glass: the titlebar floats fixed above the sidebar/content scroll regions (both
    start at y=0 and pad their content below it, see .sidebar/.doc), so it's genuinely
-   blurring scrolled content behind it, not just tinting flat background — the one place
-   this site uses a translucent material, per the "blur on the floating layer, never in
-   content" rule. Falls back to a plain solid bar on engines without backdrop-filter. */
+   blurring scrolled content behind it, not just tinting flat background — per the "blur on
+   the floating layer, never in content" rule the rest of the chrome follows too. Diagrams are
+   the one deliberate exception, and they only imitate glass (a translucent sheen, no blur —
+   see diagram_render.py). Falls back to a plain solid bar on engines without backdrop-filter. */
 .titlebar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 30;
   display: flex; align-items: center; gap: 20px; height: 52px; padding: 0 18px;
@@ -449,27 +446,6 @@ a { color: inherit; }
 }
 .doc figure.tw tbody tr:nth-child(even) { background: var(--surface-secondary); }
 .doc figure.tw tbody tr:last-child td { border-bottom: none; }
-
-/* --- diagrams: a static <svg> from vendor/mermaid-render, pre-rendered once server-side
-   with a fixed light theme (MERMAID_THEME below) — kept on an explicit light surface here
-   rather than the (possibly dark) --surface token, so it stays readable in dark mode too. */
-.doc figure.flow { margin: 20px 0; padding: 16px; background: #f7f7f8; border-radius: var(--radius-md); text-align: center; }
-.doc figure.flow svg { max-width: 100%; height: auto; }
-.doc figure.flow .fx { overflow-x: auto; }
-.doc figure.flow .fx svg { max-width: none; margin: 0; }
-/* The "open full screen" button DIAGRAM_JS adds to every diagram: out of the way until the
-   reader is on the diagram, always there for keyboard focus. Fixed light colors rather than the
-   theme tokens, like the figure it sits on, so it stays readable in dark mode too. */
-figure.flow { position: relative; }
-.flow-open {
-  position: absolute; top: 6px; right: 6px; display: flex; align-items: center; gap: 4px;
-  border: 1px solid #e1e3e8; background: #ffffff; color: #63666d; font: inherit; font-size: 0.6875rem;
-  padding: 3px 8px; border-radius: var(--radius-sm); cursor: pointer; opacity: 0; transition: opacity 0.15s;
-}
-figure.flow:hover .flow-open, .flow-open:focus-visible { opacity: 1; }
-.flow-open:hover { color: #1d1f23; border-color: #63666d; }
-/* Beats `figure.flow svg`, which would otherwise size the button's icon like a diagram. */
-figure.flow .flow-open .icon { width: 1em; height: 1em; max-width: none; }
 
 /* --- workflow steps: the happy path under `## How It Works`, numbered by a counter rather
    than by <ol>'s own marker so the number can sit in its own chip on the rail. Only rendered
@@ -637,14 +613,6 @@ body.ask-open .chat-toggle { display: none; }
   font-size: 0.625rem; text-transform: uppercase; letter-spacing: 0.05em;
 }
 .chat-rich figure.tw tbody tr:nth-child(even) { background: var(--surface-secondary); }
-.chat-rich figure.flow {
-  margin: 12px 0; padding: 12px; background: #f7f7f8; border-radius: var(--radius-md); text-align: center;
-  max-width: 100%; box-sizing: border-box;
-}
-.chat-rich figure.flow svg { max-width: 100%; height: auto; }
-/* A diagram too wide to shrink readably scrolls inside the panel rather than widening it. */
-.chat-rich figure.flow .fx { overflow-x: auto; max-width: 100%; }
-.chat-rich figure.flow .fx svg { max-width: none; margin: 0; }
 .chat-rich .gl { border-bottom: 1px dotted var(--accent); cursor: help; }
 
 .chat-actions {
@@ -1266,101 +1234,14 @@ for (const type of ['mouseout', 'focusout']) {
 }
 """
 
-# Every rendered diagram gets a button that opens it alone in a new tab, fitted to the window,
-# with wheel zoom, drag to pan and double-click to reset — a wide flowchart that is a scroll strip
-# in the doc column is readable whole there. The page is a Blob URL built from the SVG already
-# inline in this page: no extra file per diagram at render time, and it works on file:// too. The
-# SVG is the renderer's own scrubbed output (see `_scrub_svg`), the same markup this page shows.
-DIAGRAM_JS = """
-function diagramPage(svg, title) {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
-<style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #f7f7f8; font: 12px system-ui, sans-serif; }
-  #stage { position: absolute; inset: 0; cursor: grab; user-select: none; }
-  #stage.dragging { cursor: grabbing; }
-  #stage svg { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; }
-  #hint {
-    position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); color: #63666d;
-    background: #ffffff; border: 1px solid #e1e3e8; border-radius: 6px; padding: 3px 10px;
-  }
-</style></head>
-<body><div id="stage">${svg}</div>
-<div id="hint">Scroll to zoom \\u00b7 drag to pan \\u00b7 double-click to fit</div>
-<script>
-const stage = document.getElementById('stage');
-const svg = stage.querySelector('svg');
-const { width, height } = svg.viewBox.baseVal;
-let scale = 1, panX = 0, panY = 0, drag = null;
-
-function draw() {
-  svg.style.transform = 'translate(' + panX + 'px, ' + panY + 'px) scale(' + scale + ')';
-}
-function fit() {
-  const pad = 32;
-  scale = Math.min((innerWidth - 2 * pad) / width, (innerHeight - 2 * pad) / height);
-  panX = (innerWidth - width * scale) / 2;
-  panY = (innerHeight - height * scale) / 2;
-  draw();
-}
-
-// Zoom about the cursor: the point under it stays where it is.
-stage.addEventListener('wheel', (event) => {
-  event.preventDefault();
-  const factor = Math.exp(-event.deltaY * 0.0015);
-  panX = event.clientX - (event.clientX - panX) * factor;
-  panY = event.clientY - (event.clientY - panY) * factor;
-  scale *= factor;
-  draw();
-}, { passive: false });
-stage.addEventListener('pointerdown', (event) => {
-  drag = { x: event.clientX - panX, y: event.clientY - panY };
-  stage.classList.add('dragging');
-  stage.setPointerCapture(event.pointerId);
-});
-stage.addEventListener('pointermove', (event) => {
-  if (!drag) return;
-  panX = event.clientX - drag.x;
-  panY = event.clientY - drag.y;
-  draw();
-});
-stage.addEventListener('pointerup', () => { drag = null; stage.classList.remove('dragging'); });
-stage.addEventListener('dblclick', fit);
-addEventListener('resize', fit);
-fit();
-<\\/script></body></html>`;
-}
-
-function addDiagramButtons(root) {
-  for (const figure of root.querySelectorAll('figure.flow')) {
-    if (figure.querySelector(':scope > .flow-open')) continue;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'flow-open';
-    button.title = 'Open this diagram full screen in a new tab';
-    button.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-expand"></use></svg>Full screen';
-    figure.appendChild(button);
-  }
-}
-
-document.addEventListener('click', (event) => {
-  const button = event.target.closest?.('.flow-open');
-  if (!button) return;
-  const svg = button.closest('figure.flow')?.querySelector('svg:not(.icon)');
-  if (!svg) return;
-  const blob = new Blob([diagramPage(svg.outerHTML, document.title)], { type: 'text/html' });
-  window.open(URL.createObjectURL(blob), '_blank', 'noopener');
-});
-
-addDiagramButtons(document);
-"""
-
 # One file, in this order, deliberately: SEARCH_JS reads `activeTags`/`activeType` (declared by
 # FILTER_JS) and calls `speckyFetch` (API_JS), which CHAT_JS also calls; CHAT_JS calls DIAGRAM_JS's
 # `addDiagramButtons`, which uses SEARCH_JS's `escapeHtml` — same script scope, so those top-level
 # declarations resolve by the time an event handler runs. Splitting these into
 # separate <script> tags would break that.
 APP_JS_BLOCKS = (
-    API_JS, SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, MENTION_JS, GLOSSARY_JS, DIAGRAM_JS
+    API_JS, SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, MENTION_JS, GLOSSARY_JS,
+    diagram_render.DIAGRAM_JS,
 )
 
 _DOMAIN_ORDER_FIRST = "root"
@@ -1642,118 +1523,6 @@ def link_glossary(fragment: str, glossary: dict[str, str]) -> str:
     return "".join(out)
 
 
-# --- diagrams: fenced ```mermaid``` -> static <svg> via the mermaid-render Node tool ----
-# Which copy of that tool gets used is `mermaid_tool`'s problem, not this module's: an installed
-# specky runs it out of ~/.cache/specky, a checkout out of vendor/. See that module's docstring.
-
-_MERMAID_BLOCK = re.compile(r'<pre><code class="language-mermaid">(.*?)</code></pre>', re.DOTALL)
-_SVG_ROOT_WIDTH = re.compile(r'<svg[^>]*\swidth="([\d.]+)"')
-_SVG_IMPORT = re.compile(r"@import[^;]*;")
-_SVG_DANGEROUS_TAG = re.compile(r"<(script|foreignObject|iframe)\b.*?</\1>", re.IGNORECASE | re.DOTALL)
-_SVG_EVENT_ATTR = re.compile(r'\s+on\w+="[^"]*"', re.IGNORECASE)
-
-# Kept in sync by hand with the CSS `:root` block above — colors rarely change, and this
-# runs server-side (no live `getComputedStyle` to read them back from, unlike a browser).
-# Diagrams are rendered once against this fixed *light* theme regardless of the reader's
-# color scheme (see `figure.flow` in CSS) rather than re-themed per mode.
-MERMAID_THEME = {
-    "fg": "#1d1f23",  # --text-primary
-    "line": "#63666d",  # --text-secondary
-    "accent": "#0166ff",  # --accent
-    "muted": "#63666d",  # --text-secondary
-    "surface": "#ffffff",  # --surface
-    "border": "#e1e3e8",  # --border
-    "font": "Helvetica",  # generic system sans; --font-display (Poppins) is for headings only
-    "transparent": True,
-    "padding": 8,
-    "nodeSpacing": 16,
-    "layerSpacing": 36,
-}
-# Past this, a diagram that doesn't fit its pane keeps its natural size and scrolls sideways
-# instead of being shrunk to fit; shrunk from any wider, its labels stop being readable. It only
-# decides the case where a diagram doesn't fit (one that fits shows at natural size either way),
-# and it is shared by the doc column (up to 1040 - 2*48 = 944px) and the Ask panel (320-720px),
-# so it is a property of the diagram, not of either pane.
-WIDE_DIAGRAM_PX = 600
-
-
-def _scrub_svg(svg: str) -> str:
-    """Belt-and-braces cleanup, mirroring glia's `scrubSvg` (renderDiagrams.ts).
-
-    `beautiful-mermaid`'s own output carries neither scripts nor remote references in
-    practice — this is the second half of the same bargain glia's frontend makes: the
-    renderer is trusted, but a page that promises it makes no third-party request and
-    runs no injected script should stay true even if a future version of a dependency
-    decides to emit one.
-    """
-    svg = _SVG_DANGEROUS_TAG.sub("", svg)
-    svg = _SVG_EVENT_ATTR.sub("", svg)
-    svg = _SVG_IMPORT.sub("", svg)
-    return svg
-
-
-def render_mermaid_svg(source: str) -> str | None:
-    """One mermaid source string rendered to a scrubbed `<svg>`, or `None`.
-
-    `None` covers every reason this can't happen — Node missing, the tool's dependencies never
-    installed (`specky setup-diagrams`), or the source itself failing to parse — and the caller's
-    response to all of them is the same: leave the fenced source as readable text rather
-    than failing the render.
-    """
-    tool_dir = mermaid_tool.tool_dir()
-    if tool_dir is None:
-        return None
-    payload = json.dumps({"source": source, "options": MERMAID_THEME})
-    try:
-        proc = subprocess.run(
-            ["node", "render.mjs"],
-            input=payload,
-            capture_output=True,
-            text=True,
-            cwd=tool_dir,
-            timeout=15,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return None
-    return _scrub_svg(proc.stdout)
-
-
-def _render_mermaid_blocks(body_html: str, limit: int | None = None) -> tuple[str, bool, bool]:
-    """Replace fenced mermaid blocks with rendered `<figure class="flow">` SVGs.
-
-    Returns `(html, any_mermaid_source, any_rendered)` — the first two counts drive
-    `render_site()`'s one-time hint if diagrams exist but none could be rendered (Node or
-    the tool's `node_modules` missing).
-
-    `limit` caps how many fences are actually rendered; the rest are left as their own source
-    text. A doc page passes None (a doc's diagrams are written by a person and reviewed in git),
-    while a chat answer bounds it — each fence is a `node` subprocess, so an answer full of them
-    would be one question spawning a dozen (see `answer_render.MAX_ANSWER_DIAGRAMS`).
-    """
-    any_source = False
-    any_rendered = False
-    drawn = 0
-
-    def repl(match: re.Match[str]) -> str:
-        nonlocal any_source, any_rendered, drawn
-        any_source = True
-        if limit is not None and drawn >= limit:
-            return match.group(0)
-        drawn += 1
-        svg = render_mermaid_svg(html.unescape(match.group(1)))
-        if svg is None:
-            return match.group(0)
-        any_rendered = True
-        width_match = _SVG_ROOT_WIDTH.search(svg)
-        wide = width_match is not None and float(width_match.group(1)) > WIDE_DIAGRAM_PX
-        inner = f'<div class="fx">{svg}</div>' if wide else svg
-        return f'<figure class="flow">{inner}</figure>'
-
-    return _MERMAID_BLOCK.sub(repl, body_html), any_source, any_rendered
-
-
 # python-markdown's defaults leave a `|` table as a paragraph of pipes and a ``` fence as
 # indented text, which are the two constructs every generated doc is made of.
 MARKDOWN_EXTENSIONS = ["tables", "fenced_code"]
@@ -1780,7 +1549,7 @@ def render_doc_body(
     body_html = _wrap_tables(link_glossary(markdown_html(content), glossary))
     if doc_type == "workflow":
         body_html = _step_list(body_html)
-    return _render_mermaid_blocks(body_html)
+    return diagram_render.render_mermaid_blocks(body_html)
 
 
 # --- doc chrome: breadcrumb/tags header, and the "Related" cross-link section ---------
@@ -1921,7 +1690,7 @@ def _write_assets(site_dir: Path, search_entries: list[dict], hover: dict[str, s
     """
     assets = site_dir / "assets"
     assets.mkdir(parents=True, exist_ok=True)
-    (assets / "site.css").write_text(CSS)
+    (assets / "site.css").write_text("\n".join((CSS, diagram_render.DIAGRAM_CSS)))
     (assets / "app.js").write_text("\n".join(APP_JS_BLOCKS))
     # ASCII-escaped on purpose: a <script src> carries no encoding of its own, so an em dash
     # in a doc title travels as \\uXXXX rather than relying on the page's charset reaching
