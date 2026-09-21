@@ -6,7 +6,7 @@ tags: [documentation, search]
 # Documentation — Feature Classification And Tags
 
 ## What It Does
-Spec docs get metadata frontmatter (`type`, `tags`, `related`) that AI-classifies automatically per commit, linking each commit to the docs it affects. Shared tags enable grouping and search across features; optional cross-links connect unrelated docs. All relationships live in SQLite, queryable via CLI and MCP — see [catalog/feature-graph.md](../catalog/feature-graph.md) for what those queries return.
+Spec docs get metadata frontmatter (`type`, `tags`, `related`). Every commit is AI-classified to link it to the docs it affects; a doc's `type` and `tags` come from that classification when the doc is first written, and are kept after that. Shared tags enable grouping and search across features; optional cross-links connect unrelated docs. All relationships live in SQLite, queryable via CLI and MCP — see [catalog/feature-graph.md](../catalog/feature-graph.md) for what those queries return.
 
 ## How It Works
 

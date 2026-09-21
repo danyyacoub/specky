@@ -59,6 +59,7 @@ from specky.generator import (
     doc_problem,
     leading_json_object,
     repair_mermaid,
+    settled_type_and_tags,
     stage_pending,
     strip_code_fence,
     update_modules_index,
@@ -405,7 +406,10 @@ def write(
                 f"is at {pending.relative_to(repo_root)}",
             )
 
-    meta: dict[str, str | list[str]] = {"type": submission.doc_type, "tags": submission.tags}
+    # An existing doc keeps its own type and tags, as on the commit path — see
+    # `settled_type_and_tags`.
+    doc_type, tags = settled_type_and_tags(existing_meta, submission.doc_type, submission.tags)
+    meta: dict[str, str | list[str]] = {"type": doc_type, "tags": tags}
     if sources:
         meta["sources"] = sources
     # Hand-authored keys survive a regeneration, exactly as they do in `generator.sync_feature_doc`:
@@ -426,7 +430,7 @@ def write(
     doc_path.parent.mkdir(parents=True, exist_ok=True)
     doc_path.write_text(content)
     update_modules_index(repo_root, domain, f"{domain}/{topic}.md", submission.purpose)
-    existing.record(f"{domain}/{topic}", submission.purpose, submission.tags)
+    existing.record(f"{domain}/{topic}", submission.purpose, tags)
 
     glossary_path, added = append_glossary_rows(repo_root, submission.glossary_terms)
     verb = "updated" if existing_body else "wrote"

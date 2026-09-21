@@ -548,6 +548,23 @@ def test_an_existing_doc_is_updated_in_place_rather_than_twinned(tmp_repo, write
     assert meta["owner"] == "#payments", "a hand-written owner must survive a regeneration"
 
 
+def test_a_rerun_keeps_the_type_and_tags_the_doc_already_has(tmp_repo, write_doc):
+    """A type is changed by hand, never by one run's guess — the rule the commit hook follows too
+    (`generator.settled_type_and_tags`)."""
+    _billing_repo(tmp_repo)
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## What It Does\n\nOld text.\n",
+        {"type": "workflow", "tags": ["refunds", "payments"]},
+    )
+    provider = ToolProvider([[_READ], [_submit(type="feature", tags=["billing"])]])
+
+    document.document(tmp_repo, "refunds", provider, assume_yes=True)
+
+    meta, _ = frontmatter.parse((tmp_repo / "specs" / "billing" / "refund-flow.md").read_text())
+    assert (meta["type"], meta["tags"]) == ("workflow", ["refunds", "payments"])
+
+
 def test_frontmatter_the_model_emitted_is_stripped(tmp_repo):
     """A model shown a doc under specs/ copies the block it saw there, and a second one would land
     on top of the real one."""

@@ -300,7 +300,63 @@ def test_sync_feature_doc_preserves_a_hand_authored_related_list(tmp_repo, write
     )
     text = sync_feature_doc(tmp_repo, _commit(), provider).path.read_text()
     assert "related: [search/fts5-syntax-safety]" in text
-    assert "tags: [refunds]" in text  # regenerated from this run's classification
+    assert "tags: [old]" in text  # the doc's own, not this run's classification
+
+
+def test_an_existing_doc_keeps_its_type_and_tags_whatever_the_classifier_says(tmp_repo, write_doc):
+    """Regression: the classifier sees one commit's diff and never the doc's frontmatter, and
+    specs/rendering/diagram-support.md went feature, workflow, feature, workflow, feature across
+    the hook's commits — each flip written over a hand correction."""
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## What It Does\nIssues refunds.\n\n## Edge Cases\nNone.\n",
+        {"type": "workflow", "tags": ["refunds", "documentation"]},
+    )
+    provider = FakeProvider(
+        [
+            '{"skip": false, "domain": "billing", "topic": "refund-flow", '
+            '"purpose": "p", "type": "feature", "tags": ["billing"]}',
+            '{"sections": {}}',
+        ]
+    )
+    text = sync_feature_doc(tmp_repo, _commit(), provider).path.read_text()
+
+    assert text.startswith("---\ntype: workflow\ntags: [refunds, documentation]\n---\n")
+
+
+def test_an_existing_feature_doc_classified_as_a_workflow_is_not_asked_for_edge_cases(
+    tmp_repo, write_doc
+):
+    """The doc's own type picks the sections it owes, not one commit's guess at it."""
+    write_doc(
+        "billing/refund-limits.md",
+        "# Billing — Refund Limits\n\n## What It Does\nCaps refunds.\n",
+        {"type": "feature", "tags": ["refunds"]},
+    )
+    provider = FakeProvider(
+        [
+            '{"skip": false, "domain": "billing", "topic": "refund-limits", '
+            '"purpose": "p", "type": "workflow", "tags": ["refunds"]}',
+            '{"sections": {}}',
+        ]
+    )
+    sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert "## Edge Cases" not in provider.prompts[-1]
+
+
+def test_an_existing_doc_without_a_type_or_tags_takes_the_classification(tmp_repo, write_doc):
+    write_doc("billing/refund-flow.md", "# Old\n", {"owner": "payments"})
+    provider = FakeProvider(
+        [
+            '{"skip": false, "domain": "billing", "topic": "refund-flow", '
+            '"purpose": "p", "type": "workflow", "tags": ["refunds"]}',
+            "# New body\n",
+        ]
+    )
+    text = sync_feature_doc(tmp_repo, _commit(), provider).path.read_text()
+
+    assert text.startswith("---\ntype: workflow\ntags: [refunds]\nowner: payments\n---\n")
 
 
 # --- refusing a destructive regeneration -------------------------------------------------

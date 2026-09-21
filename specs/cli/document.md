@@ -62,7 +62,10 @@ works from day one, and reference docs are added one feature at a time, when som
 7. **Refuse it, or write it** — The diagram is repaired where the fix is unambiguous, then five
    guards decide, below. A refusal parks the draft in `.specky/pending/`
    rather than discarding it: it may well be better than what is on disk, and that is a judgement
-   for a human. `specky doctor` warns while one is waiting there.
+   for a human. `specky doctor` warns while one is waiting there. A doc that already exists
+   keeps its own `type` and `tags` — the submitted ones only fill in a new doc, or one missing
+   either — so a re-run can't undo a type somebody corrected, the same rule the commit hook
+   follows ([documentation/feature-sync.md](../documentation/feature-sync.md)).
 
 8. **Update the index and the glossary** — `specs/MODULES.md` gains a row if the doc is linked
    nowhere in it, and any new terms are appended to `specs/GLOSSARY.md`. Both cost no extra call:
@@ -270,6 +273,7 @@ the same set of refusals stated as guards, with the reasoning behind each one.
 | A human-authored doc is frozen | `authored: human` on the target | `specky document` | Left alone and reported, with the draft parked rather than discarded |
 | A parked draft carries no borrowed keys | A frozen doc with an `owner:` | The draft is parked | It has this run's `type`/`tags` only — the frozen doc's hand-written keys are its own |
 | An existing doc is updated, not twinned | `specs/billing/refund-flow.md` exists | `specky document "refunds"` | One file, updated; a hand-written `owner:` survives |
+| A re-run keeps the doc's type and tags | `specs/billing/refund-flow.md` is a `workflow` tagged `refunds` | A run submits it as a `feature` tagged `billing` | Still a `workflow` tagged `refunds` — a type is changed by hand, never by one run's guess |
 | Echoed frontmatter is stripped | A model that emits its own `---` block | `specky document` | One frontmatter block, rendered from the submitted fields |
 | A path in a domain or topic is flattened | A submission naming `../etc` | `specky document` | The doc lands inside the docs root |
 | An untracked path is unreachable | An untracked file in the repo | `read_file` on it | Refused, and it is not added to the read set |

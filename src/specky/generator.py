@@ -724,9 +724,10 @@ def generate_feature_doc(
     """This feature's doc body. A doc that already exists is updated section by section
     (`update_feature_doc`); one that doesn't is written whole, from this commit alone.
 
-    `doc_type` picks the template (`doc_style`). It comes from this run's classification, which is
-    resolved before either path is entered — unlike `document.py`, where the model decides the type
-    mid-run and so has to be shown both shapes up front.
+    `doc_type` picks the template (`doc_style`). It is the doc's own type, or this run's
+    classification for a doc that has none, and is resolved before either path is entered — unlike
+    `document.py`, where the model decides the type mid-run and so has to be shown both shapes up
+    front.
     """
     if existing_content:
         return update_feature_doc(existing_content, commit, domain, topic, provider, doc_type)
@@ -916,6 +917,26 @@ def stage_pending(repo_root: Path, domain: str, topic: str, content: str) -> Pat
     return path
 
 
+def settled_type_and_tags(
+    existing_meta: dict, doc_type: str, tags: list[str]
+) -> tuple[str, list[str]]:
+    """The type and tags to write: the doc's own where it has them, this run's answer where not.
+
+    A doc that already has a type and tags keeps them; a model's answer only seeds a new doc (or
+    one missing either). The commit classifier sees one commit's diff and never the doc's own
+    frontmatter, so it re-guessed both from scratch every time — and for the same doc its guesses
+    alternated feature/workflow commit to commit, each flip undoing a hand correction and, into
+    workflow, asking the doc for an Edge Cases section nobody decided it owed. `specky document`
+    shares this so a re-run can't undo a correction either: a type is changed by hand, never by
+    one run's guess.
+    """
+    kept_type, kept_tags = existing_meta.get("type"), existing_meta.get("tags")
+    return (
+        kept_type if kept_type in ("feature", "workflow") else doc_type,
+        kept_tags if isinstance(kept_tags, list) and kept_tags else tags,
+    )
+
+
 def sync_feature_doc(
     repo_root: Path, commit: Commit, provider: Provider, existing: ExistingDocs | None = None
 ) -> DocSync | None:
@@ -954,30 +975,34 @@ def sync_feature_doc(
     if str(existing_meta.get("authored", "")).strip().lower() == "human":
         return DocSync(doc_path, False, f"left {rel} alone (authored: human) — may need a look")
 
+    doc_type, tags = settled_type_and_tags(
+        existing_meta, classification.doc_type, classification.tags
+    )
+
     body = generate_feature_doc(
         existing_body,
         commit,
         classification.domain,
         classification.topic,
         provider,
-        classification.doc_type,
+        doc_type,
     )
     # Same two checks `document.write` applies, for the same reason: this path rewrites whole
     # sections, and a section carrying a diagram can come back with it mangled.
     body, _ = repair_mermaid(body)
 
-    # type/tags come from this run's classification; hand-authored `related`, `owner`, `authored`
-    # and `origin` values are preserved across regenerations since the AI is never asked to produce
-    # any of them. Losing an `owner:` to an automatic doc update would be worse than never having
-    # supported it — the hook runs on every commit, so it would silently strip the line within a
-    # day of someone adding it. `origin` is `specky adopt`'s pointer back to where a doc used to
+    # type/tags are settled above; hand-authored `related`, `owner`, `authored` and `origin` values
+    # are preserved across regenerations since the AI is never asked to produce any of them.
+    # Losing an `owner:` to an automatic doc update would be worse than never having supported
+    # it — the hook runs on every commit, so it would silently strip the line within a day of
+    # someone adding it. `origin` is `specky adopt`'s pointer back to where a doc used to
     # live, which is the one thing a reader needs to resolve a stale link somebody else wrote.
     # `sources` joins them for a different reason than the rest: it isn't hand-written, it's what
     # `document.write` recorded about which files a doc was written from, and it's the only thing
     # giving such a doc `specky check` coverage. The AI is never asked for it here, so without this
     # line the first commit-driven update of a doc written by `specky document` would silently drop
     # that coverage — within a day, since the hook runs on every commit.
-    meta: dict[str, str | list[str]] = {"type": classification.doc_type, "tags": classification.tags}
+    meta: dict[str, str | list[str]] = {"type": doc_type, "tags": tags}
     for key in ("related", "owner", "authored", "origin", "sources"):
         if existing_meta.get(key):
             meta[key] = existing_meta[key]
@@ -998,9 +1023,7 @@ def sync_feature_doc(
 
     doc_rel_path = f"{classification.domain}/{classification.topic}.md"
     update_modules_index(repo_root, classification.domain, doc_rel_path, classification.purpose)
-    existing.record(
-        f"{classification.domain}/{classification.topic}", classification.purpose, classification.tags
-    )
+    existing.record(f"{classification.domain}/{classification.topic}", classification.purpose, tags)
     return DocSync(doc_path, True, f"updated {rel}")
 
 
