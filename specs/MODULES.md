@@ -62,6 +62,7 @@ command that calls a model goes through this layer.
 | [chat/spec-assistant-conversation.md](chat/spec-assistant-conversation.md) | Spec Assistant keeps session-based conversation history for follow-up questions |
 | [chat/spec-assistant-panel.md](chat/spec-assistant-panel.md) | Spec Assistant as a full-height dock: short answers with Read more, draft step cards, intent steering |
 | [chat/spec-drafting-workflow.md](chat/spec-drafting-workflow.md) | Draft a spec change in steps — scope, impact, approved acceptance tests, final draft |
+| [chat/mcp-host-guidance.md](chat/mcp-host-guidance.md) | MCP server sends connect-time instructions and bundles an explore-docs skill so host models answer behaviour questions from docs before reading code |
 
 ## Search
 
