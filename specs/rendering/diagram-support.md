@@ -1,6 +1,6 @@
 ---
 type: workflow
-tags: [rendering]
+tags: [rendering, documentation]
 ---
 
 # Rendering — Diagram Support
