@@ -47,8 +47,8 @@ flowchart LR
 |---|---|---|
 | More than one place is plausible, or the request is too vague to place | The reader is asked one question with clickable options | A doc in the wrong module is a doc nobody finds; one click is cheaper |
 | The reader clicks an option that names a doc or a domain | The scope is settled without another model call | The option already says where it goes |
-| The reader typed `#feature:<doc>` | The scope step is skipped and the draft updates that doc | The reader has already said which doc |
-| The reader typed `#module:<domain>` | The model places the change in that domain unless it clearly doesn't fit, and asks if so | The mention is a strong hint, not an order |
+| The reader typed `@feature:<doc>` | The scope step is skipped and the draft updates that doc | The reader has already said which doc |
+| The reader typed `@module:<domain>` | The model places the change in that domain unless it clearly doesn't fit, and asks if so | The mention is a strong hint, not an order |
 | The model stops without placing the change | The reader is asked which module it belongs to, with the best-matching domains as options | A question the reader can answer beats an error they can't |
 | The model stops without working out the impact | An error asks the reader to try again or add detail | There is no safe default for what a change changes |
 | A behaviour in the request is genuinely open | The impact step asks the reader a question, then resumes | Two readings would produce different tests |
@@ -71,7 +71,7 @@ flowchart LR
 | Approve tests | The acceptance card is showing | Reader clicks **Approve tests** | The final draft appears with **Copy markdown**, and its Acceptance Tests section is exactly the approved table |
 | Ambiguous place | Two modules could own the change | Reader asks for a draft | A question card appears with an option per module |
 | One-click scope | A question card offers a doc as an option | Reader clicks it | The Impact card appears for that doc without another scope step |
-| Feature mention | `specs/chat/spec-assistant-panel.md` exists | Reader asks "#feature:spec-assistant-panel draft retries" | No scope question is asked; the target is that doc |
+| Feature mention | `specs/chat/spec-assistant-panel.md` exists | Reader asks "@feature:spec-assistant-panel draft retries" | No scope question is asked; the target is that doc |
 | Scope never decided | The model stops without placing the change | Reader asks for a draft | A question card asks which module it belongs to |
 | Impact never decided | The model stops without an impact | Reader asks for a draft | An error is shown and the previous step's buttons work again |
 | Correction | The Impact card is showing | Reader types "retry twice, not once" | A revised Impact card appears |
