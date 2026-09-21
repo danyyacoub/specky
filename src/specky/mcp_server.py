@@ -15,7 +15,22 @@ from specky import catalog, doc_tools, spec_draft
 from specky.chat_server import EXPLORE_FORMAT
 from specky.db import repo_root
 
-mcp = MCPServer("specky")
+# Sent once at connect time and shown to the host's model. Without it, hosts that defer MCP tools
+# (Claude Code) list only their names, and nothing tells the model a behaviour question has a
+# cheaper, citable answer here than a read through the source.
+INSTRUCTIONS = (
+    "specky indexes this repo's functional docs (specs/<domain>/<topic>.md) and its git history. "
+    "Check it first for behaviour questions: what a feature does, how a workflow runs, its rules, "
+    "statuses and edge cases, whether something is supported, and why it changed. Use "
+    "search_docs then read_doc; doc_behaviours for the exact promises a doc makes (its "
+    "acceptance tests); search_history or commits_for_doc for why. Cite the doc path. Docs state "
+    "intended behaviour and can lag the code, so check the files in a doc's `sources` "
+    "frontmatter before changing code on its word. Not for finding where a symbol or file lives "
+    "in the code; use code search for that. search_docs, search_history and the catalog tools "
+    "need `specky index` to have run."
+)
+
+mcp = MCPServer("specky", instructions=INSTRUCTIONS)
 
 
 @mcp.tool()

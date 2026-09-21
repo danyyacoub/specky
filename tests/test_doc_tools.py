@@ -1,3 +1,7 @@
+import asyncio
+import re
+from pathlib import Path
+
 import pytest
 
 from specky import doc_tools, mcp_server
@@ -274,3 +278,17 @@ def test_the_mcp_prompts_spell_out_both_workflows():
 
     explore = mcp_server.explore("how do refunds work?")
     assert "<!-- more -->" in explore and "search_docs" in explore
+
+
+def test_what_tells_a_host_when_to_use_specky_names_only_real_tools():
+    # The server instructions and the explore-docs skill both steer a host's model to tools by
+    # name. A renamed tool must break this, not leave the model calling one that isn't there.
+    tools = {t.name for t in asyncio.run(mcp_server.mcp.list_tools())}
+    skill = (Path(__file__).parent.parent / "skills" / "explore-docs" / "SKILL.md").read_text()
+
+    in_instructions = set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", mcp_server.INSTRUCTIONS))
+    in_skill = set(re.findall(r"`([a-z]+(?:_[a-z]+)+)`", skill))
+    assert mcp_server.mcp.instructions == mcp_server.INSTRUCTIONS
+    assert {"search_docs", "read_doc", "doc_behaviours"} <= in_instructions & in_skill
+    assert in_instructions <= tools
+    assert in_skill <= tools

@@ -112,6 +112,12 @@ snapshot is how a run ends up with three docs about one subject.
 For a whole domain at once with an agent that can actually read the tree: `/document-domain billing`
 runs the bundled [`document-domain`](skills/document-domain/SKILL.md) skill.
 
+Agents also get the docs as a first stop for questions. The MCP server tells the host's model to
+check specky before reading code when someone asks what a feature does, how a flow works or why it
+changed, and the bundled [`explore-docs`](skills/explore-docs/SKILL.md) skill spells out the lookup:
+search, read, the doc's behaviour ids, its history, and a check against the doc's `sources` when the
+answer will drive a code change.
+
 To browse the docs from Claude Code, `/launch-viewer` runs the bundled
 [`launch-viewer`](skills/launch-viewer/SKILL.md) skill: `index`, `render-html`, then `serve`. In the
 desktop app the viewer opens in the browser pane, via a `specky-serve` entry the skill adds to

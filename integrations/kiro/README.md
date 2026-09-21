@@ -33,9 +33,10 @@ Tools exposed: `ping`, `list_features`, `list_workflows`, `list_tags`, `get_grap
 ## Skill
 
 Kiro follows the same open Agent Skills standard as Claude Code's `SKILL.md`, so copy the
-shared skill in:
+shared skills in. `explore-docs` answers behaviour questions from the docs before reading code:
 
 ```bash
-mkdir -p .kiro/skills/document-domain
-cp /path/to/specky/skills/document-domain/SKILL.md .kiro/skills/document-domain/
+for s in document-domain explore-docs; do
+  mkdir -p .kiro/skills/$s && cp /path/to/specky/skills/$s/SKILL.md .kiro/skills/$s/
+done
 ```

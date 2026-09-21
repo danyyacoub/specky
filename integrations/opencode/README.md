@@ -31,6 +31,7 @@ Tools exposed: `ping`, `list_features`, `list_workflows`, `list_tags`, `get_grap
 
 ## Skill
 
-`skills/document-domain/SKILL.md` is picked up as-is — opencode reads `.claude/skills/` and
+`skills/document-domain/SKILL.md` and `skills/explore-docs/SKILL.md` (answer behaviour questions
+from the docs before reading code) are picked up as-is — opencode reads `.claude/skills/` and
 `.agents/skills/` alongside its own paths, so a specky checkout on the plugin path needs no
-copy. If you'd rather vendor it, copy the file to `.agents/skills/document-domain/SKILL.md`.
+copy. If you'd rather vendor them, copy each to `.agents/skills/<name>/SKILL.md`.
