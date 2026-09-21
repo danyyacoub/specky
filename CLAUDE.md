@@ -28,8 +28,9 @@ file isn't. Full behavior docs are indexed at [specs/MODULES.md](specs/MODULES.m
   reads git. A repo needs no setup pass before it is useful — docs are added one feature at a time.
 - `Provider.converse` is that tool loop. `provider = "command"` has no tool channel and raises
   `ToolLoopUnsupported`; `document.py` catches it and degrades to one call, losing the guard that a
-  doc must be written from code someone actually read. This repo's own `specky.toml` is a `command`
-  provider, so `specky document` runs degraded here unless `[ai]` is pointed elsewhere.
+  doc must be written from code someone actually read. `specky.toml` is gitignored, so which
+  provider this repo runs on is per-machine — `specky doctor` prints it; check before trusting a
+  `specky document` run here.
 - `Provider.generate(prompt, *, prefix, task)` — `prefix` is the stable half of a prompt (sent as a
   cached system block), `task` picks the per-task model. A new prompt gets a `prefix` only if it is
   byte-identical across calls; anything per-call leaking in makes every call a cache miss.
@@ -54,7 +55,7 @@ scripts/mcp-inspector.sh   # open MCP Inspector against src/specky/mcp_server.py
 ```
 
 `.claude/launch.json` has two `preview_start` entries: `specky-site` serves `.specky/site/`
-statically on :8934; `specky-serve` runs `specky serve` on :8936 (same pages + the Ask panel's
+statically on :8934; `specky-serve` runs `specky serve` on :8936 (same pages + the Spec Assistant's
 `/chat` endpoint — use this one when the change touches answers). Check rendered pages over
 `http://`, not `file://`: the in-app preview snapshots `file://` and won't execute page scripts.
 

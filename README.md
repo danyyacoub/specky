@@ -68,7 +68,7 @@ specky sync [--dry-run] [--since REV|DATE] [--limit N] [--all-branches] [--batch
 specky index                    # rebuild .specky/index.db (FTS5) from specs/ + git log
 specky search "<query>"         # keyword search
 specky render-html               # static site -> .specky/site/index.html
-specky serve [--port] [--host]  # viewer + chat ("Ask") endpoint on one port
+specky serve [--port] [--host]  # viewer + Spec Assistant endpoints on one port
 specky check [--base REV] [--since REV|DATE] [--advisory] [--json]  # CI gate, no AI call
 specky pr-comment --base REV    # markdown summary of doc changes, stdout only, never posts
 specky tests [--force]          # scaffold tests/spec/test_<domain>_<topic>.py from doc tables

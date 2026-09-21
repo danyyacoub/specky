@@ -3,11 +3,11 @@ type: feature
 tags: [chat]
 ---
 
-# Chat — Ask Widget Conversation
+# Chat — Spec Assistant Conversation
 
 ## What It Does
 
-The Ask widget now remembers recent questions and answers within a browser tab, so follow-up questions like "why?" or "what about the other one?" can resolve against what was already asked. Conversations reset when you click **New**, and nothing is saved to disk — the history lives only in the server's memory while it's running.
+The Spec Assistant remembers recent questions and answers within a browser tab, so follow-up questions like "why?" or "what about the other one?" can resolve against what was already asked. Conversations reset when you click **New**, and nothing is saved to disk — the history lives only in the server's memory while it's running.
 
 ## How It Works
 

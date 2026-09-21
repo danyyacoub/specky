@@ -29,8 +29,8 @@ OUT_DIR = "tests/spec"
 
 # Cells that mean "no scenario here". Both doc-generation paths are told to keep the Acceptance
 # Tests section even when there's nothing testable, so a placeholder row is the expected shape of
-# that — not a parse failure.
-_PLACEHOLDERS = {"", "-", "–", "—", "n/a", "na", "none", "(none)", "tbd", "todo"}
+# that — not a parse failure. Public because `doc_tools.doc_behaviours` skips the same rows.
+PLACEHOLDERS = {"", "-", "–", "—", "n/a", "na", "none", "(none)", "tbd", "todo"}
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
 # Split on unescaped pipes only: a cell can contain `\|`.
@@ -104,7 +104,8 @@ def split_sections(content: str) -> list[tuple[str, list[str]]]:
     return sections
 
 
-def _cells(line: str) -> list[str]:
+def cells(line: str) -> list[str]:
+    """One markdown table row's cells, `\\|` unescaped."""
     parts = [c.replace(r"\|", "|").strip() for c in _CELL_SPLIT.split(line.strip())]
     if parts and not parts[0]:
         parts.pop(0)
@@ -113,24 +114,28 @@ def _cells(line: str) -> list[str]:
     return parts
 
 
-def _tables(lines: list[str]) -> list[tuple[list[str], list[list[str]]]]:
-    """Every `| … |` table in these lines, as (header cells, data rows)."""
-    tables = []
+def tables(lines: list[str]) -> list[tuple[list[str], list[list[str]]]]:
+    """Every `| … |` table in these lines, as (header cells, data rows).
+
+    Public because the Spec Assistant's `doc_tools.doc_behaviours` reads a doc's Outcomes and Edge
+    Cases tables with it too — one table parser, so the two can't disagree about what a row is.
+    """
+    found = []
     i = 0
     while i < len(lines):
         starts = lines[i].strip().startswith("|") and i + 1 < len(lines)
         if starts and _SEPARATOR.match(lines[i + 1]):
-            header = _cells(lines[i])
+            header = cells(lines[i])
             rows = []
             i += 2
             while i < len(lines) and lines[i].strip().startswith("|"):
                 if not _SEPARATOR.match(lines[i]):
-                    rows.append(_cells(lines[i]))
+                    rows.append(cells(lines[i]))
                 i += 1
-            tables.append((header, rows))
+            found.append((header, rows))
         else:
             i += 1
-    return tables
+    return found
 
 
 def _columns(header: list[str]) -> tuple[int, int, int, int | None] | None:
@@ -161,7 +166,7 @@ def _clean(cell: str) -> str:
 def parse_scenarios(content: str) -> list[Scenario]:
     """Every usable row of every Given/When/Then table under `## Acceptance Tests`."""
     scenarios = []
-    for header, rows in _tables(section(content, "acceptance tests")):
+    for header, rows in tables(section(content, "acceptance tests")):
         columns = _columns(header)
         if columns is None:
             continue
@@ -172,7 +177,7 @@ def parse_scenarios(content: str) -> list[Scenario]:
             given, when, then = (_clean(row[i]) for i in (given_i, when_i, then_i))
             # `then` is the assertion. A row without one names no behaviour to pin down, which is
             # what the "nothing testable here" placeholder row looks like.
-            if _MARKDOWN_NOISE.sub("", then).lower() in _PLACEHOLDERS:
+            if _MARKDOWN_NOISE.sub("", then).lower() in PLACEHOLDERS:
                 continue
             name = _clean(row[name_i]) if name_i is not None and len(row) > name_i else ""
             scenarios.append(Scenario(given=given, when=when, then=then, name=name))

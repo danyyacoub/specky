@@ -12,7 +12,7 @@ Optional chat widget on the generated docs site. Lets you ask questions and get 
 ## How It Works
 
 1. **Start the server** — Run `specky serve`; it listens on `127.0.0.1:8420` unless `--port`/`--host` or the `[serve]` table in `specky.toml` say otherwise. A page served on another port still finds its own server: the widget asks its own origin first and only falls back to the port baked in at render time.
-2. **Ask a question** — Click "Ask" button in the viewer, type your question.
+2. **Ask a question** — Click the **Spec Assistant** button in the viewer, type your question.
 3. **The index locates the docs, it doesn't answer from them** — FTS5 ranks matching docs (up to 8) and commit summaries (up to 5). The search hit is used to decide *which* docs the question is about, and nothing more.
 4. **A question is ranked on what it's about, not on how it's phrased** — The words that make a sentence a question ("how", "is", "does", "what") are dropped before the index is searched, and a term in a doc's file name, title or tags counts for more than the same term buried in a long body. Otherwise every question ranks the pages that mention every term — `MODULES.md`, `GLOSSARY.md`, `PRODUCT.md` — above the one doc that answers it. A question of nothing but question words is searched as typed rather than not at all.
 5. **Those docs are sent whole** — Each matching doc's full text goes to the provider, not the fragment around the match. A ~40-token excerpt is enough to rank a doc and nowhere near enough to answer from it; sending excerpts produced answers of the form "the docs mention payment settlement, but its contents are not in the context".
@@ -24,12 +24,12 @@ Optional chat widget on the generated docs site. Lets you ask questions and get 
 ```mermaid
 sequenceDiagram
     actor User
-    participant Widget as Ask Widget
+    participant Widget as Spec Assistant
     participant Server as specky serve
     participant Index as FTS5 Index
     participant Provider as AI Provider
 
-    User->>Widget: type question, click Ask
+    User->>Widget: type question, send
     Widget->>Server: POST question
     Server->>Index: which docs is this topic in? (question words dropped)
     Index-->>Server: up to 8 doc paths + 5 commit summaries, ranked
@@ -45,8 +45,8 @@ sequenceDiagram
 
 | Server Status | Chat Widget Behavior |
 |---|---|
-| Running | "Ask" button works; answers appear with citations |
-| Stopped | "Ask" button shows inline message: "Start `specky serve` to enable chat" |
+| Running | **Spec Assistant** works; answers appear with citations |
+| Stopped | **Spec Assistant** shows an inline message to start `specky serve` |
 | Running, no matching context | AI responds: "Couldn't find the answer in your docs" |
 
 ## What one question sends
@@ -63,8 +63,8 @@ sequenceDiagram
 
 | Scenario | Given | When | Then |
 |---|---|---|---|
-| Chat enabled | Server running; docs indexed | User clicks "Ask" and types a question | Widget displays answer with doc paths/commit shas cited |
-| Graceful degradation | Server stopped | User clicks "Ask" | Widget shows prompt to start server; rest of site (nav, search, pages) works normally |
+| Chat enabled | Server running; docs indexed | User opens the Spec Assistant and types a question | Widget displays answer with doc paths/commit shas cited |
+| Graceful degradation | Server stopped | User opens the Spec Assistant and asks | Widget shows prompt to start server; rest of site (nav, search, pages) works normally |
 | Safe search | Server running | User asks question with FTS5 operator syntax (e.g., `"what -about"` or `"near*"`) | Server treats operators as literal text; search succeeds with no errors |
 | Empty index | Server running; docs exist but question matches nothing | User asks very specific or out-of-scope question | AI says it couldn't find the answer in the docs; does not fabricate |
 | Whole doc is the grounding | An indexed doc whose answer is in its middle sections | A question that matches its opening line | The doc's full body is sent, not the fragment around the match |

@@ -1,4 +1,4 @@
-"""A chat answer's markdown turned into the HTML the Ask panel shows.
+"""A chat answer's markdown turned into the HTML the Spec Assistant panel shows.
 
 An answer is the one thing in the viewer written by a model rather than by this codebase, and it
 lands in the reader's page as markup. So it goes through the same pipeline a doc page does —

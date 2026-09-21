@@ -15,13 +15,15 @@ from specky.chat_server import (
     ServeConfig,
     Turn,
     _build_prompt,
+    MORE_MARKER,
     _parse_scope,
-    _topic_match,
     answer_question,
     classify_intent,
     coerce_intent,
     retrieve_context,
+    split_answer,
 )
+from specky.doc_tools import topic_match as _topic_match
 from specky.indexer import run_index
 
 from conftest import FakeProvider
@@ -304,17 +306,61 @@ def test_build_prompt_does_not_mark_a_whole_doc():
     assert "excerpt only" not in prompt
 
 
-def test_build_prompt_carries_the_instructions_for_the_intent_it_was_given():
-    explore = _build_prompt("q", [], intent=INTENT_EXPLORE)
-    spec = _build_prompt("q", [], intent=INTENT_SPEC)
+def test_build_prompt_asks_for_the_short_answer_first_and_stays_grounded():
+    prompt = _build_prompt("q", [])
 
-    assert "Answer the reader's question" in explore
-    assert "specs/<domain>/<topic>.md" not in explore
-    assert "## Acceptance Tests" in spec
-    assert "specs/<domain>/<topic>.md" in spec
-    # Grounding is the half that doesn't vary: an answer of either kind comes from the context.
-    for prompt in (explore, spec):
-        assert "using ONLY" in prompt or "ONLY the context below" in prompt
+    assert "Answer the reader's question" in prompt
+    assert "short answer" in prompt and MORE_MARKER in prompt
+    assert "ONLY the context below" in prompt
+    # Drafting is spec_draft's job now; the explore prompt never asks for a doc.
+    assert "specs/<domain>/<topic>.md" not in prompt
+
+
+# --- short answer + read more ---------------------------------------------------------------
+
+
+def test_split_answer_splits_on_the_marker():
+    short, details = split_answer(f"Refunds take 5 days.\n\n{MORE_MARKER}\n\n## Why\n\nBatching.")
+    assert (short, details) == ("Refunds take 5 days.", "## Why\n\nBatching.")
+
+
+def test_a_short_only_answer_has_no_details():
+    assert split_answer("Yes — see specs/billing/refund-flow.md.") == (
+        "Yes — see specs/billing/refund-flow.md.",
+        "",
+    )
+
+
+def test_without_the_marker_the_first_paragraph_is_the_short_answer():
+    short, details = split_answer("Refunds take 5 days.\n\n| Case | Days |\n|---|---|\n| A | 5 |")
+    assert short == "Refunds take 5 days."
+    assert details.startswith("| Case | Days |")
+
+
+def test_an_answer_that_opens_with_structure_is_shown_whole():
+    """Hiding a table behind "Read more" with nothing in front of it would show the reader an empty
+    answer and a button."""
+    text = "## Refunds\n\n| Case | Result |\n|---|---|\n| Full | Refunded |"
+    assert split_answer(text) == (text, "")
+
+
+def test_a_marker_with_nothing_before_it_still_leaves_a_short_answer():
+    assert split_answer(f"{MORE_MARKER}\nAll of it.") == ("All of it.", "")
+
+
+def test_answer_question_returns_the_details_separately(indexed_repo, monkeypatch):
+    provider = FakeProvider(f"A refund returns money.\n\n{MORE_MARKER}\n\n## Steps\n\n1. Ask.")
+    monkeypatch.setattr(
+        chat_server, "load_provider_from_toml", lambda _path, _command="": provider
+    )
+
+    result = answer_question(indexed_repo, "how do refunds work?")
+
+    assert "A refund returns money." in result["answer_html"]
+    assert "<h2>Steps</h2>" in result["details_html"]
+    assert "<h2>" not in result["answer_html"]
+    assert MORE_MARKER not in result["answer"]  # Copy markdown gets clean markdown
+    assert result["answer"].startswith("A refund returns money.")
 
 
 def test_answer_question_scopes_retrieval_and_reports_sources(indexed_repo, monkeypatch):
@@ -344,16 +390,28 @@ def test_answer_question_renders_the_answer_for_the_panel(indexed_repo, monkeypa
     assert '<figure class="tw">' in result["answer_html"]
 
 
-def test_answer_question_classifies_the_intent_and_prompts_for_it(indexed_repo, monkeypatch):
-    provider = FakeProvider("draft")
+def test_a_spec_request_starts_the_draft_workflow(indexed_repo, monkeypatch):
+    """Drafting is a staged workflow now (spec_draft.py), not one prompt — and the mention the
+    reader typed reaches it as a scope, not as text."""
+    from specky import spec_draft
+
+    provider = FakeProvider("unused")
+    started = []
     monkeypatch.setattr(
         chat_server, "load_provider_from_toml", lambda _path, _command="": provider
     )
+    monkeypatch.setattr(
+        spec_draft,
+        "start",
+        lambda root, prov, request, mention=None: started.append((request, mention))
+        or {"intent": INTENT_SPEC, "draft": {}},
+    )
 
-    result = answer_question(indexed_repo, "write a spec for partial refunds")
+    result = answer_question(indexed_repo, "#module:billing write a spec for partial refunds")
 
     assert result["intent"] == INTENT_SPEC
-    assert "## Acceptance Tests" in provider.prompts[0]
+    assert started == [("write a spec for partial refunds", {"kind": "module", "value": "billing"})]
+    assert provider.prompts == []  # the explore path never ran
 
 
 def test_an_explicit_intent_beats_the_classifier(indexed_repo, monkeypatch):
@@ -677,6 +735,88 @@ def test_chat_ignores_an_intent_it_does_not_know(tmp_repo, answering, intent):
         status, _, _ = _request(port, "POST", "/chat", body={"question": "q", "intent": intent})
     assert status == 200
     assert answering[0][2] is None  # classify_intent decides
+
+
+def test_a_draft_response_without_an_answer_is_not_recorded(tmp_repo, monkeypatch):
+    """A draft's first response carries its state, not an answer — nothing to replay."""
+    monkeypatch.setattr(
+        chat_server,
+        "answer_question",
+        lambda *_a, **_k: {"intent": INTENT_SPEC, "draft": {"stage": "impact"}, "sources": []},
+    )
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(
+            port, "POST", "/chat", body={"question": "write a spec", "session": "s1"}
+        )
+    assert status == 200
+    assert json.loads(raw)["draft"] == {"stage": "impact"}
+
+
+@pytest.fixture
+def drafting(monkeypatch):
+    """Stub the draft step: these tests are about the route, not the workflow."""
+    seen = []
+
+    def fake(_root, body):
+        seen.append(body)
+        if body.get("action") == "explode":
+            from specky.spec_draft import DraftError
+
+            raise DraftError("Unknown draft action 'explode'.")
+        return {"intent": INTENT_SPEC, "draft": {"stage": "acceptance"}, "sources": []}
+
+    monkeypatch.setattr(chat_server, "draft_step", fake)
+    return seen
+
+
+def test_draft_steps_are_routed_to_the_workflow(tmp_repo, drafting):
+    body = {"action": "confirm", "state": {"request": "r"}}
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(port, "POST", "/draft", body=body)
+    assert status == 200
+    assert json.loads(raw)["draft"]["stage"] == "acceptance"
+    assert drafting == [body]
+
+
+def test_a_draft_error_is_a_400_the_panel_can_show(tmp_repo, drafting):
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(port, "POST", "/draft", body={"action": "explode"})
+    assert status == 400
+    assert "Unknown draft action" in json.loads(raw)["error"]
+
+
+def test_draft_obeys_the_origin_and_token_policy(tmp_repo, drafting):
+    config = ServeConfig(allow_origins=("http://docs.example",), token="s3cret")
+    with _running(tmp_repo, config) as port:
+        denied = _request(port, "POST", "/draft", body={}, origin="http://evil.example")
+        no_token = _request(port, "POST", "/draft", body={}, origin="http://docs.example")
+        allowed = _request(
+            port, "POST", "/draft", body={}, origin="http://docs.example", token="s3cret"
+        )
+    assert (denied[0], no_token[0], allowed[0]) == (403, 403, 200)
+    assert len(drafting) == 1
+
+
+def test_draft_step_hands_the_body_to_the_workflow(tmp_repo, monkeypatch):
+    from specky import spec_draft
+
+    calls = []
+    provider = FakeProvider("unused")
+    monkeypatch.setattr(
+        chat_server, "load_provider_from_toml", lambda _path, _command="": provider
+    )
+    monkeypatch.setattr(
+        spec_draft,
+        "act",
+        lambda root, prov, action, state, reply=None, option=None: calls.append(
+            (prov, action, state, reply, option)
+        )
+        or {},
+    )
+
+    chat_server.draft_step(tmp_repo, {"action": "choose", "state": {"x": 1}, "option": 2})
+
+    assert calls == [(provider, "choose", {"x": 1}, None, 2)]
 
 
 # --- sessions over HTTP -------------------------------------------------------------------

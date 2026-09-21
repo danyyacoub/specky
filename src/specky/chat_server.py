@@ -22,12 +22,15 @@ session are replayed to the provider so "why?" and "what about the other one?" m
 something. The transcript lives in this process's memory and in nothing else — see
 `ConversationStore`.
 
-Two questions in the same panel can want two different things, so the prompt is steered by
-intent: `INTENT_EXPLORE` explains what the docs say, `INTENT_SPEC` drafts a new doc in the
-project's own convention. `classify_intent()` guesses from the question's phrasing and the
-widget's chips can pin it (`intent` on the request). Either way the answer comes back as both
-the markdown the model wrote and that markdown rendered for the panel — tables, headings and
-```mermaid``` diagrams included, sanitized in `answer_render`.
+Two questions in the same panel — the viewer's Spec Assistant — can want two different things, so
+each is routed by intent. `INTENT_EXPLORE` explains what the docs say, in one call: a short answer
+that stands on its own, then the details behind a "Read more" (`split_answer`). `INTENT_SPEC` starts
+the draft-spec workflow instead (`spec_draft.py`), which settles where the change goes, what it
+changes and how it will be tested before any doc is written; its later steps arrive on `POST
+/draft`. `classify_intent()` guesses from the question's phrasing and the panel's chips can pin it
+(`intent` on the request). An answer comes back as both the markdown the model wrote and that
+markdown rendered for the panel — tables, headings and ```mermaid``` diagrams included, sanitized in
+`answer_render`.
 
 Access control lives in `[serve]` in specky.toml and defaults to open
 (`allow_origins = ["*"]`, no token) so a site served from another port or host keeps
@@ -53,8 +56,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from specky import spec_draft
 from specky.ai_provider import load_provider_from_toml
-from specky.db import connect, fts_match_query
+from specky.db import connect
+from specky.doc_tools import DOC_RANK, topic_match
 
 DEFAULT_PORT = 8420
 DEFAULT_HOST = "127.0.0.1"
@@ -114,10 +119,10 @@ _GROUNDING_RULES = (
     "you need, say so — don't guess or use outside knowledge."
 )
 
-# The two registers a question can be in, and the reason this file has prompts at all rather than
-# one prompt. A reader asking "how does X work" wants the docs explained; a reader asking for a
-# spec wants a doc drafted. The same instructions can't serve both — asked to draft, the discovery
-# prompt answers *about* the docs instead of writing one.
+# The two registers a question can be in. A reader asking "how does X work" wants the docs
+# explained; a reader asking for a spec wants a doc drafted. The same machinery can't serve both —
+# asked to draft, the discovery prompt answers *about* the docs instead of writing one — so a spec
+# request leaves this file for `spec_draft.py` altogether.
 INTENT_EXPLORE = "explore"
 INTENT_SPEC = "spec"
 INTENTS = (INTENT_EXPLORE, INTENT_SPEC)
@@ -130,45 +135,28 @@ _MERMAID_TYPES = (
     "`classDiagram`, `pie`, `xychart-beta` (bar and line charts)"
 )
 
+# Where the short answer ends and "Read more" begins. An HTML comment because it is invisible if it
+# ever reaches a reader unsplit — copied markdown, a replayed transcript — where any visible marker
+# would be litter.
+MORE_MARKER = "<!-- more -->"
+
+# Short first, because the panel shows only that until the reader asks for more. The short answer
+# has to *be* the answer — the number, the name, the yes or no, and where it comes from — not a
+# teaser for the details; a reader who stops there must not have been misled by stopping.
+EXPLORE_FORMAT = (
+    "Write markdown in two parts. First, the short answer: at most three sentences (about 60 "
+    "words) that answer the question on their own — the fact, name, number or yes/no the reader "
+    "needs, and the doc it comes from. No headings, tables, lists or diagrams in it. Then a line "
+    f"containing only `{MORE_MARKER}`, then the details: use a table when you're comparing cases, "
+    "statuses or options, and short headings when the answer has parts. If the short answer is the "
+    "whole answer, stop after it and leave out the marker."
+)
+
 _EXPLORE_INSTRUCTIONS = (
-    "Answer the reader's question. Write markdown: lead with the direct answer in one or two "
-    "sentences, then the detail. Use a table when you're comparing cases, statuses or options, "
-    "and short headings when the answer has parts. Include at most ONE fenced ```mermaid block, "
-    "and only when a flow, a relationship or a quantity is the actual point of the answer — "
-    f"supported types are {_MERMAID_TYPES}. Never emit raw HTML."
+    f"Answer the reader's question. {EXPLORE_FORMAT} Include at most ONE fenced ```mermaid block, "
+    "in the details, and only when a flow, a relationship or a quantity is the actual point of the "
+    f"answer — supported types are {_MERMAID_TYPES}. Never emit raw HTML."
 )
-
-# The doc shape here is `generator.DOC_STYLE_INSTRUCTIONS`'s, deliberately: a draft a reader asks
-# for in the panel and a doc specky generates from a commit should be the same kind of document,
-# or the draft is a second convention nobody asked for.
-_SPEC_INSTRUCTIONS = (
-    "The reader is drafting documentation, not asking what the docs already say. Write the draft, "
-    "in markdown, in this project's own doc convention:\n"
-    "- First line: the path it should live at, as `specs/<domain>/<topic>.md` — kebab-case topic, "
-    "an existing domain where one fits.\n"
-    "- If any doc in the context already covers this subject, say so first and name it: a second "
-    "doc on the same subject is a defect, and updating that one is the right move.\n"
-    "- Then the doc itself: `# Domain — Topic`, `## What It Does` (2-3 plain-language sentences), "
-    "`## How It Works` (numbered steps, one sentence each, bold label per step), `## Outcomes` "
-    "(a table of the distinct outcomes or statuses), `## Acceptance Tests` (a Given/When/Then "
-    "table).\n"
-    "- If the subject is a workflow rather than a feature — a multi-step process with a sequence "
-    "and an outcome per step — `## How It Works` carries the happy path and nothing else, a "
-    "```mermaid block of those same steps goes directly under them, and a `## Edge Cases` table "
-    "(Situation | What happens | Why) goes before the Acceptance Tests, which then cover every "
-    "row of it.\n"
-    "- Anything the context doesn't settle is written as `TBD — not in the docs` in place, never "
-    "invented and never quietly left out.\n"
-    "- A diagram is welcome where a flow needs one: at most ONE fenced ```mermaid block, "
-    f"supported types are {_MERMAID_TYPES}. Never emit raw HTML.\n"
-    "Style: plain language, compact, WHAT and WHY over implementation detail, tables for "
-    "structured information, readable by a non-technical stakeholder."
-)
-
-_INTENT_INSTRUCTIONS = {
-    INTENT_EXPLORE: _EXPLORE_INSTRUCTIONS,
-    INTENT_SPEC: _SPEC_INSTRUCTIONS,
-}
 
 # Spec intent is decided on phrases, not words. Every single word that suggests drafting is also
 # ordinary discovery vocabulary — "where is the retry added", "what does this feature do", "which
@@ -303,38 +291,10 @@ def _doc_bodies(conn, paths: Sequence[str]) -> dict[str, str]:
     return {path: content for path, content in rows}
 
 
-# The words a question is made of rather than the words it is about. Stripped before ranking,
-# and only here: `fts_match_query()` is shared with `specky search`, where the reader typed the
-# terms deliberately. A question doesn't work that way — "how is payment implemented" ORs to five
-# terms, three of which are in every doc in the repo, so bm25 scored 30 docs within a rounding
-# error of each other and the top five came back as MODULES.md, GLOSSARY.md and PRODUCT.md while
-# the doc named payment-settlement-and-renewal.md ranked ninth.
-_QUESTION_WORDS = frozenset(
-    """a about an and any are as at be been but by can did do does for from get had has have how i
-    if in into is it its me my no not of on or our should so than that the their them then there
-    these they this to use used was we what when where which who why will with would you
-    your""".split()
-)
-# Column order in documents_fts is (path, domain, title, content, tags). A term in the file name or
-# the heading is the reader having named the topic; the same term buried in a long body is often
-# just a cross-reference. Weighting the short columns up is what pulls a domain's own doc above the
-# index pages that mention every term in the repo once.
-_DOC_RANK = "bm25(documents_fts, 8.0, 2.0, 8.0, 1.0, 4.0)"
-
-
-def _topic_match(question: str) -> str | None:
-    """The FTS5 expression for a question: the words naming a topic, not the ones asking about it.
-    Falls back to the whole question when stripping leaves nothing ("how does this work")."""
-    topical = " ".join(
-        word for word in re.findall(r"\w+", question) if word.lower() not in _QUESTION_WORDS
-    )
-    return fts_match_query(topical) or fts_match_query(question)
-
-
 def retrieve_context(
     repo_root: Path, question: str, scope: dict | None = None, limit: int = DOC_HITS
 ) -> list[dict]:
-    match = _topic_match(question)
+    match = topic_match(question)
     if match is None:
         return []
 
@@ -342,7 +302,7 @@ def retrieve_context(
     try:
         doc_rows = conn.execute(
             "SELECT path, domain, title, snippet(documents_fts, 3, '', '', '…', 40) "
-            f"FROM documents_fts WHERE documents_fts MATCH ? ORDER BY {_DOC_RANK} LIMIT 50",
+            f"FROM documents_fts WHERE documents_fts MATCH ? ORDER BY {DOC_RANK} LIMIT 50",
             (match,),
         ).fetchall()
         commit_rows = conn.execute(
@@ -396,12 +356,7 @@ def _context_block(entry: dict) -> str:
     return f"[{entry['source']}] {entry['label']}{note}\n{entry['text']}"
 
 
-def _build_prompt(
-    question: str,
-    context: list[dict],
-    history: Sequence[Turn] = (),
-    intent: str = INTENT_EXPLORE,
-) -> str:
+def _build_prompt(question: str, context: list[dict], history: Sequence[Turn] = ()) -> str:
     blocks = (
         "\n\n".join(_context_block(c) for c in context)
         if context
@@ -417,44 +372,81 @@ def _build_prompt(
             "\nConversation so far — use it only to understand what the question refers to; the "
             f"answer must still come from the context below:\n{turns}\n"
         )
-    instructions = _INTENT_INSTRUCTIONS[intent]
     return (
-        f"{_GROUNDING_RULES}\n\n{instructions}\n{prior}\nContext:\n{blocks}\n\n"
+        f"{_GROUNDING_RULES}\n\n{_EXPLORE_INSTRUCTIONS}\n{prior}\nContext:\n{blocks}\n\n"
         f"Question: {question}\nAnswer:"
     )
+
+
+def split_answer(markdown: str) -> tuple[str, str]:
+    """An explore answer as `(short, details)` — details `""` when the short answer is all of it.
+
+    The model is asked to put `MORE_MARKER` between the two, and usually does. When it doesn't, the
+    first paragraph is the short answer: a model that ignored the format still led with *something*,
+    and the first block is it. Never an empty short answer — a reply that opens with a heading or a
+    table is shown whole rather than hidden behind "Read more" with nothing in front of it.
+    """
+    text = markdown.strip()
+    if MORE_MARKER in text:
+        short, details = (part.strip() for part in text.split(MORE_MARKER, 1))
+        details = details.replace(MORE_MARKER, "").strip()
+        return (short, details) if short else (details, "")
+    first, _, rest = text.partition("\n\n")
+    if not rest.strip() or first.lstrip().startswith(("#", "|", "```", "- ", "* ", "1.")):
+        return text, ""
+    return first.strip(), rest.strip()
 
 
 def answer_question(
     repo_root: Path, question: str, history: Sequence[Turn] = (), intent: str | None = None
 ) -> dict:
-    """One question answered from the index, as both markdown and panel-ready HTML.
+    """One question from the panel: explored from the index, or the start of a draft.
 
-    `intent` pins the register (the panel's chips); None classifies the question. `answer` is the
-    markdown the model wrote — it's what the conversation store replays and what the panel's
-    "Copy markdown" hands the reader — and `answer_html` is that same answer rendered.
+    `intent` pins the register (the panel's chips); None classifies the question. A spec request is
+    handed to `spec_draft.start`, whose response carries the draft's state instead of an answer.
+
+    An explore answer comes back as `answer`, the markdown the model wrote minus the "Read more"
+    marker — what the conversation store replays and what "Copy markdown" hands the reader — plus
+    `answer_html` (the short answer, rendered) and `details_html` (the rest, rendered, or `""`).
     """
     question, scope = _parse_scope(question)
     intent = intent or classify_intent(question)
+    provider = load_provider_from_toml(repo_root / "specky.toml", "serve")
+    if intent == INTENT_SPEC:
+        return spec_draft.start(repo_root, provider, question, mention=scope)
+
     context = retrieve_context(repo_root, question, scope=scope)
     if not context and history:
         # A follow-up is often too short to retrieve on at all ("why?", "and the other one?"). The
         # previous question holds the words it left out, so ask the index again with those.
         context = retrieve_context(repo_root, f"{history[-1].question} {question}", scope=scope)
-    provider = load_provider_from_toml(repo_root / "specky.toml", "serve")
-    answer = provider.generate(
-        _build_prompt(question, context, history, intent), task="chat"
-    ).strip()
+    answer = provider.generate(_build_prompt(question, context, history), task="chat").strip()
+    short, details = split_answer(answer)
     # Imported here, not at module scope: html_render imports DEFAULT_PORT from this module, so a
     # top-level import of anything that reaches it would close a cycle (same reason `_search`
     # imports the indexer inside itself).
     from specky.answer_render import render_answer
 
     return {
-        "answer": answer,
-        "answer_html": render_answer(repo_root, answer),
+        "answer": f"{short}\n\n{details}".strip(),
+        "answer_html": render_answer(repo_root, short),
+        "details_html": render_answer(repo_root, details) if details else "",
         "sources": sorted({c["source"] for c in context}),
         "intent": intent,
     }
+
+
+def draft_step(repo_root: Path, body: dict) -> dict:
+    """`POST /draft` — one step of a draft the reader is part-way through (see spec_draft.act)."""
+    provider = load_provider_from_toml(repo_root / "specky.toml", "serve")
+    return spec_draft.act(
+        repo_root,
+        provider,
+        str(body.get("action", "")),
+        body.get("state"),
+        reply=body.get("reply"),
+        option=body.get("option"),
+    )
 
 
 @dataclass(frozen=True)
@@ -580,7 +572,7 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             if not self._api_allowed():
                 return
             path = urlparse(self.path).path
-            if path not in ("/chat", "/chat/reset"):
+            if path not in ("/chat", "/chat/reset", "/draft"):
                 self._json(404, {"error": "not found"})
                 return
             length = int(self.headers.get("Content-Length", 0))
@@ -592,6 +584,10 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
                     conversations.forget(session)
                     self._json(200, {"reset": True})
                     return
+                if path == "/draft":
+                    # No session here: a draft's state travels in the request itself.
+                    self._json(200, draft_step(repo_root, body))
+                    return
                 question = body.get("question", "").strip()
                 if not question:
                     raise ValueError("question is required")
@@ -601,7 +597,9 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
                     history=conversations.history(session),
                     intent=coerce_intent(body.get("intent")),
                 )
-                conversations.record(session, question, result["answer"])
+                # A draft's first response has no answer to replay; its state lives in the tab.
+                if "answer" in result:
+                    conversations.record(session, question, result["answer"])
                 self._json(200, result)
             except Exception as exc:
                 self._json(400, {"error": str(exc)})
@@ -669,7 +667,7 @@ def serve(repo_root: Path, port: int | None = None, host: str | None = None) -> 
     # flush: stdout is block-buffered when it isn't a terminal, and these two lines have to be
     # visible *before* the server starts blocking in serve_forever — especially the warning.
     print(
-        f"specky serve: viewer on {url}/ , chat endpoint on {url}/chat (Ctrl+C to stop)", flush=True
+        f"specky serve: viewer on {url}/ , Spec Assistant on {url}/chat (Ctrl+C to stop)", flush=True
     )
     if not _is_loopback(config.host):
         print(

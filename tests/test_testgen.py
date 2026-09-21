@@ -12,7 +12,7 @@ import ast
 
 import pytest
 
-from specky import cli
+from specky import cli, testgen
 from specky.indexer import run_index
 from specky.testgen import (
     Scenario,
@@ -297,3 +297,22 @@ def test_the_cli_wires_force_through(tmp_repo, write_doc, monkeypatch, capsys):
     assert "pass --force" in capsys.readouterr().out
     cli._tests(argparse.Namespace(force=True, emit="pytest"))
     assert "wrote tests/spec/test_billing_refund_flow.py" in capsys.readouterr().out
+
+
+def test_tables_is_the_one_parser_other_modules_read_tables_with():
+    """Public since doc_tools.doc_behaviours reads Outcomes and Edge Cases with it too."""
+    lines = [
+        "| Case | Result |",
+        "|---|---|",
+        r"| a \| b | ok |",
+        "",
+        "not a table",
+        "| Given | When | Then |",
+        "|---|---|---|",
+        "| g | w | t |",
+    ]
+    assert testgen.tables(lines) == [
+        (["Case", "Result"], [["a | b", "ok"]]),
+        (["Given", "When", "Then"], [["g", "w", "t"]]),
+    ]
+    assert testgen.cells("| x | y |") == ["x", "y"]

@@ -3,10 +3,10 @@ type: feature
 tags: [chat, search, documentation]
 ---
 
-# Chat — Ask Widget Scoping
+# Chat — Spec Assistant Scoping
 
 ## What It Does
-When asking questions in the chat widget, you can now type `#` to narrow your search to a specific module (documentation domain) or feature/workflow. The chat searches within that scope first, falling back to full search if nothing matches. Answers can also include interactive HTML content rendered safely in an embedded preview.
+When asking the Spec Assistant a question or describing a change to draft, you can type `#` to narrow your search to a specific module (documentation domain) or feature/workflow. An explore question searches within that scope first, falling back to full search if nothing matches; a draft request places its change there — `#feature:` names the exact doc it updates, so the draft skips asking where it belongs. Answers can also include interactive HTML content rendered safely in an embedded preview.
 
 ## How It Works
 1. **Type `#` in the chat input** — a dropdown appears listing available modules and features.

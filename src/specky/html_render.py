@@ -126,26 +126,26 @@ _RAIL_TEMPLATE = _env.from_string(
     "</div>"
 )
 
-# The Ask panel is a column of the page, not a popover floating over it: an answer grounded in whole
-# docs (tables, a diagram, a drafted spec) needs a doc's worth of room, and a 340px bubble was
-# reading a document through a keyhole. It's the third flex child of `.body-row`, so opening it
+# The Spec Assistant panel is a column of the page, not a popover floating over it: an answer
+# grounded in whole docs (tables, a diagram, a drafted spec) needs a doc's worth of room, and a 340px
+# bubble was reading a document through a keyhole. It's the third flex child of `.body-row`, so opening it
 # reflows the content pane rather than covering it — nav stays reachable mid-conversation, and the
 # reader can follow a cited source without losing the panel.
-_ASK_PANEL = (
-    '<aside id="ask-panel" class="ask-panel" aria-label="Ask about these docs">'
-    '<div id="ask-resize" class="ask-resize" role="separator" aria-orientation="vertical" '
-    'aria-label="Resize panel" tabindex="0"></div>'
-    '<div class="ask-body">'
+_ASSISTANT_PANEL = (
+    '<aside id="assistant-panel" class="assistant-panel" aria-label="Spec Assistant">'
+    '<div id="assistant-resize" class="assistant-resize" role="separator" '
+    'aria-orientation="vertical" aria-label="Resize panel" tabindex="0"></div>'
+    '<div class="assistant-body">'
     '<div class="chat-header">'
     '<span class="chat-title"><svg class="icon" aria-hidden="true">'
-    '<use href="#icon-chat"></use></svg>Ask about these docs</span>'
+    '<use href="#icon-chat"></use></svg>Spec Assistant</span>'
     '<span class="chat-header-right"><span id="chat-status"></span>'
     '<button id="chat-reset" class="chat-reset" type="button">New</button>'
-    '<button id="ask-close" class="ask-close" type="button" aria-label="Close panel">'
+    '<button id="assistant-close" class="assistant-close" type="button" aria-label="Close panel">'
     "&#215;</button></span></div>"
     # Auto is the default and the honest one: the server classifies the question. The other two
     # exist for when it reads a question the other way round (see chat_server.classify_intent).
-    '<div class="ask-intent" role="group" aria-label="Answer style">'
+    '<div class="assistant-intent" role="group" aria-label="Answer style">'
     '<button class="chip intent-chip" type="button" data-intent="auto" data-active="true">'
     "Auto</button>"
     '<button class="chip intent-chip" type="button" data-intent="explore" data-active="false">'
@@ -153,20 +153,24 @@ _ASK_PANEL = (
     '<button class="chip intent-chip" type="button" data-intent="spec" data-active="false">'
     "Draft spec</button></div>"
     '<div id="chat-log" class="chat-log"></div>'
+    # Shown while a draft is waiting on the reader: what they type next answers its question or
+    # corrects its current step, rather than starting a new conversation (see DRAFT_JS).
+    '<div id="draft-reply" class="draft-reply" hidden><span>Replying to the draft</span>'
+    '<button id="draft-cancel" class="draft-cancel" type="button">Cancel draft</button></div>'
     '<form id="chat-form" class="chat-form">'
     '<div class="chat-input-wrap">'
     '<div id="mention-dropdown" class="mention-dropdown"></div>'
-    '<input id="chat-input" placeholder="Ask a question… (# to scope to a module or feature)" '
-    'autocomplete="off">'
+    '<input id="chat-input" placeholder="Ask about the docs, or describe a change to draft… '
+    '(# to scope)" autocomplete="off">'
     "</div>"
     '<button type="submit" aria-label="Send">'
     '<svg class="icon" aria-hidden="true"><use href="#icon-send"></use></svg></button>'
     "</form></div></aside>"
 )
 
-_ASK_TOGGLE = (
+_ASSISTANT_TOGGLE = (
     '<button id="chat-toggle" class="chat-toggle" type="button">'
-    '<svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>Ask</button>'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-chat"></use></svg>Spec Assistant</button>'
 )
 
 _PAGE_TEMPLATE = _env.from_string(
@@ -187,9 +191,9 @@ _PAGE_TEMPLATE = _env.from_string(
     '<div class="body-row">{{ rail | safe }}'
     '<div class="content-pane"><div class="doc"{% if doc_type %} data-type="{{ doc_type }}"'
     '{% endif %}>{{ body | safe }}</div></div>'
-    + _ASK_PANEL
+    + _ASSISTANT_PANEL
     + "</div></div>"
-    + _ASK_TOGGLE
+    + _ASSISTANT_TOGGLE
     # site-data before app: app.js reads SPECKY_INDEX at load. Plain (non-module, non-defer)
     # scripts run in document order, on file:// as well as over http.
     + '<script src="assets/site-data.js"></script>'
@@ -532,30 +536,30 @@ a { color: inherit; }
   padding: 10px 18px; font-family: var(--font-sans); font-size: 0.8125rem; font-weight: 600;
   box-shadow: var(--shadow-md); cursor: pointer;
 }
-/* --- the Ask dock: a column of .body-row, so opening it reflows the content pane instead of
+/* --- the Spec Assistant dock: a column of .body-row, so opening it reflows the content pane instead of
    covering it. Width is a custom property the drag handle writes (see CHAT_JS), and the
    titlebar clearance mirrors .sidebar's — both scroll under the fixed bar. */
-.ask-panel {
+.assistant-panel {
   /* min-width: 0 — a flex item's automatic minimum is its content, and one wide diagram or a long
      code line would otherwise push the dock past the width the reader dragged it to. */
-  position: relative; flex: 0 0 var(--ask-width, 440px); min-width: 0; height: 100vh; z-index: 20;
+  position: relative; flex: 0 0 var(--assistant-width, 440px); min-width: 0; height: 100vh; z-index: 20;
   background: var(--glass-bg); backdrop-filter: blur(24px) saturate(180%);
   -webkit-backdrop-filter: blur(24px) saturate(180%); border-left: 1px solid var(--glass-border);
   display: none;
 }
-body.ask-open .ask-panel { display: block; }
-body.ask-open .chat-toggle { display: none; }
-.ask-body { display: flex; flex-direction: column; height: 100%; padding-top: 52px; }
-.ask-resize {
+body.assistant-open .assistant-panel { display: block; }
+body.assistant-open .chat-toggle { display: none; }
+.assistant-body { display: flex; flex-direction: column; height: 100%; padding-top: 52px; }
+.assistant-resize {
   position: absolute; top: 0; bottom: 0; left: -3px; width: 7px; z-index: 2; cursor: col-resize;
 }
-.ask-resize:hover, .ask-resize:focus-visible { background: var(--accent-soft); }
-.ask-close {
+.assistant-resize:hover, .assistant-resize:focus-visible { background: var(--accent-soft); }
+.assistant-close {
   border: none; background: none; color: var(--text-secondary); font-size: 1.125rem; line-height: 1;
   padding: 0 2px; cursor: pointer;
 }
-.ask-close:hover { color: var(--text-primary); }
-.ask-intent { display: flex; gap: 6px; padding: 10px 16px 0; }
+.assistant-close:hover { color: var(--text-primary); }
+.assistant-intent { display: flex; gap: 6px; padding: 10px 16px 0; }
 .intent-chip[data-active="true"] { background: var(--accent-soft); color: var(--accent); }
 .chat-header {
   padding: 12px 16px; font-weight: 600; font-size: 0.8125rem; border-bottom: 1px solid var(--border);
@@ -566,9 +570,9 @@ body.ask-open .chat-toggle { display: none; }
 /* Narrow windows have no width to give: the dock overlays the content instead of crushing the
    doc column to an unreadable ribbon. */
 @media (max-width: 1100px) {
-  .ask-panel {
+  .assistant-panel {
     position: fixed; top: 0; right: 0; bottom: 0; z-index: 26; flex: none;
-    width: min(var(--ask-width, 440px), 100vw); box-shadow: var(--shadow-md);
+    width: min(var(--assistant-width, 440px), 100vw); box-shadow: var(--shadow-md);
   }
 }
 #chat-status { font-weight: 400; color: var(--text-secondary); font-size: 0.6875rem; }
@@ -675,6 +679,57 @@ body.ask-open .chat-toggle { display: none; }
 .chat-source-link { color: var(--accent); text-decoration: none; }
 .chat-source-link:hover { text-decoration: underline; }
 .chat-note { align-self: stretch; color: var(--text-tertiary); font-size: 0.6875rem; font-style: italic; }
+/* --- Explore: the short answer shows, the details wait behind "Read more". */
+.chat-details[hidden] { display: none; }
+.chat-details { border-top: 1px dashed var(--border); margin-top: 8px; padding-top: 4px; }
+.chat-more {
+  align-self: flex-start; border: none; background: none; color: var(--accent); font: inherit;
+  font-size: 0.75rem; font-weight: 600; padding: 0; cursor: pointer;
+}
+.chat-more:hover { text-decoration: underline; }
+/* --- a draft step: built from structured data in the browser (DRAFT_JS), styled like an answer. */
+.draft-card { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; }
+.draft-steps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; font-size: 0.625rem; }
+.draft-step {
+  border-radius: 999px; padding: 2px 8px; background: var(--surface-tertiary);
+  color: var(--text-tertiary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+}
+.draft-step[data-state="done"] { color: var(--text-secondary); }
+.draft-step[data-state="active"] { background: var(--feature-bg); color: var(--feature); }
+.draft-target { font-size: 0.75rem; color: var(--text-secondary); margin: 0 0 6px; }
+.draft-target code { font-size: 0.6875rem; }
+.draft-target .draft-kind {
+  border-radius: 999px; padding: 1px 6px; margin-left: 4px; font-size: 0.625rem; font-weight: 600;
+  background: var(--accent-soft); color: var(--accent);
+}
+.chat-rich .draft-card-title { margin: 10px 0 4px; font-size: 0.8125rem; }
+.draft-options, .draft-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.draft-action {
+  border: 1px solid var(--border); background: none; color: var(--text-primary); font: inherit;
+  font-size: 0.75rem; padding: 4px 10px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.draft-action.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.draft-action:disabled { opacity: 0.45; cursor: default; }
+.draft-hint { color: var(--text-tertiary); font-size: 0.6875rem; margin: 6px 0 0; }
+.draft-warning {
+  color: var(--danger); background: var(--danger-bg); border-radius: var(--radius-sm);
+  padding: 6px 8px; font-size: 0.75rem; margin: 6px 0;
+}
+.draft-diff[hidden] { display: none; }
+.draft-diff { white-space: pre; max-height: 320px; overflow: auto; }
+.draft-kind-changed, .draft-kind-modify { color: var(--feature); }
+.draft-kind-new, .draft-kind-add { color: var(--accent); }
+.draft-kind-removed, .draft-kind-remove { color: var(--danger); }
+.draft-reply {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 6px 16px; border-top: 1px solid var(--border); font-size: 0.6875rem;
+  color: var(--feature); background: var(--feature-bg);
+}
+.draft-reply[hidden] { display: none; }
+.draft-cancel {
+  border: none; background: none; color: var(--text-secondary); font: inherit; cursor: pointer;
+  text-decoration: underline;
+}
 """
 
 # Finding the companion server from wherever this page was opened. `specky serve` serves this page
@@ -896,9 +951,9 @@ if (currentLink) {
 # clicks a cited source shouldn't find the panel gone and 440px back to its default.
 CHAT_JS = """
 const chatToggle = document.getElementById('chat-toggle');
-const askPanel = document.getElementById('ask-panel');
-const askClose = document.getElementById('ask-close');
-const askResize = document.getElementById('ask-resize');
+const assistantPanel = document.getElementById('assistant-panel');
+const assistantClose = document.getElementById('assistant-close');
+const assistantResize = document.getElementById('assistant-resize');
 const chatLog = document.getElementById('chat-log');
 const chatForm = document.getElementById('chat-form');
 const chatInput = document.getElementById('chat-input');
@@ -907,8 +962,9 @@ const chatReset = document.getElementById('chat-reset');
 const intentChips = [...document.querySelectorAll('.intent-chip')];
 const CHAT_LOG_MAX = 24;
 const CHAT_PERSISTED = new Set(['user', 'assistant', 'sources']);
-const ASK_WIDTH_MIN = 320;
-const ASK_WIDTH_MAX = 720;
+const ASSISTANT_WIDTH_MIN = 320;
+const ASSISTANT_WIDTH_MAX = 720;
+const ASSISTANT_OFFLINE = 'The Spec Assistant is not reachable. Run `specky serve` in this repo, then try again.';
 
 // A file:// page may refuse storage outright, and a sandboxed iframe always does. Failing that
 // probe costs the reader one thing: a follow-up asked after navigating starts a fresh conversation.
@@ -938,32 +994,32 @@ function readChatLog() {
   }
 }
 
-function setAskOpen(open) {
-  document.body.classList.toggle('ask-open', open);
-  chatStore?.setItem('specky-ask-open', open ? '1' : '0');
+function setAssistantOpen(open) {
+  document.body.classList.toggle('assistant-open', open);
+  chatStore?.setItem('specky-assistant-open', open ? '1' : '0');
   if (open) chatInput?.focus();
 }
 
-chatToggle?.addEventListener('click', () => setAskOpen(true));
-askClose?.addEventListener('click', () => setAskOpen(false));
-if (chatStore?.getItem('specky-ask-open') === '1') setAskOpen(true);
+chatToggle?.addEventListener('click', () => setAssistantOpen(true));
+assistantClose?.addEventListener('click', () => setAssistantOpen(false));
+if (chatStore?.getItem('specky-assistant-open') === '1') setAssistantOpen(true);
 
 // --- panel width: one custom property on <html>, dragged and remembered ------------------
-function setAskWidth(px) {
-  const width = Math.min(Math.max(Math.round(px), ASK_WIDTH_MIN), ASK_WIDTH_MAX);
-  document.documentElement.style.setProperty('--ask-width', `${width}px`);
-  chatStore?.setItem('specky-ask-width', String(width));
+function setAssistantWidth(px) {
+  const width = Math.min(Math.max(Math.round(px), ASSISTANT_WIDTH_MIN), ASSISTANT_WIDTH_MAX);
+  document.documentElement.style.setProperty('--assistant-width', `${width}px`);
+  chatStore?.setItem('specky-assistant-width', String(width));
 }
 
-const storedAskWidth = Number(chatStore?.getItem('specky-ask-width'));
-if (storedAskWidth) setAskWidth(storedAskWidth);
+const storedAssistantWidth = Number(chatStore?.getItem('specky-assistant-width'));
+if (storedAssistantWidth) setAssistantWidth(storedAssistantWidth);
 
-askResize?.addEventListener('pointerdown', (event) => {
+assistantResize?.addEventListener('pointerdown', (event) => {
   event.preventDefault();
   // Capture keeps a fast drag that outruns the 7px handle on target; window listeners are what
   // actually move the panel, so a browser that refuses the capture still resizes.
-  try { askResize.setPointerCapture(event.pointerId); } catch (err) { /* not capturable */ }
-  const onMove = (move) => setAskWidth(window.innerWidth - move.clientX);
+  try { assistantResize.setPointerCapture(event.pointerId); } catch (err) { /* not capturable */ }
+  const onMove = (move) => setAssistantWidth(window.innerWidth - move.clientX);
   const stop = () => {
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', stop);
@@ -974,26 +1030,26 @@ askResize?.addEventListener('pointerdown', (event) => {
   window.addEventListener('pointercancel', stop);
 });
 
-askResize?.addEventListener('keydown', (event) => {
+assistantResize?.addEventListener('keydown', (event) => {
   const step = event.key === 'ArrowLeft' ? 24 : event.key === 'ArrowRight' ? -24 : 0;
   if (!step) return;
   event.preventDefault();
-  setAskWidth(askPanel.getBoundingClientRect().width + step);
+  setAssistantWidth(assistantPanel.getBoundingClientRect().width + step);
 });
 
 // --- intent: Auto lets the server classify the question; the other two pin it -------------
-let askIntent = chatStore?.getItem('specky-ask-intent') || 'auto';
+let assistantIntent = chatStore?.getItem('specky-assistant-intent') || 'auto';
 
-function setAskIntent(value) {
-  askIntent = value;
-  chatStore?.setItem('specky-ask-intent', value);
+function setAssistantIntent(value) {
+  assistantIntent = value;
+  chatStore?.setItem('specky-assistant-intent', value);
   for (const chip of intentChips) {
     chip.dataset.active = chip.dataset.intent === value ? 'true' : 'false';
   }
 }
-setAskIntent(askIntent);
+setAssistantIntent(assistantIntent);
 for (const chip of intentChips) {
-  chip.addEventListener('click', () => setAskIntent(chip.dataset.intent));
+  chip.addEventListener('click', () => setAssistantIntent(chip.dataset.intent));
 }
 
 function persistChatEntry(role, text) {
@@ -1054,6 +1110,21 @@ function copyMarkdownButton(markdown) {
   return button;
 }
 
+function appendSources(actions, sources) {
+  if (!sources.length) return;
+  const label = document.createElement('span');
+  label.textContent = 'Sources:';
+  actions.appendChild(label);
+  sources.forEach((source, i) => {
+    actions.appendChild(sourceLink(source));
+    if (i < sources.length - 1) {
+      const comma = document.createElement('span');
+      comma.textContent = ',';
+      actions.appendChild(comma);
+    }
+  });
+}
+
 // The answer HTML was rendered and sanitized by the server (see answer_render.py), which is the
 // only reason this assigns innerHTML at all — the markdown behind it is the model's, and nothing
 // on this side of the wire is in a position to vet markup.
@@ -1064,6 +1135,28 @@ function addChatAnswer(data) {
   addDiagramButtons(div);
   chatLog.appendChild(div);
 
+  // The short answer stands on its own (chat_server.split_answer); the details wait behind a toggle,
+  // so a reader who already has what they came for isn't made to scroll past the rest of it.
+  if (data.details_html) {
+    const details = document.createElement('div');
+    details.className = 'chat-details';
+    details.hidden = true;
+    details.innerHTML = data.details_html;
+    addDiagramButtons(details);
+    div.appendChild(details);
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'chat-more';
+    more.textContent = 'Read more';
+    more.setAttribute('aria-expanded', 'false');
+    more.addEventListener('click', () => {
+      details.hidden = !details.hidden;
+      more.textContent = details.hidden ? 'Read more' : 'Show less';
+      more.setAttribute('aria-expanded', details.hidden ? 'false' : 'true');
+    });
+    chatLog.appendChild(more);
+  }
+
   const actions = document.createElement('div');
   actions.className = 'chat-actions';
   const badge = document.createElement('span');
@@ -1073,19 +1166,7 @@ function addChatAnswer(data) {
   actions.appendChild(badge);
   actions.appendChild(copyMarkdownButton(data.answer || ''));
   const sources = data.sources || [];
-  if (sources.length) {
-    const label = document.createElement('span');
-    label.textContent = 'Sources:';
-    actions.appendChild(label);
-    sources.forEach((source, i) => {
-      actions.appendChild(sourceLink(source));
-      if (i < sources.length - 1) {
-        const comma = document.createElement('span');
-        comma.textContent = ',';
-        actions.appendChild(comma);
-      }
-    });
-  }
+  appendSources(actions, sources);
   chatLog.appendChild(actions);
   chatLog.scrollTop = chatLog.scrollHeight;
 
@@ -1100,9 +1181,15 @@ chatForm?.addEventListener('submit', async (event) => {
   mentionDropdown.innerHTML = '';
   addChatMessage('user', question);
   chatInput.value = '';
-  chatStatus.textContent = 'Thinking…';
+  // A draft waiting on the reader takes what they type as its answer or correction — unless they
+  // pinned Explore, which is how to ask the docs something mid-draft without derailing it.
+  if (draftWaiting()) {
+    await sendDraft('reply', { reply: question });
+    return;
+  }
+  chatStatus.textContent = assistantIntent === 'spec' ? DRAFT_STATUS.scope : 'Thinking…';
   const payload = { question, session: chatSession };
-  if (askIntent !== 'auto') payload.intent = askIntent;
+  if (assistantIntent !== 'auto') payload.intent = assistantIntent;
   try {
     const res = await speckyFetch('/chat', {
       method: 'POST',
@@ -1115,10 +1202,14 @@ chatForm?.addEventListener('submit', async (event) => {
       addChatMessage('error', data.error || 'Something went wrong.');
       return;
     }
+    if (data.draft) {
+      showDraft(data);
+      return;
+    }
     addChatAnswer(data);
   } catch (err) {
     chatStatus.textContent = '';
-    addChatMessage('error', 'Chat server not reachable. Run `specky serve` in this repo, then try again.');
+    addChatMessage('error', ASSISTANT_OFFLINE);
   }
 });
 
@@ -1128,6 +1219,7 @@ chatReset?.addEventListener('click', async () => {
   const previous = chatSession;
   chatLog.innerHTML = '';
   chatStore?.removeItem('specky-chat-log');
+  clearDraft();
   chatSession = chatNewSessionId();
   chatStore?.setItem('specky-chat-session', chatSession);
   chatInput.focus();
@@ -1162,6 +1254,306 @@ if (chatLog) {
     chatLog.scrollTop = chatLog.scrollHeight;
   }
 }
+"""
+
+# The draft-spec workflow's half of the panel (chat_server's `/draft`, spec_draft.py on the server).
+# A draft's state comes back with every response and lives in sessionStorage as `specky-draft`, so it
+# survives a page navigation and a `specky serve` restart alike, and is sent back with the next step.
+#
+# Every step but the last is structured data — a question and its options, the impact's two tables,
+# the acceptance rows — and is built here with DOM calls and `textContent`, never `innerHTML`. That
+# is what lets the current step be rebuilt from storage on the next page (storage is editable by
+# anything on this origin; see the replay note in CHAT_JS). Only the final draft is markup, rendered
+# and sanitized by the server, and it is never replayed from storage.
+DRAFT_JS = """
+const draftReply = document.getElementById('draft-reply');
+const draftCancel = document.getElementById('draft-cancel');
+const DRAFT_STEPS = [['scope', 'Scope'], ['impact', 'Impact'], ['acceptance', 'Tests'], ['final', 'Draft']];
+const DRAFT_STATUS = {
+  scope: 'Finding where this belongs…',
+  impact: 'Working out what changes…',
+  acceptance: 'Writing acceptance tests…',
+  final: 'Writing the draft…',
+};
+const CHAT_PLACEHOLDER = chatInput?.placeholder || '';
+
+function readDraft() {
+  try {
+    const state = JSON.parse(chatStore?.getItem('specky-draft') || 'null');
+    return state && typeof state === 'object' && typeof state.request === 'string' ? state : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+let draftState = readDraft();
+let draftBusy = false;
+
+function draftWaiting() {
+  return Boolean(draftState) && assistantIntent !== 'explore';
+}
+
+function syncDraftReply() {
+  const waiting = draftWaiting();
+  if (draftReply) draftReply.hidden = !waiting;
+  if (!chatInput) return;
+  if (!waiting) chatInput.placeholder = CHAT_PLACEHOLDER;
+  else if (draftState.stage === 'question') chatInput.placeholder = 'Type your answer, or pick an option above…';
+  else chatInput.placeholder = 'Type a correction and this step runs again…';
+}
+
+function saveDraft(state) {
+  draftState = state;
+  if (state) chatStore?.setItem('specky-draft', JSON.stringify(state));
+  else chatStore?.removeItem('specky-draft');
+  syncDraftReply();
+}
+
+function clearDraft() {
+  saveDraft(null);
+  retireDraftCards();
+}
+
+// Only the newest card's buttons act: an older card's "Approve" would send a state the draft has
+// already moved past.
+function retireDraftCards() {
+  for (const button of chatLog?.querySelectorAll('.draft-card .draft-action') || []) {
+    button.disabled = true;
+  }
+}
+
+function reviveLatestDraftCard() {
+  const cards = chatLog?.querySelectorAll('.draft-card') || [];
+  const latest = cards[cards.length - 1];
+  for (const button of latest?.querySelectorAll('.draft-action') || []) button.disabled = false;
+}
+
+// A question belongs to the step that asked it: scope's "where does this go", or impact's "which
+// reading of this behaviour did you mean".
+function draftActiveStage(state) {
+  if (state?.stage !== 'question') return state?.stage;
+  return state.question?.resume === 'impact' ? 'impact' : 'scope';
+}
+
+function draftStatusFor(action) {
+  if (action === 'confirm') return DRAFT_STATUS.acceptance;
+  if (action === 'approve') return DRAFT_STATUS.final;
+  if (action === 'rescope') return DRAFT_STATUS.scope;
+  if (action === 'choose') return DRAFT_STATUS.impact;
+  return DRAFT_STATUS[draftActiveStage(draftState)] || 'Thinking…';
+}
+
+async function sendDraft(action, extra = {}) {
+  if (!draftState || draftBusy) return;
+  draftBusy = true;
+  retireDraftCards();
+  chatStatus.textContent = draftStatusFor(action);
+  try {
+    const res = await speckyFetch('/draft', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, state: draftState, ...extra }),
+    });
+    const data = await res.json();
+    chatStatus.textContent = '';
+    if (!res.ok) {
+      addChatMessage('error', data.error || 'Something went wrong.');
+      reviveLatestDraftCard();
+      return;
+    }
+    showDraft(data);
+  } catch (err) {
+    chatStatus.textContent = '';
+    addChatMessage('error', ASSISTANT_OFFLINE);
+    reviveLatestDraftCard();
+  } finally {
+    draftBusy = false;
+  }
+}
+
+function showDraft(data) {
+  const state = data.draft;
+  saveDraft(state);
+  if (state.stage === 'final') addDraftFinal(data);
+  else renderDraftCard(state);
+  persistChatEntry('assistant', draftSummary(state, data));
+}
+
+// What the transcript keeps of a step: one line of text. The step itself is rebuilt from state.
+function draftSummary(state, data) {
+  const where = state.scope?.path || 'a new doc';
+  if (state.stage === 'question') return `Draft · ${state.question?.text || 'a question'}`;
+  if (state.stage === 'impact') return `Draft · what changes in ${where}: ${state.impact?.summary || ''}`;
+  if (state.stage === 'acceptance') return `Draft · ${state.tests.length} acceptance tests for ${where}`;
+  return data.answer || `Draft · ${where}`;
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function draftButton(label, onClick, primary = false) {
+  const button = el('button', primary ? 'draft-action primary' : 'draft-action', label);
+  button.type = 'button';
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function draftSteps(state) {
+  const current = draftActiveStage(state);
+  const at = DRAFT_STEPS.findIndex(([key]) => key === current);
+  const row = el('div', 'draft-steps');
+  DRAFT_STEPS.forEach(([_key, label], i) => {
+    const step = el('span', 'draft-step', `${i + 1} ${label}`);
+    step.dataset.state = i < at ? 'done' : i === at ? 'active' : 'todo';
+    row.appendChild(step);
+  });
+  return row;
+}
+
+function draftTarget(scope) {
+  const line = el('p', 'draft-target', 'Target: ');
+  line.appendChild(el('code', '', scope.path || ''));
+  line.appendChild(el('span', 'draft-kind', `${scope.existing ? 'update' : 'new'} ${scope.type || 'feature'}`));
+  return line;
+}
+
+function draftTable(headers, rows) {
+  const figure = el('figure', 'tw');
+  const table = document.createElement('table');
+  const head = table.createTHead().insertRow();
+  for (const header of headers) head.appendChild(el('th', '', header));
+  const body = table.createTBody();
+  for (const row of rows) {
+    const tr = body.insertRow();
+    for (const cell of row) {
+      const td = tr.insertCell();
+      if (cell instanceof Node) td.appendChild(cell);
+      else td.textContent = cell ?? '';
+    }
+  }
+  figure.appendChild(table);
+  return figure;
+}
+
+function kindLabel(text, kind) {
+  const cell = el('span', '', text || '');
+  if (kind) cell.appendChild(el('span', `draft-kind-${kind}`, ` (${kind})`));
+  return cell;
+}
+
+// A new step's card: the older cards' buttons retired, then the progress row and the target.
+function newDraftCard(state) {
+  retireDraftCards();
+  const card = el('div', 'chat-msg chat-assistant chat-rich draft-card');
+  card.appendChild(draftSteps(state));
+  if (state.scope) card.appendChild(draftTarget(state.scope));
+  return card;
+}
+
+function renderDraftCard(state) {
+  const card = newDraftCard(state);
+  if (state.stage === 'question') {
+    card.appendChild(el('p', '', state.question?.text || ''));
+    const options = el('div', 'draft-options');
+    (state.question?.options || []).forEach((option, i) => {
+      options.appendChild(draftButton(option.label, () => sendDraft('choose', { option: i })));
+    });
+    card.appendChild(options);
+    card.appendChild(el('p', 'draft-hint', 'Or type your own answer below.'));
+  } else if (state.stage === 'impact') {
+    const impact = state.impact || {};
+    if (impact.summary) card.appendChild(el('p', '', impact.summary));
+    if ((impact.changes || []).length) {
+      card.appendChild(el('h4', 'draft-card-title', 'Changes'));
+      card.appendChild(draftTable(
+        ['Section', 'Change', 'What'],
+        impact.changes.map((c) => [c.section, el('span', `draft-kind-${c.kind}`, c.kind), c.summary]),
+      ));
+    }
+    if ((impact.behaviours || []).length) {
+      card.appendChild(el('h4', 'draft-card-title', 'Behaviours that change'));
+      card.appendChild(draftTable(
+        ['Behaviour', 'Today', 'After', 'Ref'],
+        impact.behaviours.map((b) => [kindLabel(b.behaviour, b.kind), b.today, b.after, b.ref || '—']),
+      ));
+    }
+    const actions = el('div', 'draft-actions');
+    actions.appendChild(draftButton('Write acceptance tests', () => sendDraft('confirm'), true));
+    actions.appendChild(draftButton('Change module', () => sendDraft('rescope')));
+    card.appendChild(actions);
+    card.appendChild(el('p', 'draft-hint', 'Something off? Type a correction below and this step runs again.'));
+  } else if (state.stage === 'acceptance') {
+    card.appendChild(el('h4', 'draft-card-title', 'Acceptance tests'));
+    card.appendChild(draftTable(
+      ['Scenario', 'Given', 'When', 'Then', 'Covers'],
+      (state.tests || []).map((t) => [t.scenario, t.given, t.when, t.then, t.covers]),
+    ));
+    const actions = el('div', 'draft-actions');
+    actions.appendChild(draftButton('Approve tests', () => sendDraft('approve'), true));
+    card.appendChild(actions);
+    card.appendChild(el('p', 'draft-hint', 'Type a correction below to revise them before approving.'));
+  }
+  chatLog.appendChild(card);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+// The finished draft — the one step whose body is markup, rendered and sanitized by the server
+// (spec_draft._run_final → answer_render). Nothing is written to the docs tree: Copy is the output.
+function addDraftFinal(data) {
+  const state = data.draft;
+  const card = newDraftCard(state);
+  for (const warning of data.warnings || []) card.appendChild(el('div', 'draft-warning', warning));
+  const body = el('div');
+  body.innerHTML = data.answer_html || '';
+  addDiagramButtons(body);
+  card.appendChild(body);
+
+  const actions = el('div', 'chat-actions');
+  actions.appendChild(copyMarkdownButton(data.answer || ''));
+  let diff = null;
+  if (data.diff) {
+    diff = el('pre', 'draft-diff', data.diff);
+    diff.hidden = true;
+    const toggle = el('button', 'chat-copy', `Show what changes in ${state.scope?.path || 'the doc'}`);
+    toggle.type = 'button';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', () => {
+      diff.hidden = !diff.hidden;
+      toggle.setAttribute('aria-expanded', diff.hidden ? 'false' : 'true');
+    });
+    actions.appendChild(toggle);
+  }
+  appendSources(actions, data.sources || []);
+  card.appendChild(actions);
+  if (diff) card.appendChild(diff);
+  card.appendChild(el('p', 'draft-hint', 'Type a correction below to revise the draft, or cancel the draft when you are done.'));
+  chatLog.appendChild(card);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+draftCancel?.addEventListener('click', () => {
+  clearDraft();
+  addChatMessage('note', 'Draft cancelled.', false);
+  chatInput?.focus();
+});
+// CHAT_JS's own listener sets the intent first; this one runs after it and re-reads it.
+for (const chip of intentChips) chip.addEventListener('click', syncDraftReply);
+
+// A draft in progress on the page before this one: rebuild its current step from state, so its
+// buttons still work. A finished draft isn't rebuilt — its markup is never replayed from storage —
+// but it stays open for corrections.
+if (draftState && chatLog && draftState.stage !== 'final') {
+  try {
+    renderDraftCard(draftState);
+  } catch (err) {
+    saveDraft(null);
+  }
+}
+syncDraftReply();
 """
 
 # '#' mention autocomplete for the chat input: candidates come straight from SPECKY_INDEX
@@ -1287,10 +1679,12 @@ for (const type of ['mouseout', 'focusout']) {
 # One file, in this order, deliberately: SEARCH_JS reads `activeTags`/`activeType` (declared by
 # FILTER_JS) and calls `speckyFetch` (API_JS), which CHAT_JS also calls; CHAT_JS calls DIAGRAM_JS's
 # `addDiagramButtons`, which uses SEARCH_JS's `escapeHtml` — same script scope, so those top-level
-# declarations resolve by the time an event handler runs. Splitting these into
-# separate <script> tags would break that.
+# declarations resolve by the time an event handler runs. CHAT_JS and DRAFT_JS call into each other
+# (`draftWaiting`/`showDraft` one way, `appendSources`/`copyMarkdownButton` the other) from event
+# handlers only; DRAFT_JS's one load-time step, rebuilding a draft in progress, runs after CHAT_JS
+# has declared everything it touches. Splitting these into separate <script> tags would break that.
 APP_JS_BLOCKS = (
-    API_JS, SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, MENTION_JS, GLOSSARY_JS,
+    API_JS, SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, DRAFT_JS, MENTION_JS, GLOSSARY_JS,
     diagram_render.DIAGRAM_JS,
 )
 

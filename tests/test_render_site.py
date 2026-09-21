@@ -133,7 +133,7 @@ def test_reading_the_site_needs_no_server(site):
 
 
 def test_every_page_carries_the_diagram_glass_defs_once(site):
-    """The Ask panel can put a diagram on any page, so every page needs the gradient and shadow
+    """The Spec Assistant can put a diagram on any page, so every page needs the gradient and shadow
     its glass references — once, since a second copy would be a duplicate id."""
     for page in site.glob("*.html"):
         assert page.read_text().count(GLASS_DEFS) == 1, page.name
@@ -340,27 +340,35 @@ def test_the_chat_panel_can_be_reset(site):
     assert "speckyFetch('/chat/reset'" in app_js
 
 
-def test_the_ask_panel_is_a_column_of_the_page_not_a_popup_over_it(site):
+def test_the_assistant_panel_is_a_column_of_the_page_not_a_popup_over_it(site):
     """It docks as the third flex child of `.body-row`, so opening it reflows the doc column
     instead of covering it — which is the difference between a panel and the old tooltip."""
     page = (site / "billing-refund-flow.html").read_text()
     body_row = page.index('<div class="body-row">')
-    assert body_row < page.index('<aside id="ask-panel"') < page.index('id="chat-toggle"')
+    assert body_row < page.index('<aside id="assistant-panel"') < page.index('id="chat-toggle"')
 
     css = (site / "assets" / "site.css").read_text()
-    assert ".ask-panel" in css
-    assert "body.ask-open .ask-panel" in css
+    assert ".assistant-panel" in css
+    assert "body.assistant-open .assistant-panel" in css
     assert ".chat-panel" not in css  # the fixed-position popup rules are gone
-    assert "position: fixed" not in css.split(".ask-panel")[1].split("}")[0]
+    assert "position: fixed" not in css.split(".assistant-panel")[1].split("}")[0]
+
+
+def test_the_panel_is_called_the_spec_assistant(site):
+    page = (site / "index.html").read_text()
+    assert '</svg>Spec Assistant</button>' in page
+    assert 'aria-label="Spec Assistant"' in page
+    assert "</svg>Ask</button>" not in page
+    assert "Ask about these docs" not in page
 
 
 def test_the_panel_can_be_dragged_wider_and_remembers_it(site):
     css = (site / "assets" / "site.css").read_text()
     app_js = (site / "assets" / "app.js").read_text()
-    assert "var(--ask-width" in css
-    assert ".ask-resize" in css
-    assert "setProperty('--ask-width'" in app_js
-    assert "specky-ask-width" in app_js
+    assert "var(--assistant-width" in css
+    assert ".assistant-resize" in css
+    assert "setProperty('--assistant-width'" in app_js
+    assert "specky-assistant-width" in app_js
     # A drag that leaves the handle must keep tracking, and the keyboard must be able to do it too.
     assert "setPointerCapture" in app_js
     assert "ArrowLeft" in app_js and "ArrowRight" in app_js
@@ -379,17 +387,45 @@ def test_the_intent_chips_are_in_the_panel_and_reach_the_request(site):
     for intent in ("auto", "explore", "spec"):
         assert f'data-intent="{intent}"' in page
     # Auto means "server, you decide", so it's an absent field rather than a value to parse.
-    assert "if (askIntent !== 'auto') payload.intent = askIntent;" in app_js
-    assert "specky-ask-intent" in app_js
+    assert "if (assistantIntent !== 'auto') payload.intent = assistantIntent;" in app_js
+    assert "specky-assistant-intent" in app_js
 
 
 def test_an_answer_is_inserted_as_the_html_the_server_sanitized(site):
     app_js = (site / "assets" / "app.js").read_text()
     assert "div.innerHTML = data.answer_html || '';" in app_js
-    # One live answer is the only markup that reaches the log. A replayed transcript is the stored
-    # markdown and sessionStorage is editable by anything on the origin, so replay uses textContent.
-    assert app_js.count("answer_html") == 1
+    # Live server responses are the only markup that reaches the log: an explore answer (its short
+    # half and its details) and a finished draft. A replayed transcript is the stored markdown and
+    # sessionStorage is editable by anything on the origin, so replay uses textContent — and a draft
+    # step rebuilt from storage is built from data, never from markup.
+    assert app_js.count("answer_html") == 2
+    assert "details.innerHTML = data.details_html;" in app_js
+    assert "body.innerHTML = data.answer_html || '';" in app_js
     assert "chat-rich" in (site / "assets" / "site.css").read_text()
+
+
+def test_an_explore_answer_keeps_its_details_behind_read_more(site):
+    app_js = (site / "assets" / "app.js").read_text()
+    css = (site / "assets" / "site.css").read_text()
+    assert "if (data.details_html)" in app_js
+    assert "more.textContent = 'Read more';" in app_js
+    assert "more.setAttribute('aria-expanded', 'false');" in app_js
+    assert ".chat-details[hidden] { display: none; }" in css
+
+
+def test_a_draft_steps_through_the_panel_and_survives_navigation(site):
+    page = (site / "index.html").read_text()
+    app_js = (site / "assets" / "app.js").read_text()
+    assert 'id="draft-reply"' in page and 'id="draft-cancel"' in page
+    assert "speckyFetch('/draft'" in app_js
+    assert "chatStore?.setItem('specky-draft'" in app_js
+    for action in ("'choose'", "'confirm'", "'approve'", "'rescope'", "'reply'"):
+        assert f"sendDraft({action}" in app_js
+    # The step in progress is rebuilt on the next page from state — structured data, not markup.
+    assert "renderDraftCard(draftState);" in app_js
+    assert "innerHTML = draftState" not in app_js
+    # "New" drops the draft along with the conversation.
+    assert "clearDraft();" in app_js.split("chatReset?.addEventListener")[1]
 
 
 def test_a_hover_term_works_on_markup_added_after_the_page_loaded(site):

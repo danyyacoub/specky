@@ -54,10 +54,11 @@ command that calls a model goes through this layer.
 | Doc | Purpose |
 |---|---|
 | [chat/local-rag-server.md](chat/local-rag-server.md) | Local HTTP server that answers documentation questions by retrieving context from FTS5 index |
-| [chat/ask-widget-scoping.md](chat/ask-widget-scoping.md) | Chat input autocompletes domain/feature references to narrow AI retrieval and enable HTML responses |
+| [chat/spec-assistant-scoping.md](chat/spec-assistant-scoping.md) | Spec Assistant input autocompletes domain/feature references to narrow retrieval and place drafts |
 | [chat/serve-access-control.md](chat/serve-access-control.md) | Serve the viewer and chat from one port, with a configurable origin allowlist and optional token |
-| [chat/ask-widget-conversation.md](chat/ask-widget-conversation.md) | Ask widget maintains session-based conversation history for follow-up questions |
-| [chat/ask-panel-dock.md](chat/ask-panel-dock.md) | Ask panel as full-height dock with answer rendering and intent steering |
+| [chat/spec-assistant-conversation.md](chat/spec-assistant-conversation.md) | Spec Assistant keeps session-based conversation history for follow-up questions |
+| [chat/spec-assistant-panel.md](chat/spec-assistant-panel.md) | Spec Assistant as a full-height dock: short answers with Read more, draft step cards, intent steering |
+| [chat/spec-drafting-workflow.md](chat/spec-drafting-workflow.md) | Draft a spec change in steps — scope, impact, approved acceptance tests, final draft |
 
 ## Search
 

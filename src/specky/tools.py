@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from specky import source
-from specky.paths import docs_root
+from specky.paths import doc_in_tree, docs_root
 
 # How many characters of tool output one run may consume in total. Characters rather than tokens for
 # the reason every other budget in specky is (`chat_server.CONTEXT_CHARS_MAX`,
@@ -308,13 +308,9 @@ class Toolbox:
         rel_path = _text(path).lstrip("./")
         if not rel_path:
             return "read_doc needs a path."
-        root = docs_root(self.repo_root)
-        candidate = self.repo_root / rel_path
-        if not candidate.is_file():
-            candidate = root / rel_path
-        try:
-            candidate.resolve().relative_to(root.resolve())
-        except ValueError:
+        candidate = doc_in_tree(self.repo_root, rel_path)
+        if candidate is None:
+            root = docs_root(self.repo_root)
             return f"{rel_path} is not under {root.name}/ — read_doc only reads the docs tree."
         if not candidate.is_file():
             return f"No doc at {rel_path} yet."

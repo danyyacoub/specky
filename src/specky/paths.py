@@ -87,6 +87,24 @@ def docs_prefix(repo_root: Path) -> str:
     return f"{_config(repo_root).root}/"
 
 
+def doc_in_tree(repo_root: Path, rel_path: str) -> Path | None:
+    """Where a doc path a model or a client named points, or None if it leaves the docs tree.
+
+    Accepts both spellings a caller reaches for — `specs/billing/refund.md` and `billing/refund.md`.
+    The containment check runs on the resolved path, so `..` and a symlink out of the tree are
+    caught alike. The path may not exist yet; whether that matters is the caller's business.
+    """
+    root = docs_root(repo_root)
+    candidate = repo_root / rel_path
+    if not candidate.is_file():
+        candidate = root / rel_path
+    try:
+        candidate.resolve().relative_to(root.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
 def history_dir(repo_root: Path) -> Path:
     """`<repo>/specs/history` — one markdown file per commit."""
     return docs_root(repo_root) / HISTORY_DIR_NAME

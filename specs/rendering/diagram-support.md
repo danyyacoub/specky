@@ -68,11 +68,11 @@ flowchart TD
 | The same glossary term appears several times on a page | Only the first is wrapped | Marking every mention turns a paragraph into a field of underlines |
 | A glossary term appears inside code, a link or a diagram | It is left alone | There it is a literal or already has its own behaviour |
 | The doc has no diagrams, no tables and no glossary matches | It renders unchanged | Every step is a no-op on content that has nothing for it to do |
-| A diagram appears in an Ask panel answer | It gets the same Full screen button | Answers can carry diagrams too, and the panel is the narrowest place one is ever shown |
+| A diagram appears in a Spec Assistant answer | It gets the same Full screen button | Answers can carry diagrams too, and the panel is the narrowest place one is ever shown |
 | The site is opened straight from disk (`file://`) | Full screen works as it does under `specky serve` | The new tab is built in the browser from the diagram already on the page, so there is nothing to fetch and no file per diagram to write |
 | A diagram is copied out of the viewer (the export, a PDF) | It shows the light colors it was rendered with | The viewer's theme comes from its stylesheet and is never written into the SVG, so the diagram still stands on its own anywhere that stylesheet isn't |
 | A diagram colors its own boxes (`classDef` or `style`, as `specky graph`'s does) | Those boxes keep their colors and get no glass, but are rounded and raised like the rest; their labels stay dark in both schemes | The colors were picked against the light diagram, and the dark scheme's light text would all but vanish on them |
-| An Ask panel answer contains a bar or line chart | Its bars keep the accent color while every other diagram's arrowheads are gray | Arrowheads and chart series are drawn through the same color; gray arrows keep blue meaning "you can click this", but a gray chart would lose its data |
+| A Spec Assistant answer contains a bar or line chart | Its bars keep the accent color while every other diagram's arrowheads are gray | Arrowheads and chart series are drawn through the same color; gray arrows keep blue meaning "you can click this", but a gray chart would lose its data |
 | Reader's browser asks for reduced transparency | Subgraphs fall back to the secondary surface rather than the page color | The backdrop is now the same color as a node, so a solid node needs the secondary surface to still stand apart from the group it sits in |
 | The full-screen tab | Opens in the reader's scheme, glass included | It has no stylesheet of its own, so it is handed the page's colors as they resolve at the moment the button is clicked |
 | The full-screen tab is reloaded after the page that opened it is closed | It no longer loads | Its address is a temporary `blob:` link that belongs to the page that made it; open the diagram again from the doc |
@@ -93,7 +93,7 @@ flowchart TD
 | A 900px-wide diagram in a column too narrow for it | The page is viewed | The diagram keeps its natural size inside a sideways-scrolling strip |
 | A rendered diagram in the viewer | Reader clicks Full screen | A new tab shows only that diagram, fitted to the window; the doc page is unchanged |
 | The full-screen tab | Reader scrolls the wheel, drags, then double-clicks | The diagram zooms about the cursor, pans with the pointer, then fits back to the window |
-| An Ask panel answer containing a diagram | The answer appears | Its diagram has a Full screen button too |
+| A Spec Assistant answer containing a diagram | The answer appears | Its diagram has a Full screen button too |
 | The site opened via `file://` | Reader clicks Full screen | The tab opens and works as it does under `specky serve` |
 | A rendered diagram, reader's system in dark mode | The page is viewed | Diagram text is light on a dark backdrop; no light box sits on the dark page |
 | Reader's browser set to reduce transparency | The page is viewed | Diagram boxes are solid, the backdrop plain |

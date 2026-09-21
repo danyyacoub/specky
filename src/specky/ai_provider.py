@@ -79,7 +79,9 @@ NUDGE = (
 # accepting it, and an accepted key that routes nothing is the exact failure the tuple exists to
 # prevent: `specky doctor` would go on reporting the route as active while nothing ever asked for
 # that task. Dropping them turns a stale `discovery_model` into the loud config error it should be.
-TASKS = ("summary", "classify", "doc", "document", "tag", "chat")
+# `draft` is the Spec Assistant's draft-spec workflow (spec_draft.py): several tool-using stages per
+# draft, so it is the chat task most worth routing to its own model.
+TASKS = ("summary", "classify", "doc", "document", "tag", "chat", "draft")
 
 
 class Provider(Protocol):

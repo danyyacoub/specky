@@ -9,7 +9,7 @@ with no diagrams at all.
 Everything diagram-shaped lives here rather than in html_render.py: the render itself, the scrub
 that keeps its output inert, the CSS that frames it and the full-screen view's JS. html_render.py
 stitches `DIAGRAM_CSS` and `DIAGRAM_JS` into the site's shared assets and calls
-`render_mermaid_blocks` for a doc page; answer_render.py calls it too, bounded, for the Ask panel.
+`render_mermaid_blocks` for a doc page; answer_render.py calls it too, bounded, for the Spec Assistant.
 
 Like mermaid_tool.py, this imports nothing but the standard library — a diagram is a subprocess
 and some regexes, and shouldn't pay for markdown/jinja to be one.
@@ -61,7 +61,7 @@ MERMAID_THEME = {
 # Past this, a diagram that doesn't fit its pane keeps its natural size and scrolls sideways
 # instead of being shrunk to fit; shrunk from any wider, its labels stop being readable. It only
 # decides the case where a diagram doesn't fit (one that fits shows at natural size either way),
-# and it is shared by the doc column (up to 1040 - 2*48 = 944px) and the Ask panel (320-720px),
+# and it is shared by the doc column (up to 1040 - 2*48 = 944px) and the Spec Assistant panel (320-720px),
 # so it is a property of the diagram, not of either pane.
 WIDE_DIAGRAM_PX = 600
 
@@ -210,7 +210,7 @@ _TOKENS_CSS = """
 }
 """
 
-# The two places a diagram's <svg> gets styled: inline in a viewer page (a doc or the Ask panel),
+# The two places a diagram's <svg> gets styled: inline in a viewer page (a doc or the Spec Assistant panel),
 # and alone in the full-screen tab DIAGRAM_JS opens, which has no site.css. `_svg_rules` is written
 # once and scoped to each, so the tab can't drift from the page.
 _SVG_IN_PAGE = "figure.flow svg:not(.icon)"
