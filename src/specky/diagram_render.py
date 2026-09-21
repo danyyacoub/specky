@@ -319,10 +319,11 @@ figure.flow {
   position: relative; border: 1px solid var(--border); border-radius: var(--radius-md);
   background: var(--diagram-backdrop); text-align: center;
 }
+figure.flow svg { max-width: 100%; height: auto; }
+/* A diagram too wide to shrink readably keeps its size and scrolls sideways instead. */
+figure.flow .fx { overflow-x: auto; }
+figure.flow .fx svg { max-width: none; margin: 0; }
 .doc figure.flow { margin: 20px 0; padding: 16px; }
-.doc figure.flow svg { max-width: 100%; height: auto; }
-.doc figure.flow .fx { overflow-x: auto; }
-.doc figure.flow .fx svg { max-width: none; margin: 0; }
 """
     + _svg_rules(_SVG_IN_PAGE)
     + """
@@ -343,10 +344,8 @@ figure.flow:hover .flow-open, .flow-open:focus-visible { opacity: 1; }
 figure.flow .flow-open .icon { width: 1em; height: 1em; max-width: none; }
 
 .chat-rich figure.flow { margin: 12px 0; padding: 12px; max-width: 100%; box-sizing: border-box; }
-.chat-rich figure.flow svg { max-width: 100%; height: auto; }
-/* A diagram too wide to shrink readably scrolls inside the panel rather than widening it. */
-.chat-rich figure.flow .fx { overflow-x: auto; max-width: 100%; }
-.chat-rich figure.flow .fx svg { max-width: none; margin: 0; }
+/* In the panel, the scroll stays inside it rather than widening it. */
+.chat-rich figure.flow .fx { max-width: 100%; }
 """
 )
 
@@ -367,6 +366,8 @@ _TAB_CSS = re.sub(r"/\*.*?\*/\n?", "", _svg_rules(_SVG_IN_TAB), flags=re.DOTALL)
 # SVG is the renderer's own scrubbed output (see `_scrub_svg`), the same markup this page shows.
 # The tab has no site.css, so it is handed the tokens as they resolve here — the reader's
 # light/dark scheme included — along with this page's GLASS_DEFS and its own copy of the SVG rules.
+# Not standalone: it runs inside html_render's app.js, and uses SEARCH_JS's `escapeHtml` and the
+# `#icon-expand` symbol from ICON_SPRITE.
 DIAGRAM_JS = (
     f"const DIAGRAM_TAB_TOKENS = {json.dumps(_TAB_TOKENS)};\n"
     f"const DIAGRAM_TAB_CSS = {json.dumps(_TAB_CSS)};\n"

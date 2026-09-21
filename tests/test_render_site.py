@@ -168,8 +168,8 @@ def test_sidebar_titles_drop_the_module_the_group_already_names(site):
 
 def test_sidebar_links_carry_their_type_icon(site):
     page = (site / "index.html").read_text()
-    links = re.findall(r'<a href="[^"]+" title="[^"]*"[^>]*data-type="(\w*)"[^>]*>.*?</a>', page)
-    assert set(links) == {"feature", "workflow", ""}
+    types = re.findall(r'<a href="[^"]+" title="[^"]*"[^>]*data-type="(\w*)"[^>]*>.*?</a>', page)
+    assert set(types) == {"feature", "workflow", ""}
     assert re.search(r'data-type="workflow"[^>]*><svg[^>]*><use href="#icon-cycle">', page)
     assert re.search(r'data-type="feature"[^>]*><svg[^>]*><use href="#icon-sparkle">', page)
     assert re.search(r'data-type=""[^>]*><svg[^>]*><use href="#icon-file-text">', page)

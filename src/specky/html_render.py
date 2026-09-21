@@ -83,6 +83,11 @@ ICON_SPRITE = """
 </svg>
 """
 
+# A doc's type, as an icon: the type chips, the sidebar links and (via SEARCH_JS, which is handed
+# this map) the search results all draw from it.
+_TYPE_ICONS = {"feature": "sparkle", "workflow": "cycle"}
+_TYPE_ICON_FALLBACK = "file-text"
+
 _RAIL_TEMPLATE = _env.from_string(
     '<div class="sidebar">'
     "{% for d in domains %}"
@@ -709,7 +714,10 @@ async function speckyFetch(path, init) {
 # too large for that). Then, if a `specky serve` is reachable, the same query goes to its /search
 # endpoint, which matches the *complete* FTS5 index and replaces the local guess. Offline is
 # best-effort; served is exact.
-SEARCH_JS = """
+SEARCH_JS = (
+    f"const TYPE_ICONS = {json.dumps(_TYPE_ICONS)};\n"
+    f"const TYPE_ICON_FALLBACK = {json.dumps(_TYPE_ICON_FALLBACK)};\n"
+    + """
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
 const docsByPath = new Map(SPECKY_INDEX.map((d) => [d.path, d]));
@@ -746,9 +754,6 @@ function markSnippet(snippet) {
   return escapeHtml(snippet).replaceAll('&gt;&gt;', '<mark>').replaceAll('&lt;&lt;', '</mark>');
 }
 
-// Same mapping as `_TYPE_ICONS` on the Python side, which draws the sidebar's icons.
-const TYPE_ICONS = { feature: 'sparkle', workflow: 'cycle' };
-
 function showHits(hits) {
   searchResults.innerHTML = '';
   for (const hit of hits) {
@@ -756,7 +761,7 @@ function showHits(hits) {
     a.className = 'hit';
     a.href = hit.doc.html_path;
     a.dataset.type = hit.doc.doc_type || '';
-    const icon = TYPE_ICONS[hit.doc.doc_type] || 'file-text';
+    const icon = TYPE_ICONS[hit.doc.doc_type] || TYPE_ICON_FALLBACK;
     a.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#icon-${icon}"></use></svg>`
       + `${escapeHtml(hit.doc.title)}<div class="hit-domain">${escapeHtml(hit.doc.domain)}</div>`
       + (hit.context ? `<div class="hit-context">${hit.context}</div>` : '');
@@ -809,6 +814,7 @@ searchInput?.addEventListener('input', () => {
     .catch(() => { /* no server reachable — the local hits stand */ });
 });
 """
+)
 
 # Every colored chip (sidebar filter row, doc-header tags/type badge, home tag cloud) is a
 # <button data-facet="tag|type">; clicking any of them toggles the same filter state and
@@ -1306,10 +1312,6 @@ _DOMAIN_ICONS = {
 }
 _DOMAIN_ICON_FALLBACK = "folder"
 
-# Same icons as the type chips; mirrored by TYPE_ICONS in SEARCH_JS for the search results.
-_TYPE_ICONS = {"feature": "sparkle", "workflow": "cycle"}
-_TYPE_ICON_FALLBACK = "file-text"
-
 # A generated doc is titled `# <Domain> — <Topic>` (and a root doc `# <repo> — <Topic>`, see
 # generator.py), which reads right on its own page but repeats the group header in the sidebar.
 # Spaces are required around the dash so a hyphenated word is never split.
@@ -1329,7 +1331,8 @@ def _icon_for_type(doc_type: str) -> str:
     return _TYPE_ICONS.get(doc_type, _TYPE_ICON_FALLBACK)
 
 
-def _words(text: str) -> str:
+def _title_key(text: str) -> str:
+    """Case and punctuation folded away, so `feature-flags` and "Feature Flags" compare equal."""
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
@@ -1340,8 +1343,8 @@ def _nav_title(title: str, domain: str, project: str) -> str:
     that happens to contain a dash for some other reason is left exactly as written.
     """
     match = _TITLE_PREFIX.match(title)
-    owner = project if domain == _DOMAIN_ORDER_FIRST else domain
-    if match and _words(match.group("prefix")) == _words(owner):
+    owner = project if domain == "root" else domain
+    if match and _title_key(match.group("prefix")) == _title_key(owner):
         return match.group("rest")
     return title
 

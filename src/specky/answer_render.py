@@ -3,8 +3,8 @@
 An answer is the one thing in the viewer written by a model rather than by this codebase, and it
 lands in the reader's page as markup. So it goes through the same pipeline a doc page does —
 markdown, glossary hover terms, scrollable tables, ```mermaid``` fences as static SVG (see
-html_render and diagram_render) — with one step the doc path doesn't need: everything the model wrote is scrubbed
-against an allowlist first.
+html_render and diagram_render) — with one step the doc path doesn't need: everything the model
+wrote is scrubbed against an allowlist first.
 
 Order matters, and it's the reason the sanitizer can be small. The model's markup is sanitized
 *before* the diagram step, so the only `<svg>` in the output is the one our own renderer produced
