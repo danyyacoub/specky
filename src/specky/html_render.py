@@ -82,6 +82,7 @@ ICON_SPRITE = """
 <symbol id="icon-cycle" viewBox="0 0 20 20"><path d="M4 10 A6 6 0 0 1 10 4 H13"/><polyline points="11,2 13,4 11,6"/><path d="M16 10 A6 6 0 0 1 10 16 H7"/><polyline points="9,18 7,16 9,14"/></symbol>
 <symbol id="icon-link" viewBox="0 0 20 20"><line x1="7" y1="13" x2="13" y2="7"/><polyline points="9,7 13,7 13,11"/></symbol>
 <symbol id="icon-person" viewBox="0 0 20 20"><circle cx="10" cy="7" r="3.2"/><path d="M4 17 A6 6 0 0 1 16 17"/></symbol>
+<symbol id="icon-expand" viewBox="0 0 20 20"><polyline points="12,3 17,3 17,8"/><line x1="17" y1="3" x2="11.5" y2="8.5"/><polyline points="8,17 3,17 3,12"/><line x1="3" y1="17" x2="8.5" y2="11.5"/></symbol>
 <symbol id="icon-send" viewBox="0 0 20 20"><polygon points="3,10 17,4 12,17 9,11"/><line x1="9" y1="11" x2="17" y2="4"/></symbol>
 </svg>
 """
@@ -381,7 +382,7 @@ a { color: inherit; }
 .content-pane {
   flex: 1; height: 100vh; overflow-y: auto; display: flex; justify-content: center; background: var(--surface);
 }
-.doc { width: 100%; max-width: 760px; padding: 66px 48px 72px; }
+.doc { width: 100%; max-width: 1040px; padding: 66px 48px 72px; }
 .breadcrumb {
   display: flex; align-items: center; gap: 6px; font-size: 0.6875rem; color: var(--text-secondary);
   text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px;
@@ -456,6 +457,19 @@ a { color: inherit; }
 .doc figure.flow svg { max-width: 100%; height: auto; }
 .doc figure.flow .fx { overflow-x: auto; }
 .doc figure.flow .fx svg { max-width: none; margin: 0; }
+/* The "open full screen" button DIAGRAM_JS adds to every diagram: out of the way until the
+   reader is on the diagram, always there for keyboard focus. Fixed light colors rather than the
+   theme tokens, like the figure it sits on, so it stays readable in dark mode too. */
+figure.flow { position: relative; }
+.flow-open {
+  position: absolute; top: 6px; right: 6px; display: flex; align-items: center; gap: 4px;
+  border: 1px solid #e1e3e8; background: #ffffff; color: #63666d; font: inherit; font-size: 0.6875rem;
+  padding: 3px 8px; border-radius: var(--radius-sm); cursor: pointer; opacity: 0; transition: opacity 0.15s;
+}
+figure.flow:hover .flow-open, .flow-open:focus-visible { opacity: 1; }
+.flow-open:hover { color: #1d1f23; border-color: #63666d; }
+/* Beats `figure.flow svg`, which would otherwise size the button's icon like a diagram. */
+figure.flow .flow-open .icon { width: 1em; height: 1em; max-width: none; }
 
 /* --- workflow steps: the happy path under `## How It Works`, numbered by a counter rather
    than by <ol>'s own marker so the number can sit in its own chip on the rail. Only rendered
@@ -1029,6 +1043,7 @@ function addChatAnswer(data) {
   const div = document.createElement('div');
   div.className = 'chat-msg chat-assistant chat-rich';
   div.innerHTML = data.answer_html || '';
+  addDiagramButtons(div);
   chatLog.appendChild(div);
 
   const actions = document.createElement('div');
@@ -1251,11 +1266,102 @@ for (const type of ['mouseout', 'focusout']) {
 }
 """
 
+# Every rendered diagram gets a button that opens it alone in a new tab, fitted to the window,
+# with wheel zoom, drag to pan and double-click to reset — a wide flowchart that is a scroll strip
+# in the doc column is readable whole there. The page is a Blob URL built from the SVG already
+# inline in this page: no extra file per diagram at render time, and it works on file:// too. The
+# SVG is the renderer's own scrubbed output (see `_scrub_svg`), the same markup this page shows.
+DIAGRAM_JS = """
+function diagramPage(svg, title) {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #f7f7f8; font: 12px system-ui, sans-serif; }
+  #stage { position: absolute; inset: 0; cursor: grab; user-select: none; }
+  #stage.dragging { cursor: grabbing; }
+  #stage svg { position: absolute; left: 0; top: 0; transform-origin: 0 0; max-width: none; }
+  #hint {
+    position: fixed; bottom: 10px; left: 50%; transform: translateX(-50%); color: #63666d;
+    background: #ffffff; border: 1px solid #e1e3e8; border-radius: 6px; padding: 3px 10px;
+  }
+</style></head>
+<body><div id="stage">${svg}</div>
+<div id="hint">Scroll to zoom \\u00b7 drag to pan \\u00b7 double-click to fit</div>
+<script>
+const stage = document.getElementById('stage');
+const svg = stage.querySelector('svg');
+const { width, height } = svg.viewBox.baseVal;
+let scale = 1, panX = 0, panY = 0, drag = null;
+
+function draw() {
+  svg.style.transform = 'translate(' + panX + 'px, ' + panY + 'px) scale(' + scale + ')';
+}
+function fit() {
+  const pad = 32;
+  scale = Math.min((innerWidth - 2 * pad) / width, (innerHeight - 2 * pad) / height);
+  panX = (innerWidth - width * scale) / 2;
+  panY = (innerHeight - height * scale) / 2;
+  draw();
+}
+
+// Zoom about the cursor: the point under it stays where it is.
+stage.addEventListener('wheel', (event) => {
+  event.preventDefault();
+  const factor = Math.exp(-event.deltaY * 0.0015);
+  panX = event.clientX - (event.clientX - panX) * factor;
+  panY = event.clientY - (event.clientY - panY) * factor;
+  scale *= factor;
+  draw();
+}, { passive: false });
+stage.addEventListener('pointerdown', (event) => {
+  drag = { x: event.clientX - panX, y: event.clientY - panY };
+  stage.classList.add('dragging');
+  stage.setPointerCapture(event.pointerId);
+});
+stage.addEventListener('pointermove', (event) => {
+  if (!drag) return;
+  panX = event.clientX - drag.x;
+  panY = event.clientY - drag.y;
+  draw();
+});
+stage.addEventListener('pointerup', () => { drag = null; stage.classList.remove('dragging'); });
+stage.addEventListener('dblclick', fit);
+addEventListener('resize', fit);
+fit();
+<\\/script></body></html>`;
+}
+
+function addDiagramButtons(root) {
+  for (const figure of root.querySelectorAll('figure.flow')) {
+    if (figure.querySelector(':scope > .flow-open')) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'flow-open';
+    button.title = 'Open this diagram full screen in a new tab';
+    button.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#icon-expand"></use></svg>Full screen';
+    figure.appendChild(button);
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const button = event.target.closest?.('.flow-open');
+  if (!button) return;
+  const svg = button.closest('figure.flow')?.querySelector('svg:not(.icon)');
+  if (!svg) return;
+  const blob = new Blob([diagramPage(svg.outerHTML, document.title)], { type: 'text/html' });
+  window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+});
+
+addDiagramButtons(document);
+"""
+
 # One file, in this order, deliberately: SEARCH_JS reads `activeTags`/`activeType` (declared by
-# FILTER_JS) and calls `speckyFetch` (API_JS), which CHAT_JS also calls — same script scope, so
-# those top-level declarations resolve by the time an event handler runs. Splitting these into
+# FILTER_JS) and calls `speckyFetch` (API_JS), which CHAT_JS also calls; CHAT_JS calls DIAGRAM_JS's
+# `addDiagramButtons`, which uses SEARCH_JS's `escapeHtml` — same script scope, so those top-level
+# declarations resolve by the time an event handler runs. Splitting these into
 # separate <script> tags would break that.
-APP_JS_BLOCKS = (API_JS, SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, MENTION_JS, GLOSSARY_JS)
+APP_JS_BLOCKS = (
+    API_JS, SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, MENTION_JS, GLOSSARY_JS, DIAGRAM_JS
+)
 
 _DOMAIN_ORDER_FIRST = "root"
 _DOMAIN_ORDER_LAST = "history"
@@ -1563,9 +1669,11 @@ MERMAID_THEME = {
     "nodeSpacing": 16,
     "layerSpacing": 36,
 }
-# Past this, a diagram gets its own horizontal scroll instead of being shrunk into the
-# pane. The doc column's content width is 760 - 2*48 = 664px; below that labels stop being
-# readable, so a wide diagram scrolls at full size rather than shrinking.
+# Past this, a diagram that doesn't fit its pane keeps its natural size and scrolls sideways
+# instead of being shrunk to fit; shrunk from any wider, its labels stop being readable. It only
+# decides the case where a diagram doesn't fit (one that fits shows at natural size either way),
+# and it is shared by the doc column (up to 1040 - 2*48 = 944px) and the Ask panel (320-720px),
+# so it is a property of the diagram, not of either pane.
 WIDE_DIAGRAM_PX = 600
 
 
