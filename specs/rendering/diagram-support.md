@@ -1,6 +1,6 @@
 ---
-type: workflow
-tags: [rendering, documentation]
+type: feature
+tags: [rendering]
 ---
 
 # Rendering — Diagram Support
@@ -17,7 +17,7 @@ Static diagram rendering at build time using Mermaid (SVG output via Node), auto
 4. **Glossary terms auto-linked** — `link_glossary()` finds first mention of each `specs/GLOSSARY.md` term on each page, wraps it in a tooltip trigger; subsequent mentions left plain.
 5. **Markdown tables wrapped** — `_wrap_tables()` nests each table in a scrollable `<figure class="tw">` with zebra-stripe CSS.
 6. **Static site output** — Resulting HTML with embedded SVGs, tooltips, and styled tables written to `.specky/site/index.html`, opens via `file://` with zero client JS for diagram rendering.
-7. **The viewer paints it in the reader's scheme** — The SVG carries light colors of its own; the viewer's stylesheet re-points them at the site's light or dark palette and draws every box (flowchart and state nodes, sequence actors and notes, class and ER boxes, subgraphs) as a translucent glass pane with rounded corners, a soft sheen and a hairline edge, lifted off a backdrop washed with the site's own colors by a small two-layer shadow. Diamonds, hexagons and sequence notes are polygons and keep their points. Arrowheads are gray rather than the link blue; a chart's bars keep the accent.
+7. **The viewer paints it in the reader's scheme** — The SVG carries light colors of its own; the viewer's stylesheet re-points them at the site's light or dark palette and draws every box (flowchart and state nodes, sequence actors and notes, class and ER boxes, subgraphs) as a translucent glass pane with rounded corners, a soft sheen and a hairline edge, lifted off a backdrop washed with the site's own colors by a small two-layer shadow. The figure carries no border and its backdrop is the page's own color, so the diagram reads as part of the page rather than a gray panel; the washes of accent, feature and tag color are faint enough to be a hint of tint behind the text. Diamonds, hexagons and sequence notes are polygons and keep their points. Arrowheads are gray rather than the link blue; a chart's bars keep the accent.
 8. **A reader opens a diagram full screen** — Every rendered diagram in the viewer carries a Full screen button (shown on hover or keyboard focus); it opens that diagram alone in a new tab, fitted to the window and in the same scheme and glass as the page, where the mouse wheel zooms about the cursor, dragging pans, and a double-click fits it back to the window.
 
 ```mermaid
@@ -73,6 +73,7 @@ flowchart TD
 | A diagram is copied out of the viewer (the export, a PDF) | It shows the light colors it was rendered with | The viewer's theme comes from its stylesheet and is never written into the SVG, so the diagram still stands on its own anywhere that stylesheet isn't |
 | A diagram colors its own boxes (`classDef` or `style`, as `specky graph`'s does) | Those boxes keep their colors and get no glass, but are rounded and raised like the rest; their labels stay dark in both schemes | The colors were picked against the light diagram, and the dark scheme's light text would all but vanish on them |
 | An Ask panel answer contains a bar or line chart | Its bars keep the accent color while every other diagram's arrowheads are gray | Arrowheads and chart series are drawn through the same color; gray arrows keep blue meaning "you can click this", but a gray chart would lose its data |
+| Reader's browser asks for reduced transparency | Subgraphs fall back to the secondary surface rather than the page color | The backdrop is now the same color as a node, so a solid node needs the secondary surface to still stand apart from the group it sits in |
 | The full-screen tab | Opens in the reader's scheme, glass included | It has no stylesheet of its own, so it is handed the page's colors as they resolve at the moment the button is clicked |
 | The full-screen tab is reloaded after the page that opened it is closed | It no longer loads | Its address is a temporary `blob:` link that belongs to the page that made it; open the diagram again from the doc |
 
