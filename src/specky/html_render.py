@@ -983,7 +983,14 @@ body.assistant-open .chat-toggle { display: none; }
 .chat-rich blockquote {
   border-left: 3px solid var(--accent-soft); margin: 8px 0; padding: 2px 12px; color: var(--text-secondary);
 }
-.chat-rich figure.tw { margin: 10px 0; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
+/* break-word, not the anywhere .chat-msg sets: anywhere makes every letter a break point when auto
+   table layout measures a column's minimum width, so short columns were squeezed until "Resolve
+   range" read "Resolv / e range". With whole words as the minimum, a table too wide for the panel
+   scrolls inside its figure instead of splitting them. */
+.chat-rich figure.tw {
+  margin: 10px 0; overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md);
+  overflow-wrap: break-word;
+}
 .chat-rich figure.tw table { border-collapse: collapse; width: 100%; font-size: 0.75rem; }
 .chat-rich figure.tw th, .chat-rich figure.tw td {
   padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top;

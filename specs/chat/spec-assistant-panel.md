@@ -21,7 +21,7 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 
 5. **Answers are made safe before they are shown** — the model writes markdown, and every HTML tag and attribute it contains is checked against an allowlist first. Anything not permitted is escaped to text, before diagrams are drawn.
 
-6. **Answers are rendered like the docs** — tables gain scroll bars and zebra stripes, glossary terms get hover tooltips, and mermaid fences become static diagrams, at most 2 per answer.
+6. **Answers are rendered like the docs** — tables gain scroll bars and zebra stripes, glossary terms get hover tooltips, and mermaid fences become static diagrams, at most 2 per answer. A table's cells wrap between words, never inside one: a table too wide for the panel scrolls sideways instead. Outside tables, a long unbroken path or hash still breaks, so it can't push the panel wider than it is.
 
 7. **The panel follows the reader** — width, open state and pinned intent are remembered for the tab. A draft's current step is rebuilt on the next page, so its buttons keep working after the reader follows a cited source.
 
@@ -63,3 +63,5 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 | Reader typed a line | Reader presses Shift+Enter | A new line starts in the input; nothing is sent |
 | A question is pending | Reader clicks **Stop** | The status pill hides and a "Stopped." note appears in the conversation |
 | Conversation is empty on a feature doc | Reader clicks a suggested prompt | The prompt fills the input and is not sent |
+| An answer's table has short labels in one column, at the default panel width | The answer is shown | Every cell wraps between words ("Resolve range" over two lines, never "Resolv / e range") |
+| An answer's table cell holds a token with no break point wider than the panel | The answer is shown | The table scrolls sideways inside its frame; the panel does not widen |

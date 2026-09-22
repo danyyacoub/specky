@@ -549,13 +549,19 @@ def test_the_mention_picker_is_keyboard_driven_and_builds_no_markup(site):
     assert "selectMention(mentionHits[mentionActive]);" in mention_js
 
 
+def _css_rules(site) -> dict[str, str]:
+    """site.css's top-level rules, selector -> declarations (comments dropped; a selector written
+    twice keeps its last block)."""
+    css = re.sub(r"/\*.*?\*/", "", (site / "assets" / "site.css").read_text(), flags=re.DOTALL)
+    return dict(re.findall(r"^([^\s{}@][^{}]*?)\s*\{([^{}]*)\}", css, re.MULTILINE))
+
+
 def test_glass_popovers_blur_the_page_not_just_the_container_they_hang_from(site):
     """An element with backdrop-filter is the backdrop root for everything inside it, so a glass
     popover nested in a glass container — the search results in the titlebar, the @ picker in the
     panel — blurs only that container's layer and shows the page through it, sharp. The containers
     keep their glass on ::before, which isn't anyone's ancestor."""
-    css = re.sub(r"/\*.*?\*/", "", (site / "assets" / "site.css").read_text(), flags=re.DOTALL)
-    rules = dict(re.findall(r"^([^\s{}@][^{}]*?)\s*\{([^{}]*)\}", css, re.MULTILINE))
+    rules = _css_rules(site)
     for container in (".titlebar", ".assistant-panel"):
         assert "backdrop-filter" not in rules[container]
         assert "backdrop-filter" in rules[f"{container}::before"]
@@ -585,6 +591,18 @@ def test_an_answer_is_inserted_as_the_html_the_server_sanitized(site):
     assert "details.innerHTML = data.details_html;" in app_js
     assert "body.innerHTML = data.answer_html || '';" in app_js
     assert "chat-rich" in (site / "assets" / "site.css").read_text()
+
+
+def test_a_table_in_an_answer_wraps_between_words(site):
+    """.chat-msg sets overflow-wrap: anywhere so a long path in prose can't push the panel wide, but
+    anywhere also lets auto table layout count every letter as a break point when it sizes a column
+    — short columns got squeezed until "Resolve range" read "Resolv / e range". Tables opt back into
+    whole words; one too wide for the panel scrolls in its figure instead."""
+    rules = _css_rules(site)
+    assert "overflow-wrap: anywhere" in rules[".chat-msg"]
+    figure = rules[".chat-rich figure.tw"]
+    assert "overflow-wrap: break-word" in figure
+    assert "overflow-x: auto" in figure
 
 
 def test_an_explore_answer_keeps_its_details_behind_read_more(site):
