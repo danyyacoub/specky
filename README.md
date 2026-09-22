@@ -17,8 +17,8 @@ into your repo, updates them on every commit, and indexes them for three audienc
 Because every feature is indexed, finding one is a search, not a crawl through the code. That
 work can run on a lower-cost model, which keeps your smartest model on the hard development tasks.
 
-It ships as a Claude Code plugin plus a CLI. It also works with [opencode][opencode], [Kiro][kiro]
-and [Devin][devin].
+It ships as a Claude Code plugin plus a CLI. It also works with [Codex][codex],
+[opencode][opencode], [Kiro][kiro] and [Devin][devin].
 
 ## Features
 
@@ -60,8 +60,8 @@ offline and needs no API key.
 
 ### Docs your agent reads first
 
-An MCP server and skills let Claude Code, and other agents, answer "what does X do?" from the docs
-before reading code.
+An MCP server and skills let Claude Code, Codex and other agents answer "what does X do?" from the
+docs before reading code.
 
 ![Claude Code answering from specky's docs][shot-agent]
 
@@ -69,9 +69,10 @@ before reading code.
 
 Looking up and writing docs doesn't need your strongest model. In Claude Code, set
 `[skills] model = "haiku"` in `specky.toml`. specky's skills then hand their lookups and writing to
-a subagent on that model, and your session stays on the model you chose for development. For the
-CLI and the git hooks, `[ai] <task>_model` sends each kind of call (commit summaries,
-classification, doc writing, tags, chat) to its own model.
+a subagent on that model, and your session stays on the model you chose for development. In Codex,
+the `specky-lookup` subagent does the same job (see [Codex](#codex) below). For the CLI and the git
+hooks, `[ai] <task>_model` sends each kind of call (commit summaries, classification, doc writing,
+tags, chat) to its own model.
 
 specky can also import existing docs (`specky adopt`), export them to PDF or Confluence, summarise
 a PR's doc changes, and scaffold tests from a doc's acceptance-test table.
@@ -114,6 +115,43 @@ Next, document a first feature with `specky document "<feature>"`, then open the
 `specky adopt --dry-run`.
 
 The plugin does nothing in a repo until it has a `specky.toml`.
+
+### Codex
+
+Codex has no plugin, so you connect specky to it by hand. First run the three terminal commands
+above (`specky init`, `specky install-git-hook` and `specky index`). Then:
+
+1. Add the MCP server to `.codex/config.toml` in the repo, or to `~/.codex/config.toml` for every
+   repo:
+
+   ```toml
+   [mcp_servers.specky]
+   command = "specky-mcp"
+   args = []
+   ```
+
+2. Copy the skills into `.agents/skills/`, which is where Codex looks for them:
+
+   ```bash
+   for s in find-feature explore-docs document-domain; do
+     mkdir -p .agents/skills/$s
+     curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
+       -o .agents/skills/$s/SKILL.md
+   done
+   ```
+
+3. Optionally, add the `specky-lookup` subagent, which answers doc lookups on a low-cost model:
+
+   ```bash
+   mkdir -p .codex/agents
+   curl -fsSL https://raw.githubusercontent.com/danyyacoub/specky/main/integrations/codex/agents/specky-lookup.toml \
+     -o .codex/agents/specky-lookup.toml
+   ```
+
+   Codex doesn't send work to it by itself, so ask for it by name: *"use the specky-lookup subagent
+   to tell me what X does"*.
+
+[The Codex guide][codex] explains each step and lists the MCP tools.
 
 ### CI check
 
@@ -159,6 +197,7 @@ To pause the hooks, set `SPECKY_DISABLE_HOOK=1`. To remove them, delete the `pos
 
 MIT licensed.
 
+[codex]: https://github.com/danyyacoub/specky/tree/main/integrations/codex
 [opencode]: https://github.com/danyyacoub/specky/tree/main/integrations/opencode
 [kiro]: https://github.com/danyyacoub/specky/tree/main/integrations/kiro
 [devin]: https://github.com/danyyacoub/specky/tree/main/integrations/devin
