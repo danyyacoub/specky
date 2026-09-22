@@ -108,11 +108,12 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    fires (rapid commits, or a hook firing during a manual `specky sync`) would otherwise both pick
    the same pending commit. A held lock prints and exits 0; it never blocks a hook.
 
-7. **Commit exactly what was written** — The docs this run wrote, plus `specs/MODULES.md`, are
-   staged and committed by path as a follow-up commit marked `docs: sync specky docs [skip specky]`.
-   The marker is what the next fire recognizes to stop recursing. Committing by path rather than
-   `git add specs` matters twice: a human mid-sentence in a feature doc doesn't get their draft
-   committed under specky's name, and anything else they had staged stays staged.
+7. **Commit exactly what was written** — The docs this run wrote, plus `specs/MODULES.md` when
+   this run changed it, are staged and committed by path as a follow-up commit marked
+   `docs: sync specky docs [skip specky]`. The marker is what the next fire recognizes to stop
+   recursing. Committing by path rather than `git add specs` matters twice: a human mid-sentence in
+   a feature doc (or in `MODULES.md`) doesn't get their draft committed under specky's name, and
+   anything else they had staged stays staged.
 
 8. **Never commit mid-sequencer, but never forget either** — If git is midway through a rebase,
    cherry-pick, revert, merge or bisect (`rebase-merge`, `rebase-apply`, `MERGE_HEAD`,

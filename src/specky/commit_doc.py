@@ -851,16 +851,20 @@ def _stageable(repo_root: Path, rel_paths: list[str]) -> list[str]:
     return [rel for rel in rel_paths if (repo_root / rel).exists() or rel in tracked]
 
 
+def _contents(path: Path) -> bytes | None:
+    return path.read_bytes() if path.exists() else None
+
+
 def _commit_doc_updates(
     repo_root: Path, written: list[Path], removed: Sequence[Path] = ()
 ) -> None:
     """Commit exactly the docs this run wrote, as a separate commit.
 
-    Only `written` and `removed` (plus MODULES.md, which update_modules_index edits as a side
-    effect) is staged and committed. A bare `git add <docs root>` would sweep up a human's
-    half-finished doc edit — somebody who is mid-sentence in a feature doc when a commit lands would
-    find their draft committed under specky's name, and reverting the bot's commit would take their
-    work with it. The `git commit -- <paths>` pathspec does the same job on the other side: a partial
+    Only `written` and `removed` are staged and committed; MODULES.md is in `written` only when this
+    run changed it. A bare `git add <docs root>` would sweep up a human's half-finished doc edit —
+    somebody who is mid-sentence in a feature doc when a commit lands would find their draft
+    committed under specky's name, and reverting the bot's commit would take their work with it.
+    The `git commit -- <paths>` pathspec does the same job on the other side: a partial
     commit leaves anything else the user had staged staged. `removed` is the deleted half of a
     rename, which has to be staged explicitly for the same reason — nothing else would notice it.
 
@@ -875,9 +879,8 @@ def _commit_doc_updates(
     must stay that way. A rejected commit also un-stages what it staged (`_unstage`), or the same
     sweep this function exists to prevent happens through the developer's next commit instead.
     """
-    modules = paths.modules_index(repo_root)
     targets: dict[str, bool] = {}  # rel path -> is a deletion. Deduped, in the order written.
-    for path in [*written, modules]:  # a batch often rewrites one feature doc twice
+    for path in written:  # a batch often rewrites one feature doc twice
         if path.exists() and path.is_relative_to(repo_root):
             targets[path.relative_to(repo_root).as_posix()] = False
     for path in removed:
@@ -1097,10 +1100,18 @@ def main(rewritten: bool = False) -> None:
 
         try:
             with exclusive(repo_root):
+                modules = paths.modules_index(repo_root)
+                modules_before = _contents(modules)
                 if provider is not None:
                     written += _write_docs(
                         repo_root, todo, provider, label_prefix="specky commit-doc "
                     )
+                # `update_modules_index` edits MODULES.md as a side effect of writing a doc, so it
+                # never appears in `written` — and it's a file people edit by hand too. Staging it
+                # on every fire committed whatever edit a developer had pending in it under
+                # specky's marker, so it goes in only when this fire actually changed it.
+                if _contents(modules) != modules_before:
+                    written.append(modules)
                 # Inside the lock: the commit below fires this hook again, and the nested fire
                 # finding the lock held is what stops two of them interleaving.
                 _commit_doc_updates(repo_root, written, removed=removed)

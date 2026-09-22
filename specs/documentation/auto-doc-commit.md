@@ -13,7 +13,7 @@ After generating documentation, the git hooks stage and commit it as a separate 
 2. **Check marker**: If `HEAD`'s message starts with the auto-commit marker, nothing new is documented — this is the hook's own auto-commit, and documenting it would recurse forever. The run still continues to the staging steps below, because a rebase replays doc-sync commits too, so this is exactly the state a rebase's own rename arrives in.
 3. **Generate docs**: The run reconciles the backlog, writing a history file (`specs/history/<sha8>.md`) per commit plus any feature/workflow docs, and returns the list of paths it wrote. A `post-rewrite` fire adds both halves of each renamed history doc: the new file, and the old path it has to record as deleted.
 4. **Add what an earlier fire owes**: Paths a previous fire wrote but couldn't commit are read back from a ledger in `.specky/` and joined to this run's. A path recorded as *deleted* whose file has since reappeared — a fast-forward or a checkout restoring the committed old-sha doc — is deleted again, so the commit removes the orphan instead of resurrecting it.
-5. **Stage exactly those paths**: `git add -- <written paths> specs/MODULES.md`. A bare `git add specs` would sweep up a human's half-finished doc edit — somebody mid-sentence in a feature doc when a commit lands would find their draft committed under specky's name, and reverting the bot's commit would take their work with it. A path that neither exists nor is tracked is dropped first: handing git the deletion of a path it never knew fails the whole commit with `pathspec did not match any files`. This protects docs this fire didn't write, and only those — see [What Staging By Path Cannot Do](#what-staging-by-path-cannot-do).
+5. **Stage exactly those paths**: `git add -- <written paths>`. `specs/MODULES.md` is one of them only when this run changed it: it's edited as a side effect of writing a feature doc, so the run compares it before and after rather than staging it on every fire — which committed whatever edit a developer had pending in the index under the marker. A bare `git add specs` would sweep up a human's half-finished doc edit — somebody mid-sentence in a feature doc when a commit lands would find their draft committed under specky's name, and reverting the bot's commit would take their work with it. A path that neither exists nor is tracked is dropped first: handing git the deletion of a path it never knew fails the whole commit with `pathspec did not match any files`. This protects docs this fire didn't write, and only those — see [What Staging By Path Cannot Do](#what-staging-by-path-cannot-do).
 6. **Refuse mid-sequencer**: If a rebase, cherry-pick, revert, merge or bisect is in progress, write the paths to the ledger, print that the docs were written but left uncommitted, naming the operation, and stop. A `git commit` inside someone else's replay confuses the sequencer at best.
 7. **Check for changes**: If nothing was written, or the docs came out byte-for-byte identical to what's already committed, the process ends without creating a commit.
 8. **Commit updates**: `git commit -m <marker> -- <the same paths>`. The pathspec makes it a partial commit, so anything else the user had staged stays staged. The ledger is cleared *before* the commit: that commit fires the hook again, and a nested fire that still saw a full ledger would report the lock it cannot take as a problem. A failed commit writes it back.
@@ -27,7 +27,7 @@ flowchart TD
     B -->|No| D[Generate docs, collect written paths]
     C --> E[Add what the ledger owes]
     D --> E
-    E --> F[git add -- those paths + MODULES.md]
+    E --> F[git add -- those paths,<br/>MODULES.md only if this run changed it]
     F --> G{Sequencer in progress?}
     G -->|Yes| H[Write the ledger, leave them uncommitted]
     G -->|No| I{Anything actually different?}
@@ -39,7 +39,7 @@ flowchart TD
 ```
 
 ## What Staging By Path Cannot Do
-Step 5's pathspec is what keeps a human's unrelated drafts out of the bot's commit, but it protects *files*, not *edits*. `git add -- <path>` stages that file's whole working-tree content, so a doc the fire rewrites is committed as it now stands — including whatever the human had already changed in it and not committed. There is no narrower thing to stage: git has no way to commit specky's changes to a file without the human's.
+Step 5's pathspec is what keeps a human's unrelated drafts out of the bot's commit, but it protects *files*, not *edits*. `git add -- <path>` stages that file's whole working-tree content, so a doc the fire rewrites is committed as it now stands — including whatever the human had already changed in it and not committed. `specs/MODULES.md` is in the same position whenever the fire adds a row to it. There is no narrower thing to stage: `git commit -- <paths>` commits each path's working-tree content, so even a hunk staged on its own with `git apply --cached` would be committed whole.
 
 Seen on a trial repo where `specky tag` had added frontmatter to 43 docs without committing it: a `post-commit` fire updated three of those docs, and its `docs: sync specky docs [skip specky]` commit carried their frontmatter along with its own section splices — one of the three appears in that commit as five lines of frontmatter and nothing else. The docs the fire didn't write stayed dirty, as designed.
 
@@ -50,7 +50,7 @@ Nothing is destroyed — the content is committed rather than dropped, and the r
 ## Outcomes
 | Scenario | Result |
 |----------|--------|
-| Docs generated successfully | New commit created with marker message, containing only the written docs and MODULES.md; original commit unaffected |
+| Docs generated successfully | New commit created with marker message, containing only the written docs, plus MODULES.md if the run changed it; original commit unaffected |
 | Nothing written (e.g. every commit skipped by classification) | No auto-commit created, original commit unaffected |
 | Docs regenerated byte-for-byte identical | Nothing staged is different, so no commit is created; HEAD unchanged |
 | A rebase, cherry-pick, revert, merge or bisect is in progress | Docs stay on disk uncommitted; the operation is named; their paths go to the `.specky/` ledger |
@@ -71,6 +71,8 @@ Nothing is destroyed — the content is committed rather than dropped, and the r
 | A previous fire left a debt in the ledger | This fire commits those paths too | The fire that wrote them couldn't; a path recorded as deleted whose file has since reappeared is deleted again, so the commit removes the orphan rather than resurrecting it |
 | A human has uncommitted edits in a doc this fire **doesn't** write | They are neither staged nor committed | Staging is by path, never a bare `git add specs` — someone mid-sentence would otherwise find their draft committed under specky's name |
 | A human has uncommitted edits in a doc this fire **does** write | They are committed too, under the marker | `git add -- <path>` stages that file's whole working-tree content; git has no way to commit specky's changes to a file without the human's. See [What Staging By Path Cannot Do](#what-staging-by-path-cannot-do) |
+| A human has uncommitted edits in `MODULES.md` and this fire adds no row to it | They are neither staged nor committed | `MODULES.md` is staged only when the run changed it. It used to be staged on every fire, and a feature's pending index rows landed in a `docs: sync specky docs` commit that way |
+| A human has uncommitted edits in `MODULES.md` and this fire adds a row to it | They are committed too, under the marker | The same limit as any doc the fire writes: the file is committed whole |
 | The docs regenerate byte-for-byte identical | No commit is created | There is nothing staged that differs, and an empty commit says a change happened when none did |
 | A `pre-commit` gate rejects the doc commit | The paths are un-staged and left on disk for the ledger's retry | Left staged, the developer's *next* commit would sweep them into their feature commit under their name — and the retry is a fire too late to prevent it |
 | The human had already staged one of those paths themselves | It is left staged | Their staged content is gone either way, and un-staging it would compound the loss rather than undo it |
@@ -93,3 +95,5 @@ Nothing is destroyed — the content is committed rather than dropped, and the r
 | Another hook rejects the doc commit | The hook attempts to commit | The original user commit remains; the error is printed; the user sees "doc updates written but not committed" |
 | A `pre-commit` gate rejects every doc commit | A hook writes docs and the commit is refused | The docs are on disk but `git diff --cached` is empty, so the developer's next commit contains only their own work |
 | The human had `src.py` staged and the doc commit is rejected | The un-staging runs | `src.py` is still staged |
+| `MODULES.md` has an uncommitted edit and the fire writes only a history doc | The doc commit is made | `MODULES.md` is absent from it, still holds the edit, and still shows as modified |
+| `MODULES.md` has an uncommitted edit and the fire writes a new feature doc | The doc commit is made | The committed `MODULES.md` has the new doc's row and the human's edit, and the working tree is clean for it |

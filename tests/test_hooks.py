@@ -449,6 +449,52 @@ class TestTheFollowUpCommit:
         assert "specs/search/indexing.md" not in committed
         assert " M specs/search/indexing.md" in git(in_repo, "status", "--porcelain")
 
+    def test_an_uncommitted_modules_edit_stays_out_of_a_fire_that_doesnt_touch_it(
+        self, in_repo: Path, monkeypatch
+    ):
+        """MODULES.md used to be staged on every fire, whether or not the fire changed it.
+
+        So a developer mid-way through editing the index had their pending edit committed under
+        specky's marker as soon as any commit landed — which is how a feature's MODULES.md rows
+        ended up in a `docs: sync specky docs` commit in this repo.
+        """
+        _use_provider(monkeypatch, RoutingProvider())  # skips classification: no feature doc
+        modules = in_repo / "specs" / "MODULES.md"
+        modules.write_text("# Modules\n")
+        _commit(in_repo, "real work")
+        modules.write_text("# Modules\n\n## Billing\n\nA row I haven't committed yet.\n")
+
+        commit_doc.main()
+
+        committed = git(in_repo, "show", "--name-only", "--format=", "HEAD").split()
+        assert any(path.startswith("specs/history/") for path in committed), "no doc commit made"
+        assert "specs/MODULES.md" not in committed
+        assert "A row I haven't committed yet." in modules.read_text()
+        assert " M specs/MODULES.md" in git(in_repo, "status", "--porcelain")
+
+    def test_a_modules_row_the_fire_adds_is_committed(self, in_repo: Path, monkeypatch):
+        """The other half: when the fire does add a row, MODULES.md is in its commit — carrying any
+        uncommitted edit the human had in it too, the same limit a rewritten doc has."""
+        _use_provider(
+            monkeypatch,
+            RoutingProvider(
+                classification='{"skip": false, "domain": "billing", "topic": "refund-flow", '
+                '"purpose": "Issue refunds", "type": "workflow", "tags": ["refunds"]}',
+                doc="# Billing — Refund Flow\n\n## What It Does\nRefunds.\n",
+            ),
+        )
+        modules = in_repo / "specs" / "MODULES.md"
+        modules.write_text("# Modules\n")
+        _commit(in_repo, "real work")
+        modules.write_text("# Modules\n\nA note I haven't committed yet.\n")
+
+        commit_doc.main()
+
+        committed = git(in_repo, "show", "HEAD:specs/MODULES.md")
+        assert "billing/refund-flow.md" in committed
+        assert "A note I haven't committed yet." in committed
+        assert "specs/MODULES.md" not in git(in_repo, "status", "--porcelain")
+
     def test_unrelated_staged_work_stays_staged(self, in_repo: Path, monkeypatch):
         _use_provider(monkeypatch, RoutingProvider())
         _commit(in_repo, "real work")
