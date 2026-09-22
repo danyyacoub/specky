@@ -6,9 +6,11 @@ tags: [documentation, sync]
 # Documentation — Auto Doc Commit
 
 ## What It Does
+
 After generating documentation, the git hooks stage and commit it as a separate follow-up commit, identified by the marker message `docs: sync specky docs [skip specky]` to prevent infinite recursion. Instead of leaving generated files as uncommitted changes, the docs land in the repository on their own. Only the files this run actually wrote are committed, and nothing is committed at all while git is midway through a multi-commit operation — but what couldn't be committed then is remembered and committed by the next fire, because a doc left uncommitted forever is worse than no doc at all.
 
 ## How It Works
+
 1. **A hook fires**: `post-commit`, `post-merge` or `post-rewrite` runs (see [documentation/auto-commit-docs.md](auto-commit-docs.md)).
 2. **Check marker**: If `HEAD`'s message starts with the auto-commit marker, nothing new is documented — this is the hook's own auto-commit, and documenting it would recurse forever. The run still continues to the staging steps below, because a rebase replays doc-sync commits too, so this is exactly the state a rebase's own rename arrives in.
 3. **Generate docs**: The run reconciles the backlog, writing a history file (`specs/history/<sha8>.md`) per commit plus any feature/workflow docs, and returns the list of paths it wrote. A `post-rewrite` fire adds both halves of each renamed history doc: the new file, and the old path it has to record as deleted.
@@ -39,6 +41,7 @@ flowchart TD
 ```
 
 ## What Staging By Path Cannot Do
+
 Step 5's pathspec is what keeps a human's unrelated drafts out of the bot's commit, but it protects *files*, not *edits*. `git add -- <path>` stages that file's whole working-tree content, so a doc the fire rewrites is committed as it now stands — including whatever the human had already changed in it and not committed. `specs/MODULES.md` is in the same position whenever the fire adds a row to it. There is no narrower thing to stage: `git commit -- <paths>` commits each path's working-tree content, so even a hunk staged on its own with `git apply --cached` would be committed whole.
 
 Seen on a trial repo where `specky tag` had added frontmatter to 43 docs without committing it: a `post-commit` fire updated three of those docs, and its `docs: sync specky docs [skip specky]` commit carried their frontmatter along with its own section splices — one of the three appears in that commit as five lines of frontmatter and nothing else. The docs the fire didn't write stayed dirty, as designed.
@@ -48,6 +51,7 @@ Nothing is destroyed — the content is committed rather than dropped, and the r
 **Proposed, not implemented:** before rewriting a doc, compare it against `HEAD`, and when it already differs, leave it alone and print that it was skipped for having uncommitted edits — parking the draft the way a refused rewrite is parked. That would keep authorship clean, at the price of a doc going un-updated for as long as somebody has edits sitting in it, and of a new way for the backlog to stall quietly. It changes what the hook *writes* rather than what this doc *says*, so it deserves its own decision instead of arriving with this paragraph.
 
 ## Outcomes
+
 | Scenario | Result |
 |----------|--------|
 | Docs generated successfully | New commit created with marker message, containing only the written docs, plus MODULES.md if the run changed it; original commit unaffected |
@@ -58,6 +62,7 @@ Nothing is destroyed — the content is committed rather than dropped, and the r
 | A `post-rewrite` renamed a history doc | The commit carries the new file and the deletion of the old one, so the old sha's doc leaves the tree |
 | A human has uncommitted edits in a doc this fire does **not** write | Those edits are neither staged nor committed |
 | A human has uncommitted edits in a doc this fire **does** write | They are committed too, under the marker message, beside specky's own changes to that doc — staging by path stages the file's whole content, not specky's changes to it |
+| A human has uncommitted edits in `MODULES.md` and this fire adds no row to it | They are neither staged nor committed |
 | The user had unrelated staged work | It is still staged after the doc commit |
 | Auto-commit attempt fails | Error printed to output, original commit unaffected; the docs are un-staged, stay on disk, and their paths go to the ledger for the next fire |
 | Hook detects its own marker | Nothing new is documented; a rename or a ledger debt is still committed |
@@ -80,6 +85,7 @@ Nothing is destroyed — the content is committed rather than dropped, and the r
 | The commit fails for any other reason | The error is printed; the original commit is untouched | A hook must never be able to undo the commit that triggered it |
 
 ## Acceptance Tests
+
 | Given | When | Then |
 |-------|------|------|
 | User makes a regular commit | A hook runs | Docs are generated, staged by path, and a follow-up commit with the marker message is created |
