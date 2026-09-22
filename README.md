@@ -1,7 +1,21 @@
 # specky
 
-Functional docs that keep up with your code. specky writes plain-markdown docs into your repo,
-updates them on every commit, and makes them searchable for people, CI and coding agents.
+Functional docs that keep up with your code.
+
+Most code is now written by AI. The people who own it still need a clear view of what it does:
+which features exist, how each workflow runs, and how the edge cases are handled. Reading the code
+is no longer a practical way to get that view.
+
+specky keeps a functional doc of your codebase in sync with the code. It writes plain-markdown docs
+into your repo, updates them on every commit, and indexes them for three audiences:
+
+- **AI agents** look up what a feature does and which rules it must keep before they change it.
+- **Developers** review behaviour and edge cases in the PR, next to the code that changed.
+- **Product managers** browse a searchable site of features and recent changes with no code to
+  read, and use an agent to explore them or draft proposals.
+
+Because every feature is indexed, finding one is a search, not a crawl through the code. That
+work can run on a lower-cost model, which keeps your smartest model on the hard development tasks.
 
 It ships as a Claude Code plugin plus a CLI. It also works with [opencode][opencode], [Kiro][kiro]
 and [Devin][devin].
@@ -50,6 +64,14 @@ An MCP server and skills let Claude Code, and other agents, answer "what does X 
 before reading code.
 
 ![Claude Code answering from specky's docs][shot-agent]
+
+### Lower-cost models for doc work
+
+Looking up and writing docs doesn't need your strongest model. In Claude Code, set
+`[skills] model = "haiku"` in `specky.toml`. specky's skills then hand their lookups and writing to
+a subagent on that model, and your session stays on the model you chose for development. For the
+CLI and the git hooks, `[ai] <task>_model` sends each kind of call (commit summaries,
+classification, doc writing, tags, chat) to its own model.
 
 specky can also import existing docs (`specky adopt`), export them to PDF or Confluence, summarise
 a PR's doc changes, and scaffold tests from a doc's acceptance-test table.
