@@ -43,9 +43,12 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import posixpath
 import re
 import shutil
 from pathlib import Path
+from typing import Callable
+from urllib.parse import unquote
 
 import markdown as md
 from jinja2 import Environment
@@ -498,6 +501,8 @@ body.nav-collapsed .sidebar { display: none; }
   border-radius: 2px; background: var(--doc-tint); vertical-align: -0.12em;
 }
 .doc h3 { font-size: 1rem; }
+/* A `#section` link scrolls the content pane, which runs under the fixed titlebar. */
+.doc :is(h1, h2, h3, h4, h5, h6)[id] { scroll-margin-top: 64px; }
 .doc a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-soft); }
 .doc code {
   font-family: var(--font-mono); background: var(--surface-tertiary); padding: 2px 5px; border-radius: 4px;
@@ -2336,6 +2341,12 @@ def slug(doc_path: str) -> str:
     return "-".join(re.sub(r"[^A-Za-z0-9]+", "-", p).strip("-") for p in parts)
 
 
+def page_name(doc_path: str) -> str:
+    """The viewer page a doc is rendered to. Anything linking to a page (a chat answer's cited
+    doc, say) names it through this, so the link can't drift from the file `render_site` writes."""
+    return f"{slug(doc_path)}.html"
+
+
 def _excerpt(content: str, length: int = 160) -> str:
     text = _plain_text(content, drop_first_heading=True)
     return f"{text[:length]}…" if len(text) > length else text
@@ -2583,6 +2594,91 @@ def render_doc_body(
     return diagram_render.render_mermaid_blocks(body_html)
 
 
+# --- in-body links and heading anchors ---------------------------------------------------
+# A doc links another the way it reads in the repo — `[check](../cli/check.md)`, relative to
+# itself — but a rendered site has no `.md` files and no folders: every page is a flat
+# `<slug>.html`. So each renderer resolves those links to wherever *it* put the target (a page
+# here, a section of the one file in `specky export`). Both steps run after `render_doc_body`,
+# never inside it: `_STEP_SECTION` matches a bare `<h2>`, and an `id` on it would switch the
+# workflow stepper off.
+
+# Links never nest, so the lazy label can't run on into a second one.
+_LINK = re.compile(r"<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a>", re.DOTALL)
+_HREF_ATTR = re.compile(r'\bhref="(?P<href>[^"]*)"')
+_URL_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+_HEADING = re.compile(r"<h(?P<level>[1-6])>(?P<text>.*?)</h(?P=level)>", re.DOTALL)
+
+# `(target, anchor)` → the href to use, or None when this output has no such thing. `target` is
+# the repo-relative path the link meant; `anchor` is the part after `#`, "" when there was none.
+HrefFor = Callable[[str, str], str | None]
+
+
+def rewrite_links(fragment: str, doc_path: str, href_for: HrefFor) -> str:
+    """Every relative link in `fragment` resolved through `href_for`.
+
+    A link is resolved against `doc_path`, the repo-relative path of the doc it sits in, so
+    `../cli/check.md` in `specs/catalog/feature-graph.md` becomes `specs/cli/check.md`; a bare
+    `#section` gets `doc_path` itself. A link `href_for` has no answer for is unwrapped to its
+    label: the same words without a link read as prose, while a dead link reads as a broken site.
+    Absolute URLs, `mailto:` and root-relative paths are left exactly as written.
+    """
+
+    def resolve(match: re.Match[str]) -> str:
+        attrs = match.group("attrs")
+        found = _HREF_ATTR.search(attrs)
+        if found is None:
+            return match.group(0)
+        href = html.unescape(found.group("href"))
+        if not href or href.startswith("/") or _URL_SCHEME.match(href):
+            return match.group(0)
+        path, _, anchor = href.partition("#")
+        target = (
+            posixpath.normpath(posixpath.join(posixpath.dirname(doc_path), unquote(path)))
+            if path
+            else doc_path
+        )
+        new_href = href_for(target, anchor)
+        if new_href is None:
+            return match.group("label")
+        new_attrs = (
+            attrs[: found.start()]
+            + f'href="{html.escape(new_href, quote=True)}"'
+            + attrs[found.end() :]
+        )
+        return f"<a{new_attrs}>{match.group('label')}</a>"
+
+    return _LINK.sub(resolve, fragment)
+
+
+def _heading_id(text: str) -> str:
+    """GitHub's anchor for a heading, because that's what an author checks their `#links`
+    against: lowercased, punctuation dropped, each space a hyphen — "Scope, And What It Doesn't
+    Hide" is `scope-and-what-it-doesnt-hide`."""
+    plain = html.unescape(_TAGS.sub("", text)).strip().lower()
+    return re.sub(r"[^\w\- ]", "", plain).replace(" ", "-")
+
+
+def anchor_headings(fragment: str, prefix: str = "") -> str:
+    """An `id` on every heading, so a `#section` link has somewhere to land.
+
+    A repeated heading gets `-1`, `-2`, … as on GitHub. `prefix` is for a page holding more than
+    one doc (`specky export`), where every doc's `## Edge Cases` would otherwise share one id.
+    """
+    seen: dict[str, int] = {}
+
+    def add_id(match: re.Match[str]) -> str:
+        level, text = match.group("level"), match.group("text")
+        base = _heading_id(text)
+        if not base:
+            return match.group(0)
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        anchor = f"{base}-{count}" if count else base
+        return f'<h{level} id="{html.escape(prefix + anchor, quote=True)}">{text}</h{level}>'
+
+    return _HEADING.sub(add_id, fragment)
+
+
 # --- doc chrome: breadcrumb/tags header, and the "Related" cross-link section ---------
 
 
@@ -2644,6 +2740,22 @@ def _related_section(doc: dict, path_lookup: dict[str, dict]) -> str:
     if not items:
         return ""
     return f'<div class="related"><h2>Related</h2><ul>{"".join(items)}</ul></div>'
+
+
+def _page_href(doc_path: str, pages: dict[str, str]) -> HrefFor:
+    """`rewrite_links`' resolver for one viewer page: a doc is its page, a section of this doc is
+    a bare `#anchor`, and anything the site didn't render (a file outside the docs tree, a doc
+    that no longer exists) is no link at all."""
+
+    def href_for(target: str, anchor: str) -> str | None:
+        if target == doc_path and anchor:
+            return f"#{anchor}"
+        page = pages.get(target)
+        if page is None:
+            return None
+        return f"{page}#{anchor}" if anchor else page
+
+    return href_for
 
 
 def _home_body(
@@ -2760,11 +2872,14 @@ def render_site(repo_root: Path) -> Path:
     search_entries = []
     docs = []
     path_lookup: dict[str, dict] = {}
+    # Full repo path → page, for links inside doc bodies (`rewrite_links`), which name their
+    # target by path rather than by `related:` slug.
+    pages: dict[str, str] = {}
     all_tags: set[str] = set()
     for row in rows:
         path, domain, title, content, doc_type, tags_raw, related_raw, owner = row[:8]
         stale_since, last_code = row[8:]
-        html_name = f"{slug(path)}.html"
+        html_name = page_name(path)
         tags = [t for t in tags_raw.split(",") if t]
         related = [r for r in related_raw.split(",") if r]
         all_tags.update(tags)
@@ -2772,6 +2887,7 @@ def render_site(repo_root: Path) -> Path:
         # and stay uninterested in which of the two columns was empty.
         stale_days = days_behind(stale_since, last_code) if stale_since and last_code else 0
         doc = {
+            "path": path,
             "html_name": html_name,
             "domain": domain,
             "title": title,
@@ -2797,6 +2913,7 @@ def render_site(repo_root: Path) -> Path:
         # Keyed by `<domain>/<topic>.md`: that's how a `related:` entry names its target, whatever
         # the docs root happens to be called (see `_related_section`).
         path_lookup[path.split("/", 1)[-1]] = {"title": title, "html_name": html_name}
+        pages[path] = html_name
         entry = {
             "title": title,
             "domain": domain,
@@ -2839,6 +2956,8 @@ def render_site(repo_root: Path) -> Path:
         )
         any_mermaid_source = any_mermaid_source or has_source
         any_mermaid_rendered = any_mermaid_rendered or has_rendered
+        body_html = anchor_headings(body_html)
+        body_html = rewrite_links(body_html, doc["path"], _page_href(doc["path"], pages))
         body = _doc_header(doc) + body_html + _related_section(doc, path_lookup)
         page = _page(doc["title"], rail_html, body, doc["doc_type"])
         (site_dir / doc["html_name"]).write_text(page)

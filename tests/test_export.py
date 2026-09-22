@@ -119,6 +119,48 @@ def test_a_glossary_span_with_no_definition_keeps_its_text():
     assert inline_glossary_titles(fragment, {}) == "<p>the ghost term</p>"
 
 
+# --- links between docs, inside the one file ---------------------------------------------
+# Every doc is a section of the same page here, so a link to another doc is a link to its section,
+# and two docs' `## Edge Cases` must not share an id.
+
+
+@pytest.fixture
+def cross_linked(tmp_repo, write_doc) -> str:
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\nSee [limits](refund-limits.md), [their cases]"
+        "(refund-limits.md#edge-cases), [below](#edge-cases) and [a commit](../history/abc12345.md)."
+        "\n\n## Edge Cases\n\nNone.\n",
+    )
+    write_doc("billing/refund-limits.md", "# Billing — Refund Limits\n\n## Edge Cases\n\nNone.\n")
+    write_doc("history/abc12345.md", "# Commit abc12345\n\nTouched refunds.\n")
+    run_index(tmp_repo)
+    run_export(tmp_repo)
+    return _page(tmp_repo)
+
+
+def test_a_link_to_another_doc_jumps_to_its_section(cross_linked):
+    assert '<a href="#billing-refund-limits">limits</a>' in cross_linked
+
+
+def test_a_link_into_another_docs_heading_jumps_to_that_heading(cross_linked):
+    assert '<a href="#billing-refund-limits--edge-cases">their cases</a>' in cross_linked
+    assert 'id="billing-refund-limits--edge-cases"' in cross_linked
+
+
+def test_a_section_link_stays_inside_its_own_doc(cross_linked):
+    assert '<a href="#billing-refund-flow--edge-cases">below</a>' in cross_linked
+
+
+def test_a_heading_shared_by_two_docs_gets_two_ids(cross_linked):
+    ids = re.findall(r'<h\d id="([^"]+)"', cross_linked)
+    assert len(ids) == len(set(ids))
+
+
+def test_a_link_to_a_doc_left_out_of_the_export_keeps_only_its_words(cross_linked):
+    assert "a commit" in cross_linked and "abc12345.md" not in cross_linked
+
+
 # --- sizing ----------------------------------------------------------------------------
 # specky is installed into other people's repos. A repo with 3,000 commits has ~3,000 per-commit
 # docs before it has a single feature doc, and this output is one file that someone reads

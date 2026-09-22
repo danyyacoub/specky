@@ -40,10 +40,13 @@ from pathlib import Path
 from specky import paths
 from specky.db import connect
 from specky.html_render import (
+    HrefFor,
+    anchor_headings,
     domain_sort_key,
     load_glossary,
     markdown_html,
     render_doc_body,
+    rewrite_links,
     slug,
 )
 
@@ -240,6 +243,25 @@ def _doc_meta(doc: Doc) -> str:
     return f'<p class="doc-meta">{_META_SEP.join(bits)}</p>'
 
 
+def _section_prefix(anchor: str) -> str:
+    """What a doc's heading ids start with: every doc in the file has its own `## Edge Cases`."""
+    return f"{anchor}--"
+
+
+def _section_href(anchors: dict[str, str]) -> HrefFor:
+    """`rewrite_links`' resolver for the single page, where a doc is a `<section>` of it rather
+    than a page of its own. A link to a doc left out of this export (`specs/history/` without
+    `--include-history`) has nowhere to go and is unwrapped."""
+
+    def href_for(target: str, heading: str) -> str | None:
+        anchor = anchors.get(target)
+        if anchor is None:
+            return None
+        return f"#{_section_prefix(anchor)}{heading}" if heading else f"#{anchor}"
+
+    return href_for
+
+
 def _toc(groups: list[tuple[str, list[Doc]]]) -> str:
     items = []
     for domain, docs in groups:
@@ -261,6 +283,7 @@ def single_page_html(
     caller can print the one-time `specky setup-diagrams` hint the viewer prints.
     """
     groups = _grouped(docs)
+    href_for = _section_href({doc.path: doc.anchor for doc in docs})
     any_source = any_rendered = False
     sections = []
     for _, group in groups:
@@ -270,7 +293,9 @@ def single_page_html(
             )
             any_source = any_source or has_source
             any_rendered = any_rendered or has_rendered
-            body = inline_glossary_titles(demote_headings(body), glossary)
+            body = anchor_headings(demote_headings(body), prefix=_section_prefix(doc.anchor))
+            body = rewrite_links(body, doc.path, href_for)
+            body = inline_glossary_titles(body, glossary)
             sections.append(
                 f'<section class="doc" id="{doc.anchor}">{_doc_meta(doc)}{body}</section>'
             )

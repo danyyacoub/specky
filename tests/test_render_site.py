@@ -185,6 +185,77 @@ def test_related_docs_are_linked_by_page_name(site):
     assert 'href="billing-refund-limits.html"' in page
 
 
+# --- links inside a doc's body -------------------------------------------------------------
+# Docs link each other the way they read in the repo (`../cli/check.md`). The site has no .md
+# files and no folders, so each such link has to land on the page its target was rendered to.
+
+LINKING_DOC = (
+    "# Billing — Refund Links\n\n"
+    "See [the limits](refund-limits.md), [the steps](../billing/refund-flow.md#how-it-works), "
+    "[below](#edge-cases), [the skill](../../skills/x/SKILL.md), [a gone doc](gone.md) "
+    "and [elsewhere](https://example.com/a.md).\n\n"
+    "## Edge Cases\n\nNone.\n"
+)
+
+
+@pytest.fixture
+def linked_site(tmp_repo, write_doc) -> Path:
+    write_doc("billing/refund-flow.md", "# Billing — Refund Flow\n\n## How It Works\n\nSteps.\n")
+    write_doc("billing/refund-limits.md", "# Billing — Refund Limits\n\nCaps refunds.\n")
+    write_doc("billing/refund-links.md", LINKING_DOC)
+    run_index(tmp_repo)
+    return render_site(tmp_repo).parent
+
+
+@pytest.fixture
+def linked(linked_site) -> str:
+    return (linked_site / "billing-refund-links.html").read_text()
+
+
+def test_a_link_to_another_doc_opens_its_page(linked):
+    assert '<a href="billing-refund-limits.html">the limits</a>' in linked
+
+
+def test_a_link_into_another_docs_section_keeps_its_fragment(linked):
+    assert '<a href="billing-refund-flow.html#how-it-works">the steps</a>' in linked
+
+
+def test_a_section_link_lands_on_a_heading_with_that_id(linked):
+    assert '<a href="#edge-cases">below</a>' in linked
+    assert '<h2 id="edge-cases">' in linked
+
+
+def test_the_target_page_has_the_heading_a_link_into_it_names(linked_site):
+    assert '<h2 id="how-it-works">' in (linked_site / "billing-refund-flow.html").read_text()
+
+
+def test_a_link_to_something_the_site_did_not_render_keeps_only_its_words(linked):
+    assert "the skill" in linked and "SKILL.md" not in linked
+    assert "a gone doc" in linked and "gone.md" not in linked
+
+
+def test_an_absolute_link_is_left_alone(linked):
+    assert '<a href="https://example.com/a.md">elsewhere</a>' in linked
+
+
+def test_no_page_links_a_markdown_file(linked_site):
+    assert not re.search(r'href="(?![a-z]+:)[^"]*\.md[#"]', _all_text(linked_site))
+
+
+def test_a_workflow_stepper_survives_its_heading_getting_an_id(tmp_repo, write_doc):
+    """Anchors are added after `render_doc_body`, because `_step_list` matches a bare `<h2>`."""
+    write_doc(
+        "billing/steps.md",
+        "# Billing — Steps\n\n## How It Works\n\n1. **Ask** — the customer asks.\n"
+        "2. **Pay** — the refund is paid.\n",
+        {"type": "workflow"},
+    )
+    run_index(tmp_repo)
+    page = (render_site(tmp_repo).parent / "billing-steps.html").read_text()
+    assert '<h2 id="how-it-works">How It Works</h2>' in page
+    assert '<ol class="steps">' in page
+
+
 def test_tables_are_wrapped_and_glossary_terms_are_linked(site):
     page = (site / "billing-refund-flow.html").read_text()
     assert '<figure class="tw">' in page

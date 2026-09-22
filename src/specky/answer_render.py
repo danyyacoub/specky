@@ -24,7 +24,7 @@ from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 
-from specky import diagram_render, html_render
+from specky import diagram_render, html_render, paths
 
 # Each fence is a `node` subprocess (diagram_render.render_mermaid_svg), so one answer must not be
 # able to fan out into a dozen of them. The prompt asks for at most one; this is the bound that
@@ -179,6 +179,26 @@ def _glossary(repo_root: str) -> tuple[tuple[str, str], ...]:
     return tuple(html_render.load_glossary(Path(repo_root)).items())
 
 
+def _doc_page_href(repo_root: Path) -> html_render.HrefFor:
+    """`rewrite_links`' resolver for an answer. The model cites docs by repo path
+    (`specs/billing/refunds.md`) — a file the viewer doesn't serve — so a `.md` link is pointed at
+    the page that doc was rendered to, or unwrapped if it names nothing in the docs tree. Any other
+    relative link (a page name, a `#section`) is kept as written — and whatever this returns still
+    goes through the sanitizer, which runs after it (see `render_answer`).
+    """
+
+    def href_for(target: str, anchor: str) -> str | None:
+        suffix = f"#{anchor}" if anchor else ""
+        if not target.lower().endswith(".md"):
+            return target + suffix
+        doc = paths.doc_in_tree(repo_root, target)
+        if doc is None or not doc.is_file():
+            return None
+        return html_render.page_name(doc.relative_to(repo_root).as_posix()) + suffix
+
+    return href_for
+
+
 def render_answer(repo_root: Path, markdown_text: str) -> str:
     """One answer's markdown as panel HTML: sanitized, glossary-linked, tables wrapped, diagrams
     drawn.
@@ -186,8 +206,14 @@ def render_answer(repo_root: Path, markdown_text: str) -> str:
     Same order as `html_render.render_doc_body` so an answer reads like a doc page, with the
     sanitizer inserted where the model's markup stops being the model's — before any of our own
     markup (hover spans, `figure.tw`, diagram SVG) is added, so none of it is ever scrubbed.
+
+    Doc links are resolved *before* the sanitizer, not after: `rewrite_links` percent-decodes a
+    path to find the file it names, and a model's `javascript%3A…` must not come out of that as a
+    live `javascript:` link nothing checks again.
     """
-    fragment = sanitize_fragment(html_render.markdown_html(markdown_text))
+    fragment = html_render.markdown_html(markdown_text)
+    fragment = html_render.rewrite_links(fragment, "", _doc_page_href(repo_root))
+    fragment = sanitize_fragment(fragment)
     fragment = html_render.link_glossary(fragment, dict(_glossary(str(repo_root))))
     body, _source, _rendered = diagram_render.render_mermaid_blocks(
         html_render._wrap_tables(fragment), limit=MAX_ANSWER_DIAGRAMS

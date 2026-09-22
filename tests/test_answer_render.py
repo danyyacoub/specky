@@ -131,6 +131,34 @@ def repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.mark.parametrize(
+    "cited", ["specs/billing/refund-flow.md", "billing/refund-flow.md"]
+)
+def test_a_cited_doc_links_to_its_page_not_its_markdown(repo, cited):
+    (repo / "specs" / "billing").mkdir()
+    (repo / "specs" / "billing" / "refund-flow.md").write_text("# Refund flow\n")
+    body = render_answer(repo, f"See [the flow]({cited}#edge-cases).")
+    assert 'href="billing-refund-flow.html#edge-cases"' in body
+
+
+@pytest.mark.parametrize("cited", ["specs/billing/missing.md", "../outside.md", "README.md"])
+def test_a_markdown_link_to_no_doc_keeps_only_its_words(repo, cited):
+    (repo / "README.md").write_text("# readme\n")
+    body = render_answer(repo, f"See [that file]({cited}).")
+    assert "that file" in body and "<a" not in body
+
+
+def test_a_page_link_the_model_wrote_is_kept(repo):
+    assert 'href="cli-check.html"' in render_answer(repo, "See [check](cli-check.html).")
+
+
+def test_an_encoded_scheme_does_not_come_back_out_of_link_resolution_live(repo):
+    """`rewrite_links` percent-decodes a path to find its file; the sanitizer runs after it, so a
+    decoded `javascript:` is still caught."""
+    body = render_answer(repo, "[click](javascript%3Aalert(1))")
+    assert "javascript" not in body.split("click")[0]
+
+
 def test_markdown_becomes_the_markup_a_doc_page_would_get(repo):
     body = render_answer(repo, "## Refunds\n\nA refund is **full** or partial.")
     assert "<h2>Refunds</h2>" in body

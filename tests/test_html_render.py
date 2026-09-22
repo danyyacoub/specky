@@ -1,3 +1,5 @@
+import re
+
 import pytest
 
 from specky import html_render
@@ -7,8 +9,10 @@ from specky.html_render import (
     slug,
     _tag_class,
     _wrap_tables,
+    anchor_headings,
     link_glossary,
     load_glossary,
+    rewrite_links,
 )
 
 GLOSSARY = {
@@ -141,3 +145,80 @@ def test_load_glossary_reads_bold_term_rows(tmp_repo):
 
 def test_load_glossary_missing_file(tmp_repo):
     assert load_glossary(tmp_repo) == {}
+
+
+# --- in-body links and heading anchors ---------------------------------------------------
+
+PAGES = {"specs/cli/check.md": "cli-check.html", "specs/catalog/graph.md": "catalog-graph.html"}
+
+
+def _to_page(target: str, anchor: str) -> str | None:
+    page = PAGES.get(target)
+    return page + (f"#{anchor}" if anchor else "") if page else None
+
+
+@pytest.mark.parametrize(
+    "href, expected",
+    [
+        ("../cli/check.md", "cli-check.html"),
+        ("graph.md", "catalog-graph.html"),
+        ("./graph.md#edge-cases", "catalog-graph.html#edge-cases"),
+        ("../cli/../cli/check.md", "cli-check.html"),
+    ],
+)
+def test_rewrite_links_resolves_a_path_against_the_doc_it_sits_in(href, expected):
+    out = rewrite_links(f'<a href="{href}">x</a>', "specs/catalog/feature.md", _to_page)
+    assert out == f'<a href="{expected}">x</a>'
+
+
+def test_rewrite_links_gives_a_bare_fragment_the_docs_own_path():
+    seen = []
+    rewrite_links('<a href="#edge-cases">x</a>', "specs/cli/check.md", lambda t, a: seen.append((t, a)) or "")
+    assert seen == [("specs/cli/check.md", "edge-cases")]
+
+
+def test_rewrite_links_unwraps_a_link_with_nowhere_to_go():
+    out = rewrite_links('<p><a href="../../skills/x/SKILL.md">the <em>skill</em></a></p>', "specs/cli/check.md", _to_page)
+    assert out == "<p>the <em>skill</em></p>"
+
+
+@pytest.mark.parametrize(
+    "href", ["https://example.com/a.md", "mailto:a@example.com", "/abs/a.md", "//cdn.example/a.md"]
+)
+def test_rewrite_links_leaves_absolute_links_alone(href):
+    fragment = f'<a href="{href}">x</a>'
+    assert rewrite_links(fragment, "specs/cli/check.md", _to_page) == fragment
+
+
+def test_rewrite_links_keeps_the_links_other_attributes():
+    out = rewrite_links('<a href="../cli/check.md" title="Check">x</a>', "specs/catalog/f.md", _to_page)
+    assert out == '<a href="cli-check.html" title="Check">x</a>'
+
+
+@pytest.mark.parametrize(
+    "heading, expected",
+    [
+        ("What Stops A Doc Being Written", "what-stops-a-doc-being-written"),
+        ("Scope, And What It Doesn&#x27;t Hide", "scope-and-what-it-doesnt-hide"),
+        ("Documentation — Auto Doc Commit", "documentation--auto-doc-commit"),
+        ("<code>busy_timeout</code> retries", "busy_timeout-retries"),
+    ],
+)
+def test_anchor_headings_matches_the_anchors_github_gives(heading, expected):
+    assert anchor_headings(f"<h2>{heading}</h2>") == f'<h2 id="{expected}">{heading}</h2>'
+
+
+def test_anchor_headings_ignores_a_glossary_span_inside_the_heading():
+    heading = '<h2>The <span class="gl" data-term="index" tabindex="0">index</span></h2>'
+    assert anchor_headings(heading).startswith('<h2 id="the-index">')
+
+
+def test_anchor_headings_numbers_a_repeated_heading():
+    out = anchor_headings("<h2>Notes</h2><h3>Notes</h3><h2>Notes</h2>")
+    assert re.findall(r'id="([^"]+)"', out) == ["notes", "notes-1", "notes-2"]
+
+
+def test_anchor_headings_prefixes_every_id():
+    assert anchor_headings("<h3>Edge Cases</h3>", prefix="cli-check--") == (
+        '<h3 id="cli-check--edge-cases">Edge Cases</h3>'
+    )
