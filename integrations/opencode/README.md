@@ -1,8 +1,8 @@
 # opencode integration
 
-specky needs two things from any agent: the MCP server (read-only queries over the index) and
-the `document-domain` skill. Everything else — the git hook, `specky index`, `render-html`,
-`serve` — is plain CLI and identical everywhere.
+specky needs two things from any agent: the MCP server (read-only queries over the index) and its
+skills (`find-feature`, `explore-docs`, `document-domain`). Everything else — the git hook,
+`specky index`, `render-html`, `serve` — is plain CLI and identical everywhere.
 
 ## MCP server
 
@@ -32,9 +32,42 @@ Tools exposed, all read-only: `list_domains`, `search_docs`, `read_doc`, `doc_be
 `render_acceptance_table` (pure formatting) and `ping`. The authoritative list is
 [`mcp_server.py`](../../src/specky/mcp_server.py).
 
-## Skill
+## Skills
 
-`skills/document-domain/SKILL.md` and `skills/explore-docs/SKILL.md` (answer behaviour questions
-from the docs before reading code) are picked up as-is — opencode reads `.claude/skills/` and
-`.agents/skills/` alongside its own paths, so a specky checkout on the plugin path needs no
-copy. If you'd rather vendor them, copy each to `.agents/skills/<name>/SKILL.md`.
+opencode reads skills from `.opencode/skills/`, `.claude/skills/` and `.agents/skills/` — all
+resolved against the repo, so an installed plugin still needs a copy here. Vendor the shared skills
+to `.agents/skills/`, the path opencode shares with Codex and Devin Cloud:
+
+```bash
+for s in find-feature explore-docs document-domain; do
+  mkdir -p .agents/skills/$s
+  curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
+    -o .agents/skills/$s/SKILL.md
+done
+```
+
+`find-feature` answers "what is this meant to do before I use it?", `explore-docs` answers behaviour
+questions from the docs before reading code, and `document-domain` writes the docs themselves.
+
+## Cheap model for lookups
+
+A skill can't carry a model on opencode — unknown frontmatter fields are ignored, and there is no
+field binding a skill to an agent or a model. `[skills] model` in `specky.toml` names a Claude Code
+model, so it isn't the lever here either. Two levers exist, and only the command applies without
+switching models mid-session:
+
+- **Command** — copy [`commands/specky-lookup.md`](commands/specky-lookup.md) to `.opencode/commands/`
+  and run `/specky-lookup <feature>`. Its `model:` applies to that invocation.
+- **Agent** — copy [`agents/specky-docs.md`](agents/specky-docs.md) to `.opencode/agents/` and select
+  it; its `model:` applies whenever it answers.
+
+```bash
+mkdir -p .opencode/commands .opencode/agents
+curl -fsSL https://raw.githubusercontent.com/danyyacoub/specky/main/integrations/opencode/commands/specky-lookup.md \
+  -o .opencode/commands/specky-lookup.md
+curl -fsSL https://raw.githubusercontent.com/danyyacoub/specky/main/integrations/opencode/agents/specky-docs.md \
+  -o .opencode/agents/specky-docs.md
+```
+
+Both pin `anthropic/claude-haiku-4-5`. Swap in `openai/gpt-5-nano`, or any `provider/model-id` from
+`opencode models`, if that's your cheap tier instead.

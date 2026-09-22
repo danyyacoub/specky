@@ -281,10 +281,16 @@ def test_the_mcp_prompts_spell_out_both_workflows():
 
 
 def test_what_tells_a_host_when_to_use_specky_names_only_real_tools():
-    # The server instructions and the explore-docs skill both steer a host's model to tools by
-    # name. A renamed tool must break this, not leave the model calling one that isn't there.
+    # The server instructions and the lookup skills all steer a host's model to tools by name. A
+    # renamed tool must break this, not leave the model calling one that isn't there.
     tools = {t.name for t in asyncio.run(mcp_server.mcp.list_tools())}
-    skill = (Path(__file__).parent.parent / "skills" / "explore-docs" / "SKILL.md").read_text()
+    # Only the skills that name specky's tools: launch-viewer drives Claude Code's own preview
+    # tools, so it has no business being pinned to this list.
+    skill = "\n".join(
+        path.read_text()
+        for path in (Path(__file__).parent.parent / "skills").glob("*/SKILL.md")
+        if path.parent.name in {"explore-docs", "find-feature"}
+    )
 
     in_instructions = set(re.findall(r"\b[a-z]+(?:_[a-z]+)+\b", mcp_server.INSTRUCTIONS))
     in_skill = set(re.findall(r"`([a-z]+(?:_[a-z]+)+)`", skill))

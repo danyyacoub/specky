@@ -12,9 +12,9 @@ static searchable HTML viewer w/ optional local AI chat companion. This repo dog
 docs, indexed at [specs/MODULES.md](specs/MODULES.md).
 
 Per-host wiring lives in [integrations/](integrations/) — [Devin](integrations/devin/README.md),
-[Kiro](integrations/kiro/README.md), [opencode](integrations/opencode/README.md). Claude Code is
-the only plugin host of the four, so the others get the MCP server + `document-domain` skill by
-hand.
+[Kiro](integrations/kiro/README.md), [opencode](integrations/opencode/README.md),
+[Codex](integrations/codex/README.md). Claude Code is the only plugin host of the five, so the
+others get the MCP server + the lookup skills by hand.
 
 ## Setup
 

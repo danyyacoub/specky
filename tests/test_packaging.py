@@ -45,22 +45,40 @@ def test_the_marketplace_lists_this_plugin_from_this_repo():
 def test_there_are_skills():
     assert {path.parent.name for path in SKILLS} >= {
         "setup",
+        "find-feature",
         "document-domain",
         "explore-docs",
         "launch-viewer",
     }
 
 
-@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
-def test_every_skill_has_a_name_and_description(skill: Path):
-    text = skill.read_text()
-    match = re.match(r"---\n(.*?)\n---\n", text, re.DOTALL)
+def _frontmatter(skill: Path) -> dict[str, str]:
+    match = re.match(r"---\n(.*?)\n---\n", skill.read_text(), re.DOTALL)
     assert match, "no frontmatter"
-    fields = dict(
+    return dict(
         line.split(":", 1) for line in match.group(1).splitlines() if ":" in line
     )
+
+
+@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
+def test_every_skill_has_a_name_and_description(skill: Path):
+    fields = _frontmatter(skill)
     assert fields.get("name", "").strip() == skill.parent.name
     assert fields.get("description", "").strip()
+
+
+@pytest.mark.parametrize("skill", SKILLS, ids=lambda path: path.parent.name)
+def test_no_skill_pins_its_own_model(skill: Path):
+    # Frontmatter is read before specky runs, so a model there is one nobody can change without
+    # forking the plugin. The choice lives in `[skills] model` in the user's specky.toml instead.
+    assert "model" not in _frontmatter(skill)
+
+
+def test_the_doc_skills_read_their_model_from_specky_toml():
+    # setup asks and writes it; launch-viewer starts a server that has to outlive any subagent, so
+    # it stays on the session's model.
+    for name in ("find-feature", "explore-docs", "document-domain", "setup"):
+        assert "`[skills]`" in (ROOT / "skills" / name / "SKILL.md").read_text(), name
 
 
 def test_hook_commands_exist_and_are_executable():

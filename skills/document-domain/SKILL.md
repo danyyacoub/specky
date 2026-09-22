@@ -11,6 +11,14 @@ Ask the user for:
 1. **Domain name** — which module/area to document (e.g., "accounts", "billing", "search", "auth").
 2. **Related files** (optional) — specific files or directories to focus on. If not provided, discover them by searching the codebase for the domain name.
 
+## Which model runs this
+If you are running as a subagent, skip this section. Otherwise read `model` from the `[skills]`
+table of `specky.toml` at the repo root. No file, no table, no key, or `inherit`: follow the steps
+yourself. If it names a model and you can start a subagent on a named model (Claude Code's Agent
+tool takes `model`), ask the user for the Inputs first — a subagent can't ask them — then start one
+on it, give it the path of this `SKILL.md` and those answers, and relay what it wrote and changed.
+If you can't, or the subagent fails, follow the steps yourself.
+
 ## File Naming Convention
 - Functional docs live in **`specs/<domain>/`**, mirroring the codebase's own module layout where one exists. Cross-cutting docs stay at the `specs/` root.
 - File name = a kebab-case slug of the **topic** (not `README.md`). Prefer the module name (e.g., `billing.md`) or a descriptive topic (e.g., `refund-flow.md`, `rate-limits.md`).

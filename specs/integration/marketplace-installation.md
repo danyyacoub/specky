@@ -35,8 +35,9 @@ runs `specky init`.
    with docs it sends the full guidance, without them it tells the model to leave specky's tools
    alone.
 5. **Opt a repo in** — `/specky:setup` checks the CLI is there, runs `specky init` for the chosen
-   provider (which writes `specky.toml` and adds it to `.gitignore`), installs the git hooks with
-   the user's go-ahead, and runs `specky index`.
+   provider (which writes `specky.toml` and adds it to `.gitignore`), records which model the skills
+   run on in its `[skills]` table (the session's unless the user names one), installs the git hooks
+   with the user's go-ahead, and runs `specky index`.
 6. **Update** — Claude Code offers an update only when `.claude-plugin/plugin.json` changes its
    `version`, so a release bumps it together with `specky.__version__`. The release workflow
    refuses a tag where the two disagree. The CLI updates separately, with `uv tool upgrade specky`.
@@ -60,9 +61,9 @@ flowchart TD
 
 | Scenario | Outcome |
 |----------|---------|
-| Marketplace added and plugin installed | The skills are listed as `/specky:setup`, `/specky:document-domain`, `/specky:explore-docs`, `/specky:launch-viewer`, and the `specky` MCP server connects |
+| Marketplace added and plugin installed | The skills are listed as `/specky:setup`, `/specky:find-feature`, `/specky:document-domain`, `/specky:explore-docs`, `/specky:launch-viewer`, and the `specky` MCP server connects |
 | A repo that never ran `specky init` | Nothing happens in it: no commit docs, no `.specky/`, no output after commits |
-| `/specky:setup` finished | `specky.toml` exists and is gitignored, the three git hooks are installed, and the index is built |
+| `/specky:setup` finished | `specky.toml` exists, is gitignored and names the skills' model, the three git hooks are installed, and the index is built |
 | A new version released | Plugin users are offered it once `plugin.json`'s `version` changes; CLI users get it with `uv tool upgrade specky` |
 
 ## Edge Cases

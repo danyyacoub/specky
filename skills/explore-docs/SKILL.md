@@ -19,6 +19,13 @@ for the code when the question is about the code itself. Hand those questions to
 | Where is X implemented? What calls Y? | The code: use code search, not this skill |
 | Does the code still do what the doc says? | Both: step 4 below |
 
+## Which model runs this
+If you are running as a subagent, skip this section. Otherwise read `model` from the `[skills]`
+table of `specky.toml` at the repo root. No file, no table, no key, or `inherit`: follow the steps
+yourself. If it names a model and you can start a subagent on a named model (Claude Code's Agent
+tool takes `model`), start one on it, give it the path of this `SKILL.md` and the user's question,
+and relay its answer. If you can't, or the subagent fails, follow the steps yourself.
+
 ## Steps
 
 ### 1. Find the docs

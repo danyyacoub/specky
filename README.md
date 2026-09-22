@@ -77,8 +77,9 @@ claude plugin install specky@specky
 
 ## Set up
 
-In the repo you want documented, run `/specky:setup` in Claude Code. It picks a provider, installs
-the git hooks and builds the first index. To do the same from a plain terminal:
+In the repo you want documented, run `/specky:setup` in Claude Code. It picks a provider and the
+model its skills run on, installs the git hooks and builds the first index. To do the same from a
+plain terminal:
 
 ```bash
 specky init               # choose a provider; writes specky.toml (gitignored)

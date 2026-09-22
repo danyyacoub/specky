@@ -1,8 +1,8 @@
 # Devin integration
 
-specky needs two things from any agent: the MCP server (read-only queries over the index) and the
-`document-domain` skill. Everything else — the git hook, `specky index`, `render-html`, `serve` — is
-plain CLI and identical everywhere.
+specky needs two things from any agent: the MCP server (read-only queries over the index) and its
+skills (`find-feature`, `explore-docs`, `document-domain`). Everything else — the git hook,
+`specky index`, `render-html`, `serve` — is plain CLI and identical everywhere.
 
 Devin is the one host so far that isn't a plugin host. There's no directory you drop a plugin into
 and no `SKILL.md` path it scans, so the two things above land on four different Devin surfaces:
@@ -102,6 +102,42 @@ re-paste.
 `SKILL.md` isn't shipped in the wheel — `uv tool install specky` installs `src/specky` and nothing
 else — so the copy comes from the repo, exactly as in the [Kiro integration](../kiro/README.md).
 Swap `main` for a release tag (`v0.1.0`) to pin it to the version of the CLI you installed.
+
+## Devin CLI: skills in the repo
+
+Devin CLI is a different surface from the cloud agent above, and the one place Devin reads a
+`SKILL.md` out of the repo: `.devin/skills/<name>/SKILL.md`, committed to git:
+
+```bash
+for s in find-feature explore-docs document-domain; do
+  mkdir -p .devin/skills/$s
+  curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
+    -o ".devin/skills/$s/SKILL.md"
+done
+```
+
+Copied as they are, the skills run on the session's model. `[skills] model` in `specky.toml` names a
+Claude Code model, so on Devin CLI the lever is the frontmatter, which does carry `model` — `opus`,
+`sonnet`, `swe`, `codex`, `gemini`. Add `model: swe` under `name:` in a copy to run that skill on the
+cheap tier, with no agent to select. `document-domain` writes full docs against a strict template,
+so leave it on the session's model unless its output holds up on `swe`.
+
+## Devin Cloud: no model pin
+
+The cloud agent reads the same skills from `.agents/skills/<name>/SKILL.md` (the path it shares with
+opencode and Codex), but extracts only `name`, `description` and `allowed-tools` from the
+frontmatter. There is no model field to set — the model that answers a session is chosen outside
+the skill — so copy them in as they are:
+
+```bash
+for s in find-feature explore-docs document-domain; do
+  mkdir -p .agents/skills/$s
+  curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
+    -o ".agents/skills/$s/SKILL.md"
+done
+```
+
+`document-domain` still goes through a playbook, as [above](#the-document-domain-playbook).
 
 ## The CI gate is the part that actually holds
 

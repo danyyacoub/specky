@@ -7,6 +7,18 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+### Added
+- **`find-feature` skill.** Before an agent calls into a feature, it asks the docs what that feature
+  is *meant* to do and answers with the doc path and its behaviour ids (`STEP-n`, `OUT-n`, `EDGE-n`,
+  `AT-n`) — without reading source. `explore-docs` keeps the broader "how does X work?" and "why did
+  it change?" questions.
+- **Choose the model specky's skills run on.** `[skills] model` in `specky.toml` (`haiku`, `sonnet`,
+  `opus`) has `find-feature`, `explore-docs` and `document-domain` hand their work to a subagent on
+  that model, so only the skill's own work moves off the session's model. Unset, or `inherit`, they
+  run on the session's model. `/specky:setup` asks. The value names a Claude Code model, so Codex,
+  opencode and Kiro each get a per-host agent (or command) under `integrations/` that pins one of
+  theirs.
+
 ## [0.1.0] - 2026-09-22
 
 The first public release. It installs as a Claude Code plugin from GitHub and as a CLI from PyPI.

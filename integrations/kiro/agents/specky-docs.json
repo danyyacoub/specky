@@ -1,0 +1,6 @@
+{
+  "name": "specky-docs",
+  "description": "Answer what this repo's features are meant to do, from its specky docs, on a cheap model, without reading source.",
+  "model": "claude-haiku-4-5",
+  "resources": ["skill://.kiro/skills/**/SKILL.md"]
+}

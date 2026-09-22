@@ -1,8 +1,8 @@
 # Kiro integration
 
-specky needs two things from any agent: the MCP server (read-only queries over the index) and
-the `document-domain` skill. Everything else — the git hook, `specky index`, `render-html`,
-`serve` — is plain CLI and identical everywhere.
+specky needs two things from any agent: the MCP server (read-only queries over the index) and its
+skills (`find-feature`, `explore-docs`, `document-domain`). Everything else — the git hook,
+`specky index`, `render-html`, `serve` — is plain CLI and identical everywhere.
 
 ## MCP server
 
@@ -37,15 +37,36 @@ Tools exposed, all read-only: `list_domains`, `search_docs`, `read_doc`, `doc_be
 Being read-only is why auto-approving them is safe. The `autoApprove` list above covers only the
 ones that take no argument; add the rest if you'd rather not be asked.
 
-## Skill
+## Skills
 
-Kiro follows the same open Agent Skills standard as Claude Code's `SKILL.md`, so copy the
-shared skills in. `explore-docs` answers behaviour questions from the docs before reading code:
+Kiro follows the same open Agent Skills standard as Claude Code's `SKILL.md`, so copy the shared
+skills in as they are:
 
 ```bash
-for s in document-domain explore-docs; do
+for s in find-feature explore-docs document-domain; do
   mkdir -p .kiro/skills/$s
   curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
     -o ".kiro/skills/$s/SKILL.md"
 done
 ```
+
+`find-feature` answers "what is this meant to do before I use it?", `explore-docs` answers behaviour
+questions from the docs before reading code, and `document-domain` writes the docs themselves.
+
+## Cheap model for lookups
+
+A Kiro skill has no `model` field, and `[skills] model` in `specky.toml` names a Claude Code model,
+so the pin lives on a custom agent. Copy
+[`agents/specky-docs.json`](agents/specky-docs.json) to `.kiro/agents/`:
+
+```bash
+mkdir -p .kiro/agents
+curl -fsSL https://raw.githubusercontent.com/danyyacoub/specky/main/integrations/kiro/agents/specky-docs.json \
+  -o .kiro/agents/specky-docs.json
+```
+
+Two things to check. **Custom agents load no skills by default**, which is why the file's `resources`
+names `skill://.kiro/skills/**/SKILL.md`. And the `model` id must match Kiro's model list — open
+`/model` in an active chat and copy the exact id from there (the docs' examples look like
+`claude-sonnet-4`, and the cheapest tier is `Qwen3 Coder Next`). A model Kiro doesn't recognise
+falls back to the default and shows a warning.
