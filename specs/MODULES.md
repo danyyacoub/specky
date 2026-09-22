@@ -91,6 +91,7 @@ command that calls a model goes through this layer.
 | Doc | Purpose |
 |---|---|
 | [integration/marketplace-installation.md](integration/marketplace-installation.md) | Install specky from its GitHub marketplace and PyPI, then opt a repo in with `/specky:setup` |
+| [integration/skill-model-selection.md](integration/skill-model-selection.md) | Let users pick the model specky's doc lookup and authoring skills run on, per host, via [skills] model or a pinned subagent. |
 
 ## Catalog
 
