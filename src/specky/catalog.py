@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from specky import paths
+from specky.commit_doc import history_doc_for
 from specky.db import connect
 
 
@@ -121,21 +123,39 @@ def commit_info(repo_root: Path, sha: str) -> dict:
 
 def commits_for_doc(repo_root: Path, doc_path: str) -> list[dict]:
     """Commits linked to a given feature/workflow doc, most recent first — the reverse of
-    commit_info()."""
+    commit_info().
+
+    Each carries what its history doc says — the one-line `headline`, its `impact`, and the doc's
+    repo path as `history_path` — so a caller listing a feature's recent changes has a sentence to
+    show rather than a commit subject. All three are empty for a commit with no structured doc.
+    """
     conn = connect(repo_root)
     try:
         rows = conn.execute(
-            "SELECT commits.sha, commits.author, commits.date, commits.message "
+            "SELECT commits.sha, commits.author, commits.date, commits.message, "
+            "commits.headline, commits.impact "
             "FROM commit_links JOIN commits ON commits.sha = commit_links.sha "
             "WHERE commit_links.path = ? ORDER BY commits.date DESC",
             (doc_path,),
         ).fetchall()
     finally:
         conn.close()
-    return [
-        {"sha": sha, "author": author, "date": date, "message": message}
-        for sha, author, date, message in rows
-    ]
+    history_dir = paths.history_dir(repo_root)
+    commits = []
+    for sha, author, date, message, headline, impact in rows:
+        doc = history_doc_for(history_dir, sha)
+        commits.append(
+            {
+                "sha": sha,
+                "author": author,
+                "date": date,
+                "message": message,
+                "headline": headline,
+                "impact": impact,
+                "history_path": str(doc.relative_to(repo_root)) if doc else "",
+            }
+        )
+    return commits
 
 
 def _mermaid_label(title: str) -> str:

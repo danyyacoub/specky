@@ -46,6 +46,8 @@ import json
 import posixpath
 import re
 import shutil
+import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote
@@ -53,7 +55,7 @@ from urllib.parse import unquote
 import markdown as md
 from jinja2 import Environment
 
-from specky import diagram_render, paths
+from specky import activity, diagram_render, paths
 from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
 from specky.staleness import days_behind
@@ -541,6 +543,66 @@ body.nav-collapsed .sidebar { display: none; }
   margin: 0 0 10px; border: none; padding: 0;
 }
 .empty-state { color: var(--text-secondary); }
+
+/* --- home page: recent activity, one collapsed row per person (activity.py). */
+.activity { margin-top: 28px; }
+.doc .activity h2 {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary);
+  margin: 0 0 4px; border: none; padding: 0;
+}
+.doc .activity h2::before { content: none; }
+.activity-meta, .activity-foot { font-size: 0.75rem; color: var(--text-tertiary); margin: 0 0 12px; }
+.activity-foot { margin-top: 12px; }
+.activity .chip-row { display: inline-flex; gap: 4px; vertical-align: middle; }
+.doc .activity a.chip { text-decoration: none; padding: 2px 8px; }
+.person { border: 1px solid var(--border); border-radius: var(--radius-md); margin-bottom: 8px; background: var(--surface); }
+.person > summary {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; cursor: pointer;
+  list-style: none;
+}
+.person > summary::-webkit-details-marker { display: none; }
+.person > summary:hover { background: var(--surface-secondary); border-radius: var(--radius-md); }
+.person[open] > summary { border-bottom: 1px solid var(--border); border-radius: var(--radius-md) var(--radius-md) 0 0; }
+.avatar {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%;
+  font-size: 0.6875rem; font-weight: 700; flex-shrink: 0;
+}
+.person-name { font-weight: 600; }
+.person-counts { font-size: 0.75rem; color: var(--text-secondary); }
+.person-when { margin-left: auto; font-size: 0.75rem; color: var(--text-tertiary); }
+.person-body { padding: 4px 14px 12px; }
+.doc .person-body h3 {
+  font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary);
+  margin: 14px 0 6px;
+}
+.changes { list-style: none; margin: 0; padding: 0; }
+.change {
+  display: grid; grid-template-columns: 52px 1fr; gap: 10px; padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.changes > .change:first-child { border-top: none; }
+.change > time { font-size: 0.75rem; color: var(--text-tertiary); padding-top: 2px; }
+.brief { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.brief li { font-size: 0.875rem; line-height: 1.45; }
+.doc .brief a { color: var(--text-primary); text-decoration: none; }
+.doc .brief a:hover { color: var(--accent); text-decoration: underline; }
+.undocumented { color: var(--text-secondary); font-style: italic; }
+.impact {
+  display: inline-block; font-size: 0.625rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; border-radius: 4px; padding: 1px 5px; margin-right: 6px; vertical-align: 1px;
+}
+.impact-feature { background: var(--feature-bg); color: var(--feature); }
+.impact-improvement { background: var(--accent-soft); color: var(--accent); }
+.impact-fix { background: var(--tag-2-bg); color: var(--tag-2); }
+.internal, .change-meta { font-size: 0.75rem; color: var(--text-secondary); margin: 4px 0 0; }
+.change-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.change-meta.branch { margin: 0 0 4px; }
+.change-meta code, .brief code { font-size: 0.75rem; }
+.activity details.more > summary {
+  font-size: 0.75rem; color: var(--accent); cursor: pointer; margin: 4px 0; list-style: none;
+}
+.activity details.more > summary::-webkit-details-marker { display: none; }
+.activity details.more[open] > summary { display: none; }
 
 /* --- tables: ported from glia's figure.tw (enrichment_render.py) — the wrapper scrolls,
    so a wide table keeps its own column sizing instead of being squeezed into the pane. */
@@ -2758,8 +2820,195 @@ def _page_href(doc_path: str, pages: dict[str, str]) -> HrefFor:
     return href_for
 
 
+# How much of the activity brief is visible before a "+N more" disclosure: people's lists stay
+# scannable, and a merge of forty commits doesn't push everyone else off the screen.
+ACTIVITY_ITEMS_SHOWN = 15
+ACTIVITY_LINES_SHOWN = 3
+ACTIVITY_CHIPS_SHOWN = 4
+ACTIVITY_PERSON_CHIPS = 3
+
+
+_CODE_SPAN = re.compile(r"`([^`]+)`")
+
+
+def _inline(text: str) -> str:
+    """A brief line as HTML: escaped, with the markdown a model writes into one sentence — code
+    spans and bold — rendered or dropped rather than shown as backticks and asterisks."""
+    return _CODE_SPAN.sub(r"<code>\1</code>", html.escape(text.replace("**", "")))
+
+
+def _short_date(when: datetime) -> str:
+    return f"{when.day} {when:%b}"
+
+
+def _more(items: list[str], shown: int, tag: str, cls: str) -> str:
+    """The first `shown` items, and the rest behind a native disclosure — no script needed."""
+    head = "".join(items[:shown])
+    if len(items) <= shown:
+        return f'<{tag} class="{cls}">{head}</{tag}>'
+    rest = "".join(items[shown:])
+    return (
+        f'<{tag} class="{cls}">{head}</{tag}>'
+        f'<details class="more"><summary>+{len(items) - shown} more</summary>'
+        f'<{tag} class="{cls}">{rest}</{tag}></details>'
+    )
+
+
+def _activity_chips(
+    features: list[str], doc_info: dict[str, dict], shown: int, overflow: bool = True
+) -> str:
+    known = [doc_info[f] for f in features if f in doc_info]
+    chips = "".join(
+        f'<a class="chip{" type-" + d["doc_type"] if d["doc_type"] else ""}" '
+        f'href="{html.escape(d["html_name"], quote=True)}">{html.escape(d["label"])}</a>'
+        for d in known[:shown]
+    )
+    if overflow and len(known) > shown:
+        chips += f'<span class="chip">+{len(known) - shown}</span>'
+    return f'<span class="chip-row">{chips}</span>' if chips else ""
+
+
+def _activity_lines(lines: list[activity.Line], pages: dict[str, str]) -> str:
+    """A change's sentences: behaviour first, `internal` ones counted rather than listed."""
+    items = []
+    for line in [line for line in lines if line.impact != "internal"]:
+        text = _inline(line.text)
+        page = pages.get(line.history_path)
+        hover = f' title="{html.escape(line.detail, quote=True)}"' if line.detail else ""
+        if page:
+            text = f'<a href="{html.escape(page, quote=True)}"{hover}>{text}</a>'
+        elif not line.history_path:
+            text = f'<span class="undocumented" title="No history doc for this commit">{text}</span>'
+        badge = (
+            f'<span class="impact impact-{line.impact}">{line.impact}</span>' if line.impact else ""
+        )
+        items.append(f"<li>{badge}{text}</li>")
+    internal = sum(1 for line in lines if line.impact == "internal")
+    html_out = _more(items, ACTIVITY_LINES_SHOWN, "ul", "brief") if items else ""
+    if internal:
+        html_out += f'<p class="internal">+{internal} internal</p>'
+    return html_out
+
+
+def _activity_html(
+    recent: activity.Activity, pages: dict[str, str], doc_info: dict[str, dict]
+) -> str:
+    """The home page's "Recent activity" section (see activity.py for what goes in it)."""
+    meta = (
+        f'<p class="activity-meta">on <code>{html.escape(recent.branch)}</code> · last '
+        f"{recent.days} days · as of {_short_date(recent.as_of)} {recent.as_of:%Y}</p>"
+    )
+    if recent.shallow:
+        body = (
+            '<p class="empty-state">This checkout has shallow history, so who changed what can\'t '
+            "be read from it. Fetch the full history (<code>git fetch --unshallow</code>, or "
+            "<code>fetch-depth: 0</code> in CI) and render again.</p>"
+        )
+    elif not recent.people:
+        body = (
+            f'<p class="empty-state">Nothing landed on <code>{html.escape(recent.branch)}</code> '
+            f"in the last {recent.days} days.</p>"
+        )
+    else:
+        body = "".join(_person_html(p, pages, doc_info) for p in recent.people)
+    notes = []
+    if recent.automated:
+        notes.append(f"{recent.automated} automated change(s) by bots or agents not shown")
+    if recent.undocumented:
+        notes.append(
+            f"{recent.undocumented} commit(s) shown by their message, with no history doc yet — "
+            "<code>specky sync</code> writes them"
+        )
+    foot = f'<p class="activity-foot">{" · ".join(notes)}</p>' if notes else ""
+    return f'<section class="activity"><h2>Recent activity</h2>{meta}{body}{foot}</section>'
+
+
+def _change_item(
+    when: datetime,
+    facts: list[str],
+    lines_html: str,
+    chips_html: str,
+    meta_first: bool = False,
+    meta_cls: str = "change-meta",
+) -> str:
+    """One entry of a person's list: its date, its lines, and a muted line of facts and chips —
+    after the lines for a shipped change, before them for a branch, whose name is what it's known by."""
+    meta = f'<p class="{meta_cls}">{" · ".join(f for f in facts if f)}{chips_html}</p>'
+    body = meta + lines_html if meta_first else lines_html + meta
+    return f'<li class="change"><time>{_short_date(when)}</time><div>{body}</div></li>'
+
+
+def _person_html(
+    person: activity.Person, pages: dict[str, str], doc_info: dict[str, dict]
+) -> str:
+    initials = "".join(w[0] for w in person.name.split()[:2]).upper() or "?"
+    tint = _tag_class(person.name).removeprefix("tag-")
+    counts = []
+    if person.shipped:
+        counts.append(f"{len(person.shipped)} shipped")
+    if person.in_progress:
+        counts.append(f"{len(person.in_progress)} in progress")
+    summary = (
+        f'<summary><span class="avatar" style="color:var(--tag-{tint});'
+        f'background:var(--tag-{tint}-bg)" aria-hidden="true">{html.escape(initials)}</span>'
+        f'<span class="person-name">{html.escape(person.name)}</span>'
+        f'<span class="person-counts">{" · ".join(counts)}</span>'
+        # Their most-touched docs, as a hint of what they work on — not a count of everything.
+        f"{_activity_chips(person.features(), doc_info, ACTIVITY_PERSON_CHIPS, overflow=False)}"
+        f'<time class="person-when">{_short_date(person.last_active)}</time></summary>'
+    )
+
+    def others(names: list[str]) -> str:
+        rest = [n for n in names if n != person.name]
+        return f"with {html.escape(', '.join(rest))}" if rest else ""
+
+    sections = []
+    if person.shipped:
+        items = []
+        for change in person.shipped:
+            label = html.escape(change.label)
+            if change.pr_url and label:
+                label = f'<a href="{html.escape(change.pr_url, quote=True)}">{label}</a>'
+            items.append(
+                _change_item(
+                    change.date,
+                    [
+                        label,
+                        f"{change.commits} commits" if change.commits > 1 else "",
+                        others(change.people),
+                    ],
+                    _activity_lines(change.lines, pages),
+                    _activity_chips(change.features, doc_info, ACTIVITY_CHIPS_SHOWN),
+                )
+            )
+        sections.append("<h3>Shipped</h3>" + _more(items, ACTIVITY_ITEMS_SHOWN, "ul", "changes"))
+    if person.in_progress:
+        items = [
+            _change_item(
+                branch.date,
+                [
+                    f"<code>{html.escape(branch.ref)}</code>",
+                    f"{len(branch.lines)} commit{'s' if len(branch.lines) != 1 else ''}",
+                    others(branch.people),
+                ],
+                _activity_lines(branch.lines, pages),
+                _activity_chips(branch.features, doc_info, ACTIVITY_CHIPS_SHOWN),
+                meta_first=True,
+                meta_cls="change-meta branch",
+            )
+            for branch in person.in_progress
+        ]
+        sections.append("<h3>In progress</h3>" + _more(items, ACTIVITY_ITEMS_SHOWN, "ul", "changes"))
+    return f'<details class="person">{summary}<div class="person-body">{"".join(sections)}</div></details>'
+
+
 def _home_body(
-    doc_count: int, domain_count: int, feature_count: int, workflow_count: int, tag_chips: list[dict]
+    doc_count: int,
+    domain_count: int,
+    feature_count: int,
+    workflow_count: int,
+    tag_chips: list[dict],
+    activity_html: str = "",
 ) -> str:
     stats = [
         ("docs", doc_count),
@@ -2785,6 +3034,7 @@ def _home_body(
         "<h1>specky docs</h1>"
         "<p>Auto-generated, browsable functional reference — no server required.</p>"
         f'<div class="stat-row">{stat_html}</div>'
+        f"{activity_html}"
         f"{tag_cloud}"
         '<p style="margin-top:24px" class="empty-state">Pick a doc from the left, or search above.</p>'
     )
@@ -2843,6 +3093,19 @@ def _write_assets(site_dir: Path, search_entries: list[dict], hover: dict[str, s
         f"const SPECKY_GLOSSARY = {json.dumps(hover)};\n"
         f"const SPECKY_CHAT_PORT = {CHAT_PORT};\n"
     )
+
+
+def _render_activity(repo_root: Path, pages: dict[str, str], doc_info: dict[str, dict]) -> str:
+    """The activity section, or "" — never a reason for the rest of the site not to render."""
+    try:
+        found = activity.collect(repo_root)
+    except ValueError as exc:
+        print(f"specky render-html: recent activity left out — {exc}")
+        return ""
+    except subprocess.CalledProcessError as exc:
+        print(f"specky render-html: recent activity left out — git failed: {exc.stderr.strip()}")
+        return ""
+    return _activity_html(found, pages, doc_info) if found else ""
 
 
 def render_site(repo_root: Path) -> Path:
@@ -2969,7 +3232,22 @@ def render_site(repo_root: Path) -> Path:
             "re-render.",
         )
 
-    home_body = _home_body(len(docs), len(domains), feature_count, workflow_count, tag_chips)
+    doc_info = {
+        d["path"]: {
+            "label": _nav_title(d["title"], d["domain"], repo_root.name),
+            "html_name": d["html_name"],
+            "doc_type": d["doc_type"] if d["doc_type"] in ("feature", "workflow") else "",
+        }
+        for d in docs
+    }
+    home_body = _home_body(
+        len(docs),
+        len(domains),
+        feature_count,
+        workflow_count,
+        tag_chips,
+        _render_activity(repo_root, pages, doc_info),
+    )
     home_page = _page("specky docs", rail_html, home_body)
     (site_dir / "index.html").write_text(home_page)
 

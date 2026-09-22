@@ -247,7 +247,9 @@ def _undocumented_commits(repo_root: Path, base: str) -> list[tuple[str, str]]:
     history_dir = paths.history_dir(repo_root)
     # The empty tree isn't a commit, so there's no range to exclude — that case is "all of it".
     revs = "HEAD" if base == EMPTY_TREE else f"{base}..HEAD"
-    log = _git(repo_root, "log", "--reverse", "--format=%H%x1f%s", revs)
+    # --no-merges: a merge never gets a history doc (see `commit_doc.pending_commits`), so asking
+    # for one here would fail every pull request that lands with a merge commit.
+    log = _git(repo_root, "log", "--reverse", "--no-merges", "--format=%H%x1f%s", revs)
     pending = []
     for line in log.splitlines():
         sha, _, subject = line.partition("\x1f")
@@ -257,7 +259,7 @@ def _undocumented_commits(repo_root: Path, base: str) -> list[tuple[str, str]]:
     return pending
 
 
-def _covering_docs(repo_root: Path, files: list[str]) -> dict[str, list[tuple[str, int]]]:
+def covering_docs(repo_root: Path, files: list[str]) -> dict[str, list[tuple[str, int]]]:
     """`{file: [(doc_path, how many linked commits paired them), ...]}` from the precomputed
     table. Joined against `documents` so a doc that has since been deleted can't be demanded."""
     if not files:
@@ -361,7 +363,7 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
         f for f in changed if not f.startswith(docs_prefix) and not config.ignores(f)
     )
 
-    covering = _covering_docs(repo_root, code_files)
+    covering = covering_docs(repo_root, code_files)
     undocumented = [
         (path, doc_path, commits)
         for path in code_files

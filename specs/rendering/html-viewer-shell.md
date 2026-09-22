@@ -19,7 +19,9 @@ Redesigns the docs viewer from a rail+card layout to a desktop app shell with a 
 
 4. **Visual Polish** — Titlebar, sidebar, chat panel, and search dropdown use glass/blur effects and semantic color tokens (light/dark variants chosen by system preference). The titlebar and sidebar carry a wash of the accent so the frame reads as color rather than gray, and a doc's section headings, table headers, and blockquotes take its type's color (indigo for a feature, amber for a workflow, accent for unclassified). Icons are a hand-built SVG sprite (no icon font or new dependency).
 
-5. **History Collapsing** — Commit history entries collapse by default (since commit SHAs aren't meaningful titles), but auto-expand when active or matched by a filter.
+5. **History Collapsing** — Commit history entries collapse by default (a long list of commits would crowd out the reference docs), but auto-expand when active or matched by a filter. Each entry is titled by its history doc's headline; a doc from before headlines existed still reads "Commit <sha8>".
+
+6. **Home Page** — Besides the counts and the tag cloud, the home page carries a Recent activity brief of who changed what (see [rendering/home-activity-brief.md](home-activity-brief.md)).
 
 ## Outcomes
 

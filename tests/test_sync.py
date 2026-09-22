@@ -89,7 +89,7 @@ def test_a_colliding_commit_gets_its_own_longer_filename(tmp_repo, monkeypatch):
     taken = history / "abcdef12.md"
     taken.write_text(f"---\nsha: {'abcdef12' + '9' * 32}\n---\n\n# the other one\n")
 
-    path = commit_doc.write_history_file(tmp_repo, commit, "summary")
+    path = commit_doc.write_history_file(tmp_repo, commit, commit_doc.MicroDoc(what="summary"))
 
     assert path.name == "abcdef123333.md"
     assert "the other one" in taken.read_text()
@@ -100,8 +100,8 @@ def test_a_re_sync_overwrites_the_docs_own_commit_not_a_neighbour(tmp_repo):
     commit = commit_doc.Commit(
         sha="abcdef12" + "3" * 32, author="a", date="2026-01-01", message="mine", diff=""
     )
-    first = commit_doc.write_history_file(tmp_repo, commit, "first summary")
-    again = commit_doc.write_history_file(tmp_repo, commit, "second summary")
+    first = commit_doc.write_history_file(tmp_repo, commit, commit_doc.MicroDoc(what="first summary"))
+    again = commit_doc.write_history_file(tmp_repo, commit, commit_doc.MicroDoc(what="second summary"))
 
     assert again == first
     assert "second summary" in again.read_text()
@@ -111,7 +111,9 @@ def test_the_history_doc_records_the_full_sha_and_still_reads_short(tmp_repo):
     commit = commit_doc.Commit(
         sha="a" * 40, author="Dev <d@example.com>", date="2026-01-01", message="subject\n\nbody", diff=""
     )
-    text = commit_doc.write_history_file(tmp_repo, commit, "It changed things.").read_text()
+    text = commit_doc.write_history_file(
+        tmp_repo, commit, commit_doc.MicroDoc(what="It changed things.")
+    ).read_text()
 
     assert text.startswith(f"---\nsha: {'a' * 40}\n---\n\n# Commit aaaaaaaa\n")
     assert "- **Message:** subject" in text  # only the subject line, as before
@@ -460,7 +462,7 @@ def test_each_kind_of_call_reuses_one_stable_prefix(in_repo, monkeypatch):
     commit_doc.sync(assume_yes=True)
 
     prefixes = [p for p in provider.prefixes if p]
-    summary = [p for p in prefixes if p.startswith("Summarize what changed")]
+    summary = [p for p in prefixes if p == commit_doc.MICRO_DOC_PREFIX]
     classify = [p for p in prefixes if p.startswith("You maintain a set of")]
     assert len(set(summary)) == 1 and len(summary) == 4  # 3 commits + the fixture's initial one
     assert len(set(classify)) == 1 and len(classify) == 4

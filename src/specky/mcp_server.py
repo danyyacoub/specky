@@ -116,7 +116,9 @@ def commit_info(sha: str) -> dict:
 @mcp.tool()
 def commits_for_doc(doc_path: str) -> list[dict]:
     """Commits linked to a given feature/workflow doc (path relative to the repo root,
-    e.g. 'specs/billing/refund-flow.md'), most recent first."""
+    e.g. 'specs/billing/refund-flow.md'), most recent first — each with its history doc's one-line
+    `headline`, its `impact` (feature | improvement | fix | internal) and `history_path`, read
+    those with read_doc for what changed and why."""
     return catalog.commits_for_doc(repo_root(), doc_path)
 
 

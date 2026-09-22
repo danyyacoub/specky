@@ -351,7 +351,7 @@ def test_a_documented_history_passes(in_repo):
     commit_doc.write_history_file(
         in_repo,
         commit_doc.Commit(sha=sha, author="a", date="2026-01-01", message="initial commit", diff=""),
-        "summary",
+        commit_doc.MicroDoc(what="summary"),
     )
     assert _statuses(doctor.run_checks(), "docs") == [doctor.OK]
 

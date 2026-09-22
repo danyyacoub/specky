@@ -7,10 +7,30 @@ tags: [documentation]
 
 ## What It Does
 
-Commits get a one-paragraph AI-generated summary describing what changed and why, written to
-`specs/history/<sha8>.md` (`<docs root>/history/` — see
-[documentation/doc-adoption.md](doc-adoption.md) — keyed by the first 8 characters of the sha) and
-mirrored into the search index.
+Each commit gets an AI-written history entry in `specs/history/<sha8>.md` (`<docs root>/history/`
+— see [documentation/doc-adoption.md](doc-adoption.md) — keyed by the first 8 characters of the
+sha). The entry has a fixed structure because three readers use different parts of it:
+
+- A **headline** is the doc's title: one line in its users' terms about what the product now does
+  differently. The home page's activity brief lists these
+  ([rendering/home-activity-brief.md](../rendering/home-activity-brief.md)), and the viewer's
+  History group shows them instead of "Commit 02738efb".
+- An **`impact`** is one of `feature`, `improvement`, `fix` or `internal`. `internal` means no
+  behaviour a user can observe, and the brief folds those commits away.
+- **What changed** and **Why** sections hold the prose the Spec Assistant retrieves when asked why
+  something changed. `Why` is left out when neither the commit message nor the diff states a
+  reason, rather than letting the model make one up.
+- **`features:`** names the feature or workflow doc the commit was classified under. The entry is
+  committed, so the link travels with the repo. A feature page's list of recent changes relies on
+  that.
+
+Docs written before this structure existed (`# Commit <sha8>` and one paragraph) are still read
+everywhere. The one-line text shown for them is their first sentence.
+`specky sync --refresh-history` rewrites them in the new shape ([cli/sync.md](../cli/sync.md)).
+
+**Merge commits get no entry.** `git show` of a clean merge is an empty combined diff, so its entry
+was a paid call that could only say "merged a branch". What the branch did is already in the
+entries of the commits it brought in, and that's where the activity brief reads it from.
 
 The unit of work is the **backlog**, not the commit that just happened. Every fire computes the
 diff between the git history and `specs/history/` and closes as much of it as one fire is allowed
@@ -68,13 +88,17 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    reported as `N older commit(s) still undocumented — run specky sync`. Both bounds exist for
    different reasons: the depth keeps a fire's cost independent of how long the history is, and the
    cap stops a `git pull` that fast-forwards 300 undocumented commits from turning one fire into
-   hundreds of provider calls. Each commit also goes through feature-doc sync (see
-   [documentation/feature-sync.md](feature-sync.md)).
+   hundreds of provider calls. Merge commits are never pending (see above). Each commit also goes
+   through feature-doc sync (see [documentation/feature-sync.md](feature-sync.md)). The history
+   entry is written *after* that classification, so its `features:` can name the doc the commit
+   belongs to. If classification fails, the entry is still written, just without the link, so a
+   commit is never left undocumented because its feature doc couldn't be worked out.
 
 5. **Follow rewrites instead of re-paying for them** — `post-rewrite` reads `<old-sha> <new-sha>`
    pairs on stdin and *renames* each old history doc onto the new sha, rewriting its `sha:`
-   frontmatter and metadata block and repointing its index rows. The summary is read back off disk,
-   so no provider call is made and a hand-edited summary survives. Without this, an amend orphans
+   frontmatter and metadata block and repointing its index rows. The whole entry — headline,
+   `impact`, `features:` and prose — is read back off disk, so no provider call is made and a
+   hand-edited entry survives. Without this, an amend orphans
    the doc it already paid for and the new sha looks undocumented. Pairs whose old doc is missing
    fall through to the ordinary catch-up. Both halves of the rename are then committed — the new
    file *and* the deletion of the old one — which is why the fire continues past the recursion guard
@@ -101,8 +125,14 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    if the file came back in the meantime: a fast-forward or a checkout restores the *committed*
    old-sha doc, and re-committing that would leave exactly the orphan the rename removed.
 
-9. **Index for search** — Summaries are mirrored into the local SQLite `micro_docs` table, keyed by
-   full commit sha, so they're searchable by `specky search` and the chat companion.
+9. **Index for search** — `specky index` reads each commit's entry from the committed file:
+   - its prose becomes the searchable summary for `specky search` and the Spec Assistant;
+   - its headline and impact become columns on the commit;
+   - its `features:` becomes the commit's feature links.
+
+   The hook still mirrors summaries into the local `micro_docs` table, but only as a fallback. That
+   table lives in the gitignored `.specky/`, so a fresh clone or a CI run would otherwise have no
+   commit summaries or links at all.
 
 Per-fire runtime flow, once steps 1-2 are set up once:
 
@@ -132,7 +162,10 @@ flowchart TD
 
 | Outcome | When | Result |
 |---------|------|--------|
-| **Summary created** | A fire finds pending commits | One doc per commit written to `specs/history/<sha8>.md`; entries added to `micro_docs`; a follow-up doc-sync commit is made |
+| **Summary created** | A fire finds pending commits | One doc per commit written to `specs/history/<sha8>.md` with a headline, an impact, What changed / Why, and the `features:` it was classified under; entries added to `micro_docs`; a follow-up doc-sync commit is made |
+| **Merge skipped** | A merge commit lands | It is never pending, costs no provider call, and `specky check` / `specky doctor` don't count it as undocumented |
+| **Reply not structured** | The model's answer isn't the JSON asked for | The entry is written in the legacy one-paragraph shape instead of being dropped; `--refresh-history` picks it up later |
+| **Classified late, linked anyway** | Classification raises for a commit | The history entry is still written, without `features:`; the error is reported |
 | **Backlog closed late** | A commit arrived by a route no hook fires for (cherry-pick, `git am`, squash-merge, a contributor with no hook) | The next fire of *any* hook documents it, up to the per-fire cap |
 | **Backlog capped** | More than `HOOK_CATCHUP_MAX` (5) commits are pending | 5 are documented; the rest are reported with `run specky sync` and picked up by later fires |
 | **Older than the window** | A commit is more than `HOOK_CATCHUP_DEPTH` (20) commits back | Never documented by a hook; `specky doctor` reports it and `specky sync` fixes it |
@@ -153,7 +186,10 @@ flowchart TD
 
 | Given | When | Then |
 |-------|------|------|
-| `specky.toml` has valid `[ai]` config and the hooks are installed | A commit is made | Within seconds, `specs/history/<sha8>.md` exists with a one-paragraph summary of the commit changes |
+| `specky.toml` has valid `[ai]` config and the hooks are installed | A commit is made | Within seconds, `specs/history/<sha8>.md` exists with a headline as its title, an `impact:`, and What changed / Why sections |
+| A commit classified under `specs/billing/refund-limits.md` | Its entry is written | The entry's frontmatter has `features: [specs/billing/refund-limits.md]` |
+| A branch merged with `--no-ff` | `pending_commits` runs | The branch's commits are pending; the merge commit is not |
+| A history entry with `features:` and no `micro_docs`/`commit_links` rows (a fresh clone) | `specky index` runs | The commit's search summary is the entry's prose and `commits_for_doc` lists it under that feature |
 | Three commits landed with no hook installed, then the hook is installed | Any hook fires | All three are documented in one fire; documenting `HEAD` alone would have left the first two undocumented forever |
 | `HOOK_CATCHUP_MAX + 3` commits are pending | A hook fires | Exactly `HOOK_CATCHUP_MAX` docs are written and the output says the rest are still undocumented |
 | A repo with 5 commits | `pending_commits(depth=2)` | Two commits are returned; `depth=500` returns all of them rather than failing on a short history |
@@ -174,7 +210,7 @@ flowchart TD
 | A human's half-written doc is uncommitted in the docs root | A hook fires and writes docs | The draft is not in the doc-sync commit and still has its uncommitted edits |
 | Unrelated work is staged (`git add src.py`) | A hook fires and commits docs | `src.py` is still staged afterwards |
 | `.git/CHERRY_PICK_HEAD`, `.git/REVERT_HEAD` or `.git/MERGE_HEAD` exists | A hook fires | The history doc is written, HEAD is unchanged, and the output says the docs were left uncommitted and names the operation |
-| A documented commit is amended | `specky commit-doc --rewritten` gets `<old> <new>` on stdin | The doc is renamed to `<new-sha8>.md`, carries the new message and the old hand-edited summary, and the provider is never called |
+| A documented commit is amended | `specky commit-doc --rewritten` gets `<old> <new>` on stdin | The doc is renamed to `<new-sha8>.md`, carries the new message and the old entry's headline, impact, `features:` and prose, and the provider is never called |
 | The same | After the rename | The new sha is not in `pending_commits`, and `micro_docs` holds the new sha and not the old |
 | A rewrite pair whose old sha has no doc | `--rewritten` runs | Nothing is renamed; the commit is left for the ordinary catch-up |
 | A rebase replays a commit and specky's own doc-sync commit | `post-rewrite` fires with HEAD carrying the marker | The rename is still committed: `git ls-tree HEAD` has the new sha's doc and not the old one, and the working tree is clean |

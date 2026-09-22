@@ -246,6 +246,7 @@ def _sync(args: argparse.Namespace) -> None:
         assume_yes=args.yes,
         all_branches=args.all_branches,
         batch=args.batch,
+        refresh_history=args.refresh_history,
     )
 
 
@@ -597,6 +598,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-branches",
         action="store_true",
         help="Document commits on every ref, not just HEAD (more commits, so more AI calls)",
+    )
+    sync_cmd.add_argument(
+        "--refresh-history",
+        action="store_true",
+        help="Rewrite history docs still in the old one-paragraph shape as headline, impact, "
+        "what changed and why (one AI call each; feature docs untouched)",
     )
     command(
         "tag",

@@ -66,6 +66,7 @@ flowchart TD
 | `--all-branches` | Document commits on every ref, not just HEAD — more commits, so more AI calls; also lifts the 10-commit default cap |
 | `--dry-run` | Preview what would be documented without calling the AI provider |
 | `--yes` | Skip confirmation prompt for backlogs over 25 commits (required if stdin is not a tty) — does *not* lift the 10-commit default cap by itself |
+| `--refresh-history` | Work on *documented* commits instead: rewrite each history doc still in the legacy one-paragraph shape as a headline, an impact, What changed and Why ([documentation/auto-commit-docs.md](../documentation/auto-commit-docs.md)). Same range flags and confirmation; one AI call per doc; feature docs are not reclassified |
 
 ## Outcomes
 
@@ -84,6 +85,8 @@ flowchart TD
 | Docs are written | They are left uncommitted in the working tree — unlike a hook fire, `sync` makes no doc-sync commit |
 | Provider configuration is missing or invalid | Exits with error message; no docs are written |
 | Provider call fails (API error, network issue, etc.) | Exits with error; partially written docs remain on disk |
+| `--refresh-history` supplied | Only commits whose history doc has no headline are picked; each is rewritten in place, keeping its filename and its `features:` link (or, for a doc that never had one, the link this machine's index recorded) |
+| A merge commit in the range | Never picked, with or without `--refresh-history`: a merge's history lives in the docs of the commits it brought in |
 
 ## Edge Cases
 
@@ -99,6 +102,8 @@ flowchart TD
 | The commit is one of specky's own `[skip specky]` doc syncs | It is skipped | Documenting the doc commit would document the documentation, forever |
 | The provider fails partway through | The run exits with the error and the docs already written stay on disk | They are correct; discarding them would mean paying for them twice |
 | Docs are written | They are left uncommitted | Unlike a hook fire, a `sync` may have touched hundreds of files — that is a diff somebody should read before it lands |
+| `--refresh-history` on a doc that is already structured | It is skipped | A refresh is for the legacy shape; a structured doc may have been hand-edited, and a second pass would pay to undo that |
+| `--refresh-history` makes no classification call | Feature docs stay as they are | The refresh is about how a commit is described, not about which doc it belongs to — that was decided when it was first documented |
 
 ## Acceptance Tests
 
@@ -121,3 +126,4 @@ flowchart TD
 | Beyond the hook window | A repo with 30 undocumented commits, the hooks installed | A hook fires, then `specky sync --since <old rev>` runs | The hook documents 5 and reports the rest; `sync` documents everything still missing back to the given revision |
 | Another writer holds the lock | A hook fire is in progress | Run `specky sync` | It prints that another specky run is writing docs and exits 0; no files are written and the backlog is unchanged |
 | Sync leaves the commit to the human | Repo with 2 undocumented commits | Run `specky sync` | The docs exist on disk and `git status` shows them as new; HEAD is the same sha as before the run |
+| Refresh rewrites legacy docs only | One commit with a legacy doc linked to a feature, one with a structured doc | Run `specky sync --refresh-history` | The legacy doc gains a headline and keeps its `features:`; the structured one is untouched; exactly one provider call is made |

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from specky import frontmatter, gitlog, paths
 from specky.check import CheckConfig
-from specky.commit_doc import _AUTO_COMMIT_MARKER
+from specky.commit_doc import _AUTO_COMMIT_MARKER, MicroDoc, history_names, read_history
 from specky.db import connect, fts_match_query
 from specky.staleness import index_staleness
 
@@ -77,20 +77,60 @@ def index_documents(repo_root: Path, conn) -> int:
     return count
 
 
+def _history_docs(repo_root: Path) -> dict[str, MicroDoc]:
+    """`{sha or filename: what its history doc says}` for every doc under the history dir.
+
+    Keyed by the recorded full sha where the doc has one, and by its filename otherwise (a doc
+    written before the sha was recorded) — `index_commits` tries the sha, then `history_names`.
+    """
+    history_dir = paths.history_dir(repo_root)
+    docs: dict[str, MicroDoc] = {}
+    if not history_dir.is_dir():
+        return docs
+    for md_path in history_dir.glob("*.md"):
+        parsed = read_history(md_path.read_text())
+        if parsed is not None:
+            sha, doc = parsed
+            docs[sha or md_path.name] = doc
+    return docs
+
+
 def index_commits(repo_root: Path, conn) -> int:
+    """One row per commit, with what its history doc says about it.
+
+    The doc is read from the committed file, not from `micro_docs`/`commit_links` — those are
+    written by the hook into this gitignored database, so on a fresh clone (a teammate's, or CI)
+    they are empty while `specs/history/` is not. Reading the files is what lets the Spec
+    Assistant's history search, `commits_for_doc` and the commit tags work on any checkout.
+    `micro_docs` is still the fallback, for a commit documented on this machine whose doc isn't
+    on disk (a branch switched away from).
+    """
     log = gitlog.run(repo_root, ["log", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%s", "--reverse"])
+    history = _history_docs(repo_root)
 
     count = 0
     for line in log.splitlines():
         if not line:
             continue
         sha, author, date, subject = line.split("\x1f", 3)
-        conn.execute(
-            "INSERT INTO commits (sha, author, date, message) VALUES (?, ?, ?, ?)",
-            (sha, author, date, subject),
+        doc = history.get(sha) or next(
+            (history[name] for name in history_names(sha) if name in history), None
         )
-        row = conn.execute("SELECT summary FROM micro_docs WHERE sha = ?", (sha,)).fetchone()
-        summary = row[0] if row else ""
+        conn.execute(
+            "INSERT INTO commits (sha, author, date, message, headline, impact) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (sha, author, date, subject, doc.headline if doc else "", doc.impact if doc else ""),
+        )
+        if doc:
+            summary = doc.text()
+            # Before the tag query below, which reads these links back.
+            conn.executemany(
+                "INSERT OR IGNORE INTO commit_links (sha, path) VALUES (?, ?)",
+                [(sha, feature) for feature in doc.features],
+            )
+        else:
+            row = conn.execute("SELECT summary FROM micro_docs WHERE sha = ?", (sha,)).fetchone()
+            summary = row[0] if row else ""
         tag_rows = conn.execute(
             "SELECT DISTINCT documents.tags FROM commit_links "
             "JOIN documents ON documents.path = commit_links.path "

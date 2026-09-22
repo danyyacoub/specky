@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from specky.commit_doc import MICRO_DOC_PREFIX
+
 
 class FakeProvider:
     """Returns canned replies in order, and records every prompt it was given.
@@ -68,7 +70,7 @@ class RoutingProvider:
         with self._lock:
             self.prompts.append(prompt)
             self.prefixes.append(prefix)
-        if prompt.startswith("Summarize what changed"):
+        if prompt.startswith(MICRO_DOC_PREFIX):
             return self._summary
         if "Respond with ONLY a JSON object" in prompt:
             return self._classification

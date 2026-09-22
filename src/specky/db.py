@@ -44,7 +44,11 @@ CREATE TABLE IF NOT EXISTS commits (
     sha TEXT PRIMARY KEY,
     author TEXT NOT NULL,
     date TEXT NOT NULL,
-    message TEXT NOT NULL
+    message TEXT NOT NULL,
+    -- Read off the commit's history doc (commit_doc.read_history), empty when it has none or it
+    -- predates the structured shape: the one-line headline, and feature|improvement|fix|internal.
+    headline TEXT NOT NULL DEFAULT '',
+    impact TEXT NOT NULL DEFAULT ''
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS commits_fts USING fts5(
@@ -114,6 +118,10 @@ _ADDED_COLUMNS = {
         ("owner", "TEXT NOT NULL DEFAULT ''"),
         ("stale_since", "TEXT NOT NULL DEFAULT ''"),
         ("last_code_change", "TEXT NOT NULL DEFAULT ''"),
+    ],
+    "commits": [
+        ("headline", "TEXT NOT NULL DEFAULT ''"),
+        ("impact", "TEXT NOT NULL DEFAULT ''"),
     ],
 }
 

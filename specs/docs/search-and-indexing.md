@@ -11,7 +11,7 @@ Search-and-indexing builds a searchable database of all specs and git history. U
 
 ## How It Works
 
-1. **Build the index** — `specky index` reads all markdown files from `specs/` and git history, then stores searchable content in `.specky/index.db` (a SQLite database optimized for keyword search).
+1. **Build the index** — `specky index` reads all markdown files from `specs/` and git history, then stores searchable content in `.specky/index.db` (a SQLite database optimized for keyword search). A commit's searchable summary, its headline and impact, and the feature docs it's linked to are read from its committed history doc (`specs/history/<sha8>.md`, see [documentation/auto-commit-docs.md](../documentation/auto-commit-docs.md)). They are not taken from rows the hook wrote into this gitignored database, so a fresh clone or a CI checkout gets the same commit search and `commits_for_doc` answers as the machine that wrote the docs.
 2. **Search from terminal** — `specky search "<query>"` finds matching docs and prints results with titles and text snippets.
 3. **Generate static site** — `specky render-html` reads the index and writes a complete website to `.specky/site/index.html` with sidebar navigation grouped by topic, individual doc pages, and a search box.
 4. **Search works offline** — The search index is embedded directly into each page (not fetched from a server), so users can double-click the HTML file or open it with `file://` URL and search without any network connection.
@@ -57,6 +57,7 @@ flowchart TD
 |-------|------|------|
 | A process holding an open read query on the index | Another process writes a new row and commits | Both succeed; the reader sees its original snapshot until its query ends, then the new row |
 | Project with specs/ directory and git history | `specky index` is run | Index file created; success message shows doc and commit counts |
+| A fresh clone whose history docs carry `features:` | `specky index` is run with no `.specky/` beforehand | Commit search matches the history docs' prose, and `commits_for_doc` lists each commit under its feature with its headline |
 | A repo with no `.gitignore` | `specky index` is run | `.specky/index.db` exists and `git status --porcelain` is empty |
 | `.specky/.gitignore` already exists with other content | Anything creates `.specky/` state | The existing file is left as it was |
 | Index file exists | User runs `specky search "refund"` | Terminal lists matching documents with titles and snippets |

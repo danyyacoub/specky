@@ -379,7 +379,9 @@ def _backlog(repo_root: Path) -> list[Check]:
     """Whether the hook is producing docs *now*, over a fixed window of recent commits."""
     history_dir = paths.history_dir(repo_root)
     log = _run(
-        ["git", "log", f"-{BACKLOG_PROBE_COMMITS}", "--format=%H%x1f%s"], cwd=repo_root
+        # --no-merges: merges are never documented, by design (see `pending_commits`).
+        ["git", "log", f"-{BACKLOG_PROBE_COMMITS}", "--no-merges", "--format=%H%x1f%s"],
+        cwd=repo_root,
     ).stdout
     considered = 0
     missing = 0
