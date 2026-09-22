@@ -107,7 +107,7 @@ Swap `main` for a release tag (`v0.1.0`) to pin it to the version of the CLI you
 
 Everything above helps Devin write the right docs. None of it *makes* it, and a cloud agent's
 session is the least supervised place specky runs. So put the gate where it can't be skipped —
-the `specky check` job from the [README](../../README.md#enforce), on pull requests. Devin reads
+the `specky check` job from the [README](../../README.md#ci-check), on pull requests. Devin reads
 failing checks on its own PRs and fixes them, which turns the gate into the feedback loop the
 AGENTS.md line is only asking for politely.
 

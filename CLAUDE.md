@@ -43,6 +43,25 @@ file isn't. Full behavior docs are indexed at [specs/MODULES.md](specs/MODULES.m
   Both stay inert until the repo has `specky.toml`/docs; keep it that way. Anything that creates
   `.specky/` goes through `paths.state_dir()`, which makes the directory ignore itself.
 
+## Architecture
+
+Invariants the code relies on:
+
+- `commit_doc.pending_commits()` is the source of truth for what's undocumented. Hook fires, `sync`,
+  `doctor` and the CI job are all passes over it.
+- `paths.py` is the only place `specs` is spelled out. Never hardcode the docs root.
+- `lock.py`: non-blocking `flock` on `.specky/run.lock`; a busy lock exits 0.
+- `db.py` holds the one SQLite schema. Every FTS5 `MATCH` goes through `db.fts_match_query()`
+  ([search/fts5-syntax-safety.md](specs/search/fts5-syntax-safety.md)).
+- `ai_provider.load_provider_from_toml()` is the only way to construct a `Provider`.
+- `html_render.py`: the site must work over `file://` with no build step. Mermaid fences render to
+  SVG at `render-html` time via `vendor/mermaid-render/` (resolved by `mermaid_tool.py`). Without
+  `specky setup-diagrams` they stay plain text.
+- `answer_render.sanitize_fragment()` is the trust boundary for model-authored markup. It runs
+  before the diagram step.
+- `check`'s file→doc map is derived from git history, not `.specky/`, so CI computes the same map
+  from a fresh clone.
+
 ## Releasing
 
 Two versions, one number: PyPI reads `specky.__version__` (pyproject's version is dynamic), and

@@ -70,3 +70,7 @@ path = "src/specky/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/specky"]
+
+# README screenshots are served from GitHub; the sdist doesn't need them.
+[tool.hatch.build.targets.sdist]
+exclude = ["/assets"]
