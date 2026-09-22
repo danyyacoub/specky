@@ -10,7 +10,9 @@ CI job priming a cache) needs the answers to arrive as flags.
 
 from __future__ import annotations
 
+import re
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -23,6 +25,13 @@ DEFAULT_API_KEY_ENV = "ANTHROPIC_API_KEY"
 
 # How many of the files already living in the docs root get named when reporting a collision.
 CONFLICT_LIST_LIMIT = 5
+
+# The tables `init` writes, and so rewrites whole on every run. Any other table in an existing
+# specky.toml — `[serve]`, `[skills]` — was put there by someone else and is kept as written.
+INIT_TABLES = frozenset({"ai", "docs"})
+
+# A table header: `[serve]`, `[ai.retry]`, `[[x]]`, `  [ "docs" ]  # note`.
+_TABLE_HEADER = re.compile(r"^\s*\[\[?([^\[\]]+)\]\]?\s*(?:#.*)?$")
 
 
 @dataclass(frozen=True)
@@ -63,6 +72,86 @@ def _render_toml(config: dict, docs_root: str | None = None) -> str:
     lines = ["[ai]"] + [f'{key} = "{_escape(value)}"' for key, value in config.items()]
     lines += ["", "[docs]", f'root = "{_escape(docs_root or DEFAULT_DOCS_ROOT)}"']
     return "\n".join(lines) + "\n"
+
+
+def _read_existing(config_path: Path) -> str | None:
+    """The current specky.toml's text, or None if there isn't one.
+
+    Read before the interview rather than at the write, so a file init can't parse stops it before
+    anyone answers a question or a provider is billed for the test call.
+    """
+    if not config_path.exists():
+        return None
+    text = config_path.read_text()
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(
+            f"{config_path.name} isn't valid TOML ({exc}), so init can't tell which of its tables "
+            "to keep. Fix it or delete it, then re-run specky init."
+        ) from exc
+    return text
+
+
+def _table_of(line: str) -> str | None:
+    """The top-level table a header line opens — `ai` for `[ai.retry]` — or None for any other line."""
+    match = _TABLE_HEADER.match(line)
+    if not match:
+        return None
+    return match.group(1).split(".")[0].strip().strip("\"'")
+
+
+def _split_tables(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """The keys above the first header, then each table as `(name, text)`, comments included.
+
+    A comment directly above a header — no blank line between — belongs to that header's table, so
+    a note on `[serve]` travels with `[serve]` rather than with whatever table came before it.
+    """
+    root: list[str] = []
+    tables: list[tuple[str, list[str]]] = []
+    for line in text.splitlines():
+        current = tables[-1][1] if tables else root
+        name = _table_of(line)
+        if name is None:
+            current.append(line)
+            continue
+        lead: list[str] = []
+        while current and current[-1].lstrip().startswith("#"):
+            lead.insert(0, current.pop())
+        tables.append((name, lead + [line]))
+    return "\n".join(root).strip(), [(name, "\n".join(lines).strip()) for name, lines in tables]
+
+
+def _merge_toml(
+    existing: str | None, config: dict, docs_root: str | None
+) -> tuple[str, list[str]]:
+    """The new `[ai]` and `[docs]` with every other table of `existing` kept as written, and the
+    names of the tables kept.
+
+    The merge is parsed and compared with `existing` before anything is written: a table it would
+    lose or change — a `[`-led line inside a multi-line string, read as a header — is a
+    `ConfigError`, not a specky.toml quietly missing the viewer's port.
+    """
+    fresh = _render_toml(config, docs_root)
+    if existing is None:
+        return fresh, []
+    root, tables = _split_tables(existing)
+    kept = [(name, body) for name, body in tables if name not in INIT_TABLES]
+    merged = "\n\n".join(p for p in (root, fresh.rstrip("\n"), *(b for _, b in kept)) if p) + "\n"
+
+    def others(text: str) -> dict:
+        return {k: v for k, v in tomllib.loads(text).items() if k not in INIT_TABLES}
+
+    try:
+        intact = others(merged) == others(existing)
+    except tomllib.TOMLDecodeError:
+        intact = False
+    if not intact:
+        raise ConfigError(
+            "init couldn't rewrite [ai] and [docs] without changing the rest of specky.toml. Move "
+            "anything besides those two tables aside, re-run specky init, then add it back."
+        )
+    return merged, list(dict.fromkeys(name for name, _ in kept))
 
 
 def foreign_files(repo_root: Path, root: str) -> list[str]:
@@ -189,10 +278,11 @@ def run_init(
     Asks nothing when `options.non_interactive` — see `InitOptions`.
     """
     options = options or InitOptions()
+    existing = _read_existing(config_path)
     if options.non_interactive:
         config = _config_from_options(options)
         docs_root = _docs_root_from_options(config_path.parent, options, print_fn)
-        return _finish_init(config_path, config, docs_root, options.validate, print_fn)
+        return _finish_init(config_path, config, docs_root, existing, options.validate, print_fn)
 
     use_default = input_fn(f"Use the default Anthropic provider ({DEFAULT_MODEL})? [Y/n] ").strip().lower()
 
@@ -227,7 +317,7 @@ def run_init(
     # Asked before the live call, so the whole interview happens up front rather than either side
     # of a network wait.
     docs_root = _choose_docs_root(config_path.parent, input_fn, print_fn)
-    return _finish_init(config_path, config, docs_root, options.validate, print_fn)
+    return _finish_init(config_path, config, docs_root, existing, options.validate, print_fn)
 
 
 def _ensure_ignored(config_path: Path, print_fn: Callable[[str], None]) -> None:
@@ -267,18 +357,24 @@ def _finish_init(
     config_path: Path,
     config: dict,
     docs_root: str | None,
+    existing: str | None,
     validate: bool,
     print_fn: Callable[[str], None],
 ) -> Path:
     """Validate the answers against the real provider, then write them out."""
+    # Merged first, so a file init can't rewrite safely fails before the provider call is billed.
+    text, kept = _merge_toml(existing, config, docs_root)
     if validate:
         print_fn("Validating provider with a test call...")
         provider = load_provider(config)
         reply = provider.generate("Reply with exactly: ok")
         print_fn(f"Provider responded: {reply.strip()!r}")
 
-    config_path.write_text(_render_toml(config, docs_root))
+    config_path.write_text(text)
     print_fn(f"Wrote {config_path}")
+    if kept:
+        tables = ", ".join(f"[{name}]" for name in kept)
+        print_fn(f"Kept {tables} from the existing {config_path.name}")
     _ensure_ignored(config_path, print_fn)
     if docs_root:
         # specky.toml is gitignored, so CI reads the committed copy or falls back to `specs` — and

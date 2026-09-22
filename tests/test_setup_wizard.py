@@ -152,6 +152,82 @@ def test_a_colliding_docs_root_is_reported_and_kept(tmp_path):
     assert 'root = "specs"' in (tmp_path / "specky.toml").read_text()
 
 
+# --- re-running init ------------------------------------------------------------------------
+
+_EXISTING = '''\
+[ai]
+provider = "openai-compatible"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
+api_key_env = "DEEPSEEK_API_KEY"
+
+[docs]
+root = "specs"
+
+# The viewer sits behind the team proxy.
+[serve]
+port = 9000
+allow_origins = [
+  "https://docs.example.com",
+]
+
+[skills]
+model = "haiku"
+'''
+
+
+def test_rerunning_init_keeps_the_tables_it_doesnt_own(tmp_path):
+    """init owns `[ai]` and `[docs]`. The viewer's port and the skills' model were set by someone
+    else, and a provider switch mustn't quietly take them with it."""
+    import tomllib
+
+    path = tmp_path / "specky.toml"
+    path.write_text(_EXISTING)
+    printed: list[str] = []
+
+    run_init(
+        path,
+        input_fn=_never_asks,
+        print_fn=printed.append,
+        options=InitOptions(assume_yes=True, **NO_VALIDATE),
+    )
+
+    body = path.read_text()
+    before, after = tomllib.loads(_EXISTING), tomllib.loads(body)
+    assert after["ai"]["provider"] == "anthropic"
+    assert "base_url" not in after["ai"], "the old provider's fields outlived it"
+    assert (after["serve"], after["skills"]) == (before["serve"], before["skills"])
+    assert "# The viewer sits behind the team proxy.\n[serve]" in body
+    assert any("[serve], [skills]" in line for line in printed)
+
+
+def test_an_unparseable_specky_toml_stops_init_before_it_asks_or_bills(tmp_path, monkeypatch):
+    """With no parse there's no telling which tables to keep, and overwriting would lose them."""
+    monkeypatch.setattr(
+        setup_wizard, "load_provider", lambda _config: pytest.fail("called the provider anyway")
+    )
+    path = tmp_path / "specky.toml"
+    path.write_text("[serve\nport = 9000\n")
+
+    with pytest.raises(ConfigError, match="isn't valid TOML"):
+        run_init(path, input_fn=_never_asks, print_fn=lambda _msg: None)
+
+    assert path.read_text() == "[serve\nport = 9000\n"
+
+
+def test_a_table_init_would_mangle_stops_the_write(tmp_path):
+    """The splitter reads a `[`-led line as a header, even inside a multi-line string. The merge is
+    compared with the original before it's written, so that misread is an error, not a lost table."""
+    path = tmp_path / "specky.toml"
+    original = '[ai]\nprovider = "anthropic"\n\n[serve]\nbanner = """\n[ai]\n"""\n'
+    path.write_text(original)
+
+    with pytest.raises(ConfigError, match="rest of specky.toml"):
+        _config(tmp_path, assume_yes=True, **NO_VALIDATE)
+
+    assert path.read_text() == original
+
+
 # --- the interview still works -------------------------------------------------------------
 
 

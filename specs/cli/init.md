@@ -52,10 +52,15 @@ terminal to answer on.
    uses and ask it to reply `ok`, so the credential is proven by the command whose job is to prove it
    rather than by the first commit. `--no-validate` skips it: a snapshot build that bakes the config
    in has no key in its environment yet and shouldn't fail — or bill — for that.
-8. **Write, and say what CI still needs** — Render the `[ai]` table, plus a `[docs]` table when a
-   non-default root was chosen. Because `specky.toml` is gitignored, a chosen root is also printed as
-   the `[tool.specky.docs]` block to commit to `pyproject.toml`: CI never sees the gitignored file,
-   and a `specky check` pointed at the wrong tree finds no docs and reports no coverage.
+8. **Write, and say what CI still needs** — Render the `[ai]` and `[docs]` tables (`[docs]` always,
+   spelling out the default root too). They are the only tables `init` owns: in an existing
+   `specky.toml` they replace the old ones whole, and every other table (`[serve]`, `[skills]`, …)
+   is kept as written, comments included, with a line naming what was kept. A comment directly
+   above a header goes with that table. The existing file is parsed before the interview, and the
+   merge is parsed and compared with it before the provider call; if either fails, `init` stops
+   and writes nothing. Because `specky.toml` is gitignored, a chosen root is also printed as the
+   `[tool.specky.docs]` block to commit to `pyproject.toml`: CI never sees the gitignored file, and
+   a `specky check` pointed at the wrong tree finds no docs and reports no coverage.
 9. **Keep specky.toml out of commits** — Unless git already ignores it, append `specky.toml` to the
    repo's `.gitignore` (creating the file if needed) and say so in one line. A repo adopting specky
    has no rule for it yet, so without this the first `git add -A` after `init` would commit one
@@ -83,7 +88,7 @@ flowchart TD
     K --> L{"--no-validate?"}
     L -->|No| O["Live call: provider must<br/>answer 'ok'"]
     L -->|Yes| P
-    O --> P["Write specky.toml"]
+    O --> P["Write [ai] and [docs],<br/>keep every other table"]
     P --> Q{"Non-default docs root?"}
     Q -->|Yes| R["Print the [tool.specky.docs]<br/>block to commit for CI"]
     Q -->|No| S
@@ -115,7 +120,7 @@ flowchart TD
 | `--provider openai-compatible` missing some of `--base-url` / `--model` / `--api-key-env` | One error listing *all* the missing flags; no file written |
 | `--provider command` without `--command` | Error naming `--command`; no file written |
 | A provider name that isn't one of the three | Error quoting what was passed |
-| `specs/` is free | No docs-root question, no `[docs]` table |
+| `specs/` is free | No docs-root question; `[docs]` records `root = "specs"` |
 | `specs/` holds non-markdown files, interactively | The colliding files are named and another root is asked for |
 | The answer is empty or `specs` again | `specs/` is kept, with a line saying specky's docs will sit alongside what's there |
 | `specs/` holds non-markdown files, non-interactively | Reported and kept; `--docs-root` is named as the fix; the config is still written |
@@ -126,6 +131,8 @@ flowchart TD
 | A non-default docs root was chosen | The `[tool.specky.docs]` block is printed, because CI can't read the gitignored `specky.toml` |
 | Nothing ignores `specky.toml` yet | `specky.toml` is appended to `.gitignore`, with one line saying so |
 | `.gitignore` already covers it (`specky.toml`, `*.toml`, …) | `.gitignore` is untouched and nothing is printed about it |
+| An existing `specky.toml` has other tables (`[serve]`, `[skills]`) | `[ai]` and `[docs]` are replaced; the rest is kept as written, comments included, and a line names the kept tables |
+| An existing `specky.toml` isn't valid TOML | `ConfigError` naming the file, before any question or provider call; the file is untouched |
 
 ## Edge Cases
 
@@ -143,6 +150,10 @@ flowchart TD
 | `init` is run twice | `.gitignore` gains one `specky.toml` line, not two | The second run finds the file already ignored |
 | `specky.toml` is already tracked | `.gitignore` is left alone | Someone decided to commit it, and ignoring a tracked file doesn't untrack it |
 | `.gitignore` doesn't end in a newline | A newline is added before the new line | Otherwise the entry would be glued onto the last pattern |
+| `init` is re-run on a `specky.toml` holding `[serve]` or `[skills]` | Those tables are kept with their comments; only `[ai]` and `[docs]` are rewritten | `init` owns the provider and the docs root. The viewer's port and the skills' model belong to whoever set them, and switching provider mustn't quietly take them along |
+| The old `[ai]` had keys `init` doesn't ask about (`max_tokens`, `<task>_model`) | They go with the table | `[ai]` is rewritten whole: a limit tuned for one provider isn't carried to the next |
+| The existing `specky.toml` isn't valid TOML | `init` stops before the interview, naming the file, and writes nothing | With no parse there's no telling which tables to keep, and overwriting would lose them silently |
+| Keeping a table would change it (a `[`-led line inside a multi-line string, read as a header) | `ConfigError`, nothing written | The merge is compared with the old file before it's written, so a misread can't drop a table silently |
 
 ## Acceptance Tests
 
@@ -157,10 +168,13 @@ flowchart TD
 | A provider whose `generate` raises | Run `init` without `--no-validate` | The error propagates and no file is written |
 | `--docs-root documentation/` | Run `init` | The file contains a `[docs]` table with `root = "documentation"` |
 | `--docs-root /etc/specs`, `../outside` or `docs/../../outside` | Run `init` | `ConfigError` for each; nothing is written |
-| `specs/openapi.yaml` exists and no `--docs-root` is given | Run `init --yes` | The output names the colliding file and `--docs-root`; the config is written and no `[docs]` table is added |
+| `specs/openapi.yaml` exists and no `--docs-root` is given | Run `init --yes` | The output names the colliding file and `--docs-root`; the config is written with `root = "specs"` |
 | stdin is not a terminal and neither `--yes` nor `--provider` is given | Run `specky init` | The CLI raises before the interview, and the message names `--yes` and `--provider` |
 | A repo with no `.gitignore` | Run `init --yes` | `.gitignore` is exactly `specky.toml`, a line says it was added, and `git status` doesn't list `specky.toml` |
 | `.gitignore` is `node_modules/` with no trailing newline | Run `init --yes` twice | `.gitignore` is `node_modules/`, then `specky.toml`, each on its own line |
 | `.gitignore` is `*.toml` | Run `init --yes` | `.gitignore` is unchanged and nothing is printed about it |
 | `specky.toml` is committed | Run `init --yes` | No `.gitignore` is created |
 | Any flag added to `init` | Compare against `known_flags()` | It is listed, so `generator.ungrounded_flags` doesn't report a doc that mentions it as invented |
+| `specky.toml` holds an openai-compatible `[ai]`, `[docs]`, a commented `[serve]` and `[skills]` | Run `init --yes` | `[ai]` is Anthropic with no `base_url`; `[serve]` and `[skills]` parse as before; the comment is still above `[serve]`; a line names both kept tables |
+| `specky.toml` isn't valid TOML | Run `init` | `ConfigError` saying so; no question is asked, no provider is called, and the file is unchanged |
+| `[serve]` holds a multi-line string with a line reading `[ai]` | Run `init --yes` | `ConfigError`; the file is unchanged |
