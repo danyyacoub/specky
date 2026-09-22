@@ -6,7 +6,12 @@ tags: [ai, configuration, adoption]
 # Integration — Skill Model Selection
 
 ## What It Does
+
 Specky's documentation skills (`find-feature`, `explore-docs`, `document-domain`) can run their lookups and writing on a chosen model instead of whatever model the current session uses. Each developer sets `[skills] model` in their own `specky.toml` (gitignored, so the choice is per machine, not per repo) to `haiku`, `sonnet`, or `opus`, and the skill hands its work to a subagent on that model. This lets a developer spend less on routine doc lookups without switching the whole session.
+
+This matters because most code is now written by AI, and reading it is no longer a practical way to see which features exist, how each workflow runs, and how edge cases are handled. Because every feature is indexed, finding one is a search rather than a crawl through code, and that lookup work can run on a lower-cost model — which keeps the smartest model on the hard development tasks.
+
+For the CLI and git hooks, `[ai] <task>_model` plays the same role per call kind, sending each of commit summaries, classification, doc writing, tags and chat to its own model.
 
 ## How It Works
 1. **Read the setting** — a skill reads `[skills] model` from `specky.toml`.
