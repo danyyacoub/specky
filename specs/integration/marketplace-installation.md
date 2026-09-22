@@ -22,7 +22,7 @@ runs `specky init`.
 1. **Install the CLI** — `uv tool install specky` puts `specky` and `specky-mcp` on PATH. The git
    hooks record the absolute path of this binary, which is why it has to be a global install and
    not the plugin's own copy: that copy lives under a versioned cache directory that moves on every
-   plugin update.
+   plugin update. `specky --version` reports the installed version.
 2. **Add the marketplace** — `claude plugin marketplace add danyyacoub/specky`. Claude Code reads
    `.claude-plugin/marketplace.json` from the repo and lists the one plugin in it.
 3. **Install the plugin** — `claude plugin install specky@specky`. Claude Code copies the repo into
@@ -30,11 +30,13 @@ runs `specky init`.
    `.mcp.json` from that copy.
 4. **Start the MCP server** — On session start, `uv run --project ${CLAUDE_PLUGIN_ROOT} specky-mcp`
    builds an environment for the cached copy (on first use, from `uv.lock`) and serves over stdio,
-   in the session's working directory. Its connect-time instructions depend on whether that repo
-   has docs (see [chat/mcp-host-guidance.md](../chat/mcp-host-guidance.md)).
+   in the session's working directory. It reports its version, and its connect-time instructions
+   depend on whether that repo has docs (see [chat/mcp-host-guidance.md](../chat/mcp-host-guidance.md)):
+   with docs it sends the full guidance, without them it tells the model to leave specky's tools
+   alone.
 5. **Opt a repo in** — `/specky:setup` checks the CLI is there, runs `specky init` for the chosen
-   provider (which writes and gitignores `specky.toml`), installs the git hooks with the user's
-   go-ahead, and runs `specky index`.
+   provider (which writes `specky.toml` and adds it to `.gitignore`), installs the git hooks with
+   the user's go-ahead, and runs `specky index`.
 6. **Update** — Claude Code offers an update only when `.claude-plugin/plugin.json` changes its
    `version`, so a release bumps it together with `specky.__version__`. The release workflow
    refuses a tag where the two disagree. The CLI updates separately, with `uv tool upgrade specky`.
