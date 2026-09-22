@@ -5,11 +5,17 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 The engine's own behavior is documented per feature, in the sections below — Documentation,
 Cli, Ai, Docs, Chat, Search, Rendering, Integration — rather than per module in `src/specky/`. The
 plugin's skills are documented in place: `setup` (opt a repo in: provider, git hooks, first index)
-in [skills/setup/SKILL.md](../skills/setup/SKILL.md), `document-domain` in
+in [skills/setup/SKILL.md](../skills/setup/SKILL.md), `find-feature` (what a piece of functionality
+is meant to do before you use it) in
+[skills/find-feature/SKILL.md](../skills/find-feature/SKILL.md), `document-domain` in
 [skills/document-domain/SKILL.md](../skills/document-domain/SKILL.md), `explore-docs` (answer
 behaviour questions from the docs before reading code) in
 [skills/explore-docs/SKILL.md](../skills/explore-docs/SKILL.md), and `launch-viewer` (build and open
 the viewer from Claude Code) in [skills/launch-viewer/SKILL.md](../skills/launch-viewer/SKILL.md).
+`find-feature`, `document-domain` and `explore-docs` run on the session's model unless
+`[skills] model` in `specky.toml` names another (`setup` asks), in which case they hand their work
+to a subagent on it. That value names a Claude Code model, so the other hosts pin a tier through a
+per-host agent templated under [integrations/](../integrations/).
 
 ## Documentation
 
