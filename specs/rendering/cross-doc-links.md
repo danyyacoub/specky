@@ -14,7 +14,7 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 3. **Unwrap dead links** — A link whose target the output doesn't contain keeps only its text; the broken anchor is dropped.
 4. **Anchor headings** — Headings get ids so `#section` links have something to land on, with the content pane offset so the fixed titlebar doesn't cover them.
 5. **Run before the sanitizer (answers only)** — Spec Assistant answers resolve links before the sanitizer runs, so a decoded `javascript:` href is still caught.
-6. **Run after body rendering (export only)** — In `specky export`, resolution happens after the doc body is rendered, so heading ids don't interfere with the workflow stepper.
+6. **Run after body rendering** — In both the viewer and `specky export`, heading ids and link resolution are applied after the doc body is rendered, so heading ids don't interfere with the workflow stepper.
 
 ## Outcomes
 | Situation | Result |
@@ -22,7 +22,7 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 | Link targets a doc in the output | Resolved to that doc's page (viewer) or section (export) |
 | Link has a `#section` anchor | Resolved to the matching heading id on the target page or section |
 | Link targets a file the output doesn't contain | Link is unwrapped, keeping only its text |
-| Link is not a doc link (page name, in-page anchor) | Kept as written |
+| Answer link that isn't a `.md` path (a page name, an in-page anchor) | Kept as written; the sanitizer still vets it |
 | Answer link resolves to a `javascript:` href | Caught by the sanitizer that runs after resolution |
 
 ## Acceptance Tests
@@ -32,5 +32,5 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 | A doc links another doc by repo path | `specky export` renders the file | The link points at the target's section |
 | A link includes a `#section` anchor | The target doc is rendered | The link lands on the heading with that id |
 | A doc links a file not included in the export (e.g. `specs/history/` without `--include-history`) | The export renders | The link is unwrapped, keeping only its text |
-| A link names a page or an in-page anchor | The renderer processes it | The link is kept as written |
+| An answer links a page name or an in-page anchor | The answer is rendered | The link is kept as written |
 | An answer contains a `javascript%3A…` link | The answer is rendered | The sanitizer catches the decoded href after resolution |
