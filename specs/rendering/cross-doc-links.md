@@ -9,6 +9,7 @@ tags: [rendering, documentation, search]
 Docs link to each other by repo path (like `../cli/check.md`), but the rendered viewer serves flat pages with no folders and no `.md` files. This feature resolves those in-body links at render time so they point at the page (or section) the target was actually rendered to, instead of 404ing.
 
 ## How It Works
+
 1. **Pick the renderer's target** — Each renderer knows where it put a doc: the viewer serves one flat page per doc, while `specky export` serves one file with a section per doc.
 2. **Resolve each link** — A resolver looks at the link's target and anchor and returns the correct href for that renderer, or nothing if the target isn't in the output.
 3. **Unwrap dead links** — A link whose target the output doesn't contain keeps only its text; the broken anchor is dropped.
@@ -17,6 +18,7 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 6. **Run after body rendering** — In both the viewer and `specky export`, heading ids and link resolution are applied after the doc body is rendered, so heading ids don't interfere with the workflow stepper.
 
 ## Outcomes
+
 | Situation | Result |
 |---|---|
 | Link targets a doc in the output | Resolved to that doc's page (viewer) or section (export) |
@@ -26,6 +28,7 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 | Answer link resolves to a `javascript:` href | Caught by the sanitizer that runs after resolution |
 
 ## Acceptance Tests
+
 | Given | When | Then |
 |---|---|---|
 | A doc links another doc by repo path | The viewer renders the doc | The link points at the rendered page, not the `.md` file |
