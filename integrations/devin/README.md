@@ -63,8 +63,11 @@ Claude Code's [.mcp.json](../../.mcp.json) points at. It speaks stdio and answer
 `.specky/index.db`, which is why the blueprint's `maintenance` step runs `specky index`: without
 that file every tool returns nothing, and Devin has no way to tell "no docs match" from "no index".
 
-Tools exposed: `ping`, `list_features`, `list_workflows`, `list_tags`, `get_graph`, `commit_info`,
-`commits_for_doc`. All read-only.
+Tools exposed, all read-only: `list_domains`, `search_docs`, `read_doc`, `doc_behaviours`,
+`search_history` (the docs and their history); `list_features`, `list_workflows`, `list_tags`,
+`get_graph`, `commit_info`, `commits_for_doc` (the feature/workflow catalog);
+`render_acceptance_table` (pure formatting) and `ping`. The authoritative list is
+[`mcp_server.py`](../../src/specky/mcp_server.py).
 
 ## AGENTS.md
 
@@ -87,7 +90,8 @@ at it:
 
 ```bash
 mkdir -p .devin
-cp /path/to/specky/skills/document-domain/SKILL.md .devin/document-domain.md
+curl -fsSL https://raw.githubusercontent.com/danyyacoub/specky/main/skills/document-domain/SKILL.md \
+  -o .devin/document-domain.md
 ```
 
 Then create a playbook (Settings → Resources → Playbooks) with
@@ -96,8 +100,8 @@ it names the vendored path and gets out of the way, so upgrading specky is a `cp
 re-paste.
 
 `SKILL.md` isn't shipped in the wheel — `uv tool install specky` installs `src/specky` and nothing
-else — so the copy has to come from a specky checkout, exactly as in the
-[Kiro integration](../kiro/README.md).
+else — so the copy comes from the repo, exactly as in the [Kiro integration](../kiro/README.md).
+Swap `main` for a release tag (`v0.1.0`) to pin it to the version of the CLI you installed.
 
 ## The CI gate is the part that actually holds
 

@@ -9,8 +9,9 @@ authored: human
 ## What It Does
 
 `specky init` picks an AI provider, proves it works with one live call, and writes the result to
-`specky.toml`. It is the only command that writes that file, and `specky.toml` is gitignored — it
-names the *environment variable* holding the API key, never a key.
+`specky.toml`. It is the only command that writes that file, and it makes sure `specky.toml` is
+gitignored. The file names the *environment variable* holding the API key, never a key, but which
+provider a developer uses is per-machine.
 
 Interactive by default, because the interview is the friendliest way to hand someone a working
 provider config. Every answer it asks for is also a flag, because anywhere specky is installed by a
@@ -55,6 +56,12 @@ terminal to answer on.
    non-default root was chosen. Because `specky.toml` is gitignored, a chosen root is also printed as
    the `[tool.specky.docs]` block to commit to `pyproject.toml`: CI never sees the gitignored file,
    and a `specky check` pointed at the wrong tree finds no docs and reports no coverage.
+9. **Keep specky.toml out of commits** — Unless git already ignores it, append `specky.toml` to the
+   repo's `.gitignore` (creating the file if needed) and say so in one line. A repo adopting specky
+   has no rule for it yet, so without this the first `git add -A` after `init` would commit one
+   developer's provider choice for everyone. A `specky.toml` that is already *tracked* is left
+   alone: someone chose to commit it, and a `.gitignore` line wouldn't untrack it anyway. Outside a
+   git repo, or without git, nothing is touched.
 
 ```mermaid
 flowchart TD
@@ -79,6 +86,9 @@ flowchart TD
     O --> P["Write specky.toml"]
     P --> Q{"Non-default docs root?"}
     Q -->|Yes| R["Print the [tool.specky.docs]<br/>block to commit for CI"]
+    Q -->|No| S
+    R --> S{"specky.toml ignored<br/>or tracked already?"}
+    S -->|No| T["Append specky.toml<br/>to .gitignore"]
 ```
 
 ## Flags
@@ -114,6 +124,8 @@ flowchart TD
 | The provider call fails | The error is raised and `specky.toml` is *not* written — no half-configured repo |
 | `--no-validate` | No provider is constructed and no call is made; the file is written as given |
 | A non-default docs root was chosen | The `[tool.specky.docs]` block is printed, because CI can't read the gitignored `specky.toml` |
+| Nothing ignores `specky.toml` yet | `specky.toml` is appended to `.gitignore`, with one line saying so |
+| `.gitignore` already covers it (`specky.toml`, `*.toml`, …) | `.gitignore` is untouched and nothing is printed about it |
 
 ## Edge Cases
 
@@ -128,6 +140,9 @@ flowchart TD
 | The validation call fails | The error is raised and `specky.toml` is **not** written | A half-configured repo is worse than an unconfigured one: it fails at the first commit, far from this command |
 | There is no credential in the environment yet | `--no-validate` writes the file without constructing a provider or making a call | A snapshot build that bakes the config in shouldn't fail — or bill — for a key it isn't meant to have |
 | A non-default docs root was chosen | The `[tool.specky.docs]` block is printed for `pyproject.toml` | `specky.toml` is gitignored, so CI never sees it, and a `specky check` pointed at the wrong tree finds no docs and reports no coverage |
+| `init` is run twice | `.gitignore` gains one `specky.toml` line, not two | The second run finds the file already ignored |
+| `specky.toml` is already tracked | `.gitignore` is left alone | Someone decided to commit it, and ignoring a tracked file doesn't untrack it |
+| `.gitignore` doesn't end in a newline | A newline is added before the new line | Otherwise the entry would be glued onto the last pattern |
 
 ## Acceptance Tests
 
@@ -144,4 +159,8 @@ flowchart TD
 | `--docs-root /etc/specs`, `../outside` or `docs/../../outside` | Run `init` | `ConfigError` for each; nothing is written |
 | `specs/openapi.yaml` exists and no `--docs-root` is given | Run `init --yes` | The output names the colliding file and `--docs-root`; the config is written and no `[docs]` table is added |
 | stdin is not a terminal and neither `--yes` nor `--provider` is given | Run `specky init` | The CLI raises before the interview, and the message names `--yes` and `--provider` |
+| A repo with no `.gitignore` | Run `init --yes` | `.gitignore` is exactly `specky.toml`, a line says it was added, and `git status` doesn't list `specky.toml` |
+| `.gitignore` is `node_modules/` with no trailing newline | Run `init --yes` twice | `.gitignore` is `node_modules/`, then `specky.toml`, each on its own line |
+| `.gitignore` is `*.toml` | Run `init --yes` | `.gitignore` is unchanged and nothing is printed about it |
+| `specky.toml` is committed | Run `init --yes` | No `.gitignore` is created |
 | Any flag added to `init` | Compare against `known_flags()` | It is listed, so `generator.ungrounded_flags` doesn't report a doc that mentions it as invented |

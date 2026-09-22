@@ -26,8 +26,11 @@ to have it everywhere):
 Claude Code's [.mcp.json](../../.mcp.json) points at. It speaks stdio and answers from
 `.specky/index.db`, so run `specky index` at least once first.
 
-Tools exposed: `ping`, `list_features`, `list_workflows`, `list_tags`, `get_graph`,
-`commit_info`, `commits_for_doc`. All read-only.
+Tools exposed, all read-only: `list_domains`, `search_docs`, `read_doc`, `doc_behaviours`,
+`search_history` (the docs and their history); `list_features`, `list_workflows`, `list_tags`,
+`get_graph`, `commit_info`, `commits_for_doc` (the feature/workflow catalog);
+`render_acceptance_table` (pure formatting) and `ping`. The authoritative list is
+[`mcp_server.py`](../../src/specky/mcp_server.py).
 
 ## Skill
 

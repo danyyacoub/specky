@@ -22,6 +22,10 @@ for the code when the question is about the code itself. Hand those questions to
 ## Steps
 
 ### 1. Find the docs
+- First make sure the repo has specky docs at all: a docs tree (`specs/` unless `[docs] root` says
+  otherwise) with markdown in it. If it doesn't, this repo doesn't use specky. Say so in one line
+  and answer from the code instead. Don't run `specky index` or `specky init` to create one; that's
+  the user's call (`/specky:setup`).
 - `search_docs` with the user's words. If that misses, retry with the terms `specs/GLOSSARY.md`
   uses for the concept; the docs use those exact terms.
 - For "what exists" questions ("which features touch billing?", "what workflows do we have?"), use

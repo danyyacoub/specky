@@ -14,6 +14,7 @@ without `specky` in it — which is every GUI git client.
 from __future__ import annotations
 
 import io
+import json
 import os
 import stat
 import subprocess
@@ -204,6 +205,77 @@ class TestHookScript:
         # git aborts nothing on a post-commit failure, but a non-zero hook is noise in every commit
         # and a broken build in some clients.
         assert self._run_hook(in_repo, "post-commit", "/usr/bin:/bin").returncode == 0
+
+
+
+PLUGIN_HOOK = Path(__file__).resolve().parents[1] / "hooks" / "post-tool-use-commit.sh"
+
+
+class TestPluginHook:
+    """Claude Code's PostToolUse hook, which the plugin runs after *every* Bash call in *every* repo.
+
+    The plugin is enabled per user, so most repos it fires in have never heard of specky. Acting
+    there would mean a config error printed after every commit and an untracked `.specky/` left
+    behind, so the hook waits for the `specky.toml` that `specky init` writes.
+    """
+
+    @pytest.fixture
+    def stub_on_path(self, tmp_path: Path) -> tuple[Path, str]:
+        marker = tmp_path / "called.txt"
+        bin_dir = tmp_path / "plugin-bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "specky"
+        stub.write_text(f'#!/bin/sh\necho "$@" >> "{marker}"\n')
+        stub.chmod(0o755)
+        return marker, f"{bin_dir}:/usr/bin:/bin"
+
+    def _fire(self, repo: Path, command: str, path_value: str) -> subprocess.CompletedProcess:
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        return subprocess.run(
+            ["/bin/sh", str(PLUGIN_HOOK)],
+            cwd=repo,
+            env={"PATH": path_value, "HOME": os.environ.get("HOME", "")},
+            input=payload,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_does_nothing_in_a_repo_without_specky_toml(self, tmp_repo: Path, stub_on_path):
+        marker, path_value = stub_on_path
+
+        result = self._fire(tmp_repo, 'git commit -m "x"', path_value)
+
+        assert result.returncode == 0
+        assert result.stdout == ""
+        assert not marker.exists()
+        assert not (tmp_repo / ".specky").exists()
+
+    def test_runs_commit_doc_in_an_opted_in_repo(self, tmp_repo: Path, stub_on_path):
+        marker, path_value = stub_on_path
+        (tmp_repo / "specky.toml").write_text("[ai]\n")
+
+        result = self._fire(tmp_repo, 'git add -A && git commit -m "x"', path_value)
+
+        assert result.returncode == 0
+        assert marker.read_text().strip() == "commit-doc"
+
+    def test_ignores_bash_calls_that_are_not_commits(self, tmp_repo: Path, stub_on_path):
+        marker, path_value = stub_on_path
+        (tmp_repo / "specky.toml").write_text("[ai]\n")
+
+        self._fire(tmp_repo, "git status", path_value)
+
+        assert not marker.exists()
+
+    def test_outside_a_git_repo_it_exits_cleanly(self, tmp_path: Path, stub_on_path):
+        marker, path_value = stub_on_path
+        elsewhere = tmp_path / "not-a-repo"
+        elsewhere.mkdir()
+
+        result = self._fire(elsewhere, 'git commit -m "x"', path_value)
+
+        assert result.returncode == 0
+        assert not marker.exists()
 
 
 class TestCatchUp:

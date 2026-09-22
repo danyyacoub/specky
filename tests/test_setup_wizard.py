@@ -229,3 +229,60 @@ def test_every_init_flag_is_a_known_flag():
     """`generator.ungrounded_flags` checks generated docs against `cli.known_flags()`, so a flag the
     parser gained has to be visible there or a doc mentioning it reads as a hallucination."""
     assert {"--yes", "--provider", "--api-key-env", "--docs-root", "--no-validate"} <= cli.known_flags()
+
+
+# --- .gitignore ------------------------------------------------------------------------------
+
+
+def _init_in(repo) -> list[str]:
+    printed: list[str] = []
+    run_init(
+        repo / "specky.toml",
+        input_fn=_never_asks,
+        print_fn=printed.append,
+        options=InitOptions(assume_yes=True, **NO_VALIDATE),
+    )
+    return printed
+
+
+def test_init_gitignores_specky_toml(tmp_repo):
+    """A repo adopting specky has no rule for specky.toml yet, and it's per-machine config: the
+    first `git add -A` after init would otherwise commit one developer's provider for everyone."""
+    from conftest import git
+
+    printed = _init_in(tmp_repo)
+
+    assert (tmp_repo / ".gitignore").read_text() == "specky.toml\n"
+    assert any(".gitignore" in line for line in printed)
+    assert "specky.toml" not in git(tmp_repo, "status", "--porcelain")
+
+
+def test_init_appends_to_an_existing_gitignore_once(tmp_repo):
+    (tmp_repo / ".gitignore").write_text("node_modules/")  # no trailing newline
+
+    _init_in(tmp_repo)
+    _init_in(tmp_repo)  # re-running init must not add a second line
+
+    assert (tmp_repo / ".gitignore").read_text() == "node_modules/\nspecky.toml\n"
+
+
+def test_init_leaves_gitignore_alone_when_already_ignored(tmp_repo):
+    (tmp_repo / ".gitignore").write_text("*.toml\n")
+
+    printed = _init_in(tmp_repo)
+
+    assert (tmp_repo / ".gitignore").read_text() == "*.toml\n"
+    assert not any(".gitignore" in line for line in printed)
+
+
+def test_init_respects_a_committed_specky_toml(tmp_repo):
+    """Someone chose to commit it; a `.gitignore` line wouldn't untrack it, only confuse."""
+    from conftest import git
+
+    (tmp_repo / "specky.toml").write_text("[ai]\n")
+    git(tmp_repo, "add", "specky.toml")
+    git(tmp_repo, "commit", "-q", "-m", "commit the config")
+
+    _init_in(tmp_repo)
+
+    assert not (tmp_repo / ".gitignore").exists()

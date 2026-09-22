@@ -19,3 +19,7 @@ node_modules/
 # `specky tests` output. Users commit theirs; here it's just this repo dogfooding itself, and 126
 # skipped scaffolds duplicating tests/ would drown out scripts/test.sh.
 tests/spec/
+# Claude Code's per-user state. Listed here, not only in a global ignore, because `uv build` reads
+# this file: anything it doesn't exclude ends up in the sdist.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock

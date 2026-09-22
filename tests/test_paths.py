@@ -194,3 +194,32 @@ class TestCustomRootEndToEnd:
 
         report = json.loads(capsys.readouterr().out)
         assert DOC in json.dumps(report)
+
+
+class TestStateDir:
+    """`.specky/` has to stay out of `git status` in a repo nobody ran `specky init` in: the plugin's
+    MCP server and `specky index` can be the first things to create it there."""
+
+    def test_ignores_itself(self, tmp_repo: Path):
+        state = paths.state_dir(tmp_repo)
+
+        assert state == tmp_repo / ".specky"
+        assert (state / ".gitignore").read_text().splitlines()[-1] == "*"
+
+    def test_an_index_leaves_the_tree_clean(self, tmp_repo: Path):
+        from specky.indexer import run_index
+
+        # tmp_repo has no .gitignore at all, so nothing but `.specky/.gitignore` can be hiding it.
+        assert not (tmp_repo / ".gitignore").exists()
+        run_index(tmp_repo)
+
+        assert (tmp_repo / ".specky" / "index.db").exists()
+        assert git(tmp_repo, "status", "--porcelain") == ""
+
+    def test_leaves_an_existing_ignore_file_alone(self, tmp_repo: Path):
+        (tmp_repo / ".specky").mkdir()
+        (tmp_repo / ".specky" / ".gitignore").write_text("index.db\n")
+
+        paths.state_dir(tmp_repo)
+
+        assert (tmp_repo / ".specky" / ".gitignore").read_text() == "index.db\n"

@@ -9,9 +9,12 @@ those workflows out, built from the same rule text the panel's prompts are (`spe
 two can't drift.
 """
 
+import subprocess
+from pathlib import Path
+
 from mcp.server.mcpserver import MCPServer
 
-from specky import catalog, doc_tools, spec_draft
+from specky import __version__, catalog, doc_tools, paths, spec_draft
 from specky.chat_server import EXPLORE_FORMAT
 from specky.db import repo_root
 
@@ -30,7 +33,45 @@ INSTRUCTIONS = (
     "need `specky index` to have run."
 )
 
-mcp = MCPServer("specky", instructions=INSTRUCTIONS)
+# The plugin is enabled per user, so the server starts in every repo the user opens, most of which
+# have never heard of specky. Telling the model to "check it first" there sends it on a round trip
+# that can only come back empty, every time a behaviour question comes up.
+NO_DOCS_INSTRUCTIONS = (
+    "specky is installed, but this repo has no specky docs yet, so its tools have nothing to answer "
+    "from. Don't call them unless the user asks about specky; the /specky:setup skill sets a repo "
+    "up."
+)
+
+
+def instructions_for(root: Path | None) -> str:
+    """The instructions for a server started in `root` (None: not inside a git repo).
+
+    Any markdown under the docs root counts as docs: a `specs/` holding only OpenAPI files is
+    somebody else's tree, not specky's.
+    """
+    if root is None:
+        return NO_DOCS_INSTRUCTIONS
+    docs = paths.docs_root(root)
+    if docs.is_dir() and next(docs.rglob("*.md"), None) is not None:
+        return INSTRUCTIONS
+    return NO_DOCS_INSTRUCTIONS
+
+
+def _startup_root() -> Path | None:
+    try:
+        return repo_root()
+    except (subprocess.CalledProcessError, OSError):
+        return None
+
+
+mcp = MCPServer(
+    "specky",
+    instructions=instructions_for(_startup_root()),
+    # Which copy of specky answered: the plugin runs its own, pinned to the plugin's version,
+    # separate from the `uv tool install` the git hooks call.
+    version=__version__,
+    website_url="https://github.com/danyyacoub/specky",
+)
 
 
 @mcp.tool()

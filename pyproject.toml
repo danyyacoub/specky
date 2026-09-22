@@ -1,6 +1,8 @@
 [project]
 name = "specky"
-version = "0.1.0"
+# Single-sourced from `specky.__version__`; `.claude-plugin/plugin.json` must match it
+# (tests/test_packaging.py, and the release workflow checks the tag too).
+dynamic = ["version"]
 description = "Cross-agent plugin that generates and maintains functional documentation in place, with a SQLite-backed searchable history and an HTML viewer for non-technical stakeholders."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -9,10 +11,22 @@ license-files = ["LICENSE"]
 authors = [
     { name = "dany", email = "dany.yacoub@gmail.com" },
 ]
+keywords = [
+    "documentation",
+    "functional-specs",
+    "claude-code",
+    "claude-code-plugin",
+    "mcp",
+    "git-hooks",
+    "sqlite",
+    "fts5",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -30,6 +44,8 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/danyyacoub/specky"
+Documentation = "https://github.com/danyyacoub/specky/blob/main/specs/MODULES.md"
+Changelog = "https://github.com/danyyacoub/specky/blob/main/CHANGELOG.md"
 Repository = "https://github.com/danyyacoub/specky"
 Issues = "https://github.com/danyyacoub/specky/issues"
 
@@ -48,6 +64,9 @@ specky-mcp = "specky.mcp_server:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/specky/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/specky"]

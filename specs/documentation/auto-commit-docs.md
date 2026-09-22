@@ -25,6 +25,14 @@ covers `git merge`/`git pull`, and `post-rewrite` covers `git commit --amend` an
 Nothing fires for a cherry-pick, a revert, a `git am`, or a squash-merge in the forge's UI — those
 are caught by the next fire's catch-up, by `specky sync`, or by the CI job.
 
+The Claude Code plugin adds a fourth trigger: a `PostToolUse` hook that runs `specky commit-doc`
+right after Claude runs a `git commit` through its Bash tool. It is a convenience for faster
+feedback, not a mechanism. The git hooks already fire for that commit, and a fire that finds its
+work done costs nothing. The plugin is enabled per user rather than per repo, so this hook runs
+after every Bash call in every repo. It acts only in a repo that has a `specky.toml`, written by
+`specky init`. Anywhere else, `commit-doc` would have no provider to call: it would print a config
+error after every commit and leave a `.specky/` behind in a repo that never asked for one.
+
 ## How It Works
 
 1. **Configure AI provider** — Run `specky init` and choose your AI backend (Anthropic,
@@ -72,7 +80,7 @@ are caught by the next fire's catch-up, by `specky sync`, or by the CI job.
    file *and* the deletion of the old one — which is why the fire continues past the recursion guard
    in step 7 even when HEAD is one of specky's own doc-sync commits: a rebase replays those too.
 
-6. **One writer at a time** — The run holds a non-blocking `flock` on `.specky/hook.lock`. Two
+6. **One writer at a time** — The run holds a non-blocking `flock` on `.specky/run.lock`. Two
    fires (rapid commits, or a hook firing during a manual `specky sync`) would otherwise both pick
    the same pending commit. A held lock prints and exits 0; it never blocks a hook.
 
@@ -134,8 +142,9 @@ flowchart TD
 | **Ledger drained** | A later fire runs with the sequencer finished | Those paths are committed — including a deletion whose file a checkout or fast-forward has since restored — and the ledger is removed |
 | **Nothing owed, nothing pending** | A fire finds an empty backlog and an empty ledger | Returns without taking the lock, so the nested fire of a doc-sync commit reports nothing |
 | **Nothing committed** | The regeneration is byte-for-byte identical to what's on disk | No commit is created; HEAD is unchanged |
-| **Second run skipped** | Another specky run holds `.specky/hook.lock` | Prints and exits 0; nothing is written; the backlog stays pending |
+| **Second run skipped** | Another specky run holds `.specky/run.lock` | Prints and exits 0; nothing is written; the backlog stays pending |
 | **Hook skipped** | `specky install-git-hook` not yet run | Commits proceed normally; no summary generated |
+| **Plugin hook inert** | Claude commits in a repo with no `specky.toml` | The plugin's `PostToolUse` hook exits at once: no output, no `specky` call, no `.specky/` created |
 | **Hook opted out** | `SPECKY_DISABLE_HOOK` is set to anything but `0`/`false`/`no`/`off`/empty | The fire prints one line naming the variable and returns before building a provider; nothing is written, nothing is spent |
 | **Generation fails** | AI provider misconfigured or unreachable | Commit succeeds; summary is skipped; the reason is printed |
 | **Hook not overwritten** | A `post-commit`/`post-merge`/`post-rewrite` from another tool exists | `install-git-hook` installs none of the three and says which file blocked it |
@@ -156,7 +165,11 @@ flowchart TD
 | The hooks are installed | The hook script runs with `PATH=/usr/bin:/bin` | `specky commit-doc` still runs, via the recorded absolute path |
 | The hooks are installed and `specky` exits non-zero | The hook script runs | The hook exits 0 — a non-zero hook is noise in every commit and a broken build in some clients |
 | A fire has just made its own doc-sync commit | The commit fires `post-commit` again | The marker is recognized and no provider call is made |
-| Another process holds `.specky/hook.lock` | A hook fires | Output says another specky run is writing docs; no docs are written |
+| Another process holds `.specky/run.lock` | A hook fires | Output says another specky run is writing docs; no docs are written |
+| A repo with no `specky.toml` and `specky` on PATH | The plugin's `PostToolUse` hook gets a `git commit` Bash call | It exits 0 with no output, `specky` is never run, and no `.specky/` is created |
+| The same repo after `specky init` | The plugin hook gets `git add -A && git commit -m x` | `specky commit-doc` runs once |
+| A repo with `specky.toml` | The plugin hook gets `git status` | `specky` is never run |
+| A directory that isn't a git repo | The plugin hook gets a `git commit` Bash call | It exits 0 without running `specky` |
 | The provider raises on load | A hook fires | `failed, commit is unaffected` is printed and the commit stands |
 | A human's half-written doc is uncommitted in the docs root | A hook fires and writes docs | The draft is not in the doc-sync commit and still has its uncommitted edits |
 | Unrelated work is staged (`git add src.py`) | A hook fires and commits docs | `src.py` is still staged afterwards |

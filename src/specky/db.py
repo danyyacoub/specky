@@ -15,6 +15,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from specky import paths
+
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS documents (
     path TEXT PRIMARY KEY,
@@ -149,9 +151,7 @@ def repo_root() -> Path:
 
 
 def index_db_path(repo_root: Path) -> Path:
-    db_dir = repo_root / ".specky"
-    db_dir.mkdir(exist_ok=True)
-    return db_dir / "index.db"
+    return paths.state_dir(repo_root) / "index.db"
 
 
 def _migrate(conn: sqlite3.Connection) -> None:

@@ -120,3 +120,13 @@ def test_an_unknown_command_still_gets_argparse_usage(capsys):
         _run(["nope"])
     assert exit_info.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
+
+
+def test_version_flag_prints_the_package_version(capsys):
+    from specky import __version__
+
+    with pytest.raises(SystemExit) as exit_info:
+        _run(["--version"])
+
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"specky {__version__}"

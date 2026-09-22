@@ -19,6 +19,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
+from specky import paths
+
 try:  # POSIX only; specky's hooks are /bin/sh scripts, but the library shouldn't assume it
     import fcntl
 except ImportError:  # pragma: no cover - Windows
@@ -35,7 +37,7 @@ class LockBusy(RuntimeError):
 def exclusive(repo_root: Path) -> Iterator[None]:
     """Hold this repo's write lock, or raise `LockBusy` at once if someone else does.
 
-    The lock file lives in `.specky/`, which is gitignored, and is never deleted: unlinking it
+    The lock file lives in `.specky/`, which ignores itself, and is never deleted: unlinking it
     would let a second process create a *different* file with the same name and take a lock on
     that instead. An empty file is the cheapest correct token.
     """
@@ -43,9 +45,7 @@ def exclusive(repo_root: Path) -> Iterator[None]:
         yield
         return
 
-    lock_dir = repo_root / ".specky"
-    lock_dir.mkdir(exist_ok=True)
-    handle = (lock_dir / LOCK_NAME).open("a+")
+    handle = (paths.state_dir(repo_root) / LOCK_NAME).open("a+")
     try:
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)

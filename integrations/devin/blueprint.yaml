@@ -12,7 +12,6 @@ initialize:
       # run from one), so it goes on PATH rather than into a project .venv.
       command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
       . "$HOME/.local/bin/env" 2>/dev/null || true
-      # Until specky is on PyPI: uv tool install git+https://github.com/danyyacoub/specky
       uv tool install specky
       echo 'export PATH="$HOME/.local/bin:$PATH"' >> $ENVRC
 

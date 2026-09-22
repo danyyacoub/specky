@@ -911,6 +911,7 @@ def append_glossary_rows(repo_root: Path, terms: list[dict]) -> tuple[Path | Non
 
 def stage_pending(repo_root: Path, domain: str, topic: str, content: str) -> Path:
     """Park a refused draft where a human can read it, out of git's reach (see `PENDING_DIR`)."""
+    paths.state_dir(repo_root)  # the parent, so the draft is ignored even where init never ran
     path = repo_root / PENDING_DIR / domain / f"{topic}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)

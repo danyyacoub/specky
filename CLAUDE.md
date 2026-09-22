@@ -39,6 +39,18 @@ file isn't. Full behavior docs are indexed at [specs/MODULES.md](specs/MODULES.m
   ([documentation/auto-commit-docs.md](specs/documentation/auto-commit-docs.md)).
 - `specky pr-comment` prints to stdout, never posts — pipe it to `gh pr comment`.
 - `specky sync --dry-run` calls no provider.
+- The plugin is enabled per user, so its hook and MCP server run in repos that never chose specky.
+  Both stay inert until the repo has `specky.toml`/docs; keep it that way. Anything that creates
+  `.specky/` goes through `paths.state_dir()`, which makes the directory ignore itself.
+
+## Releasing
+
+Two versions, one number: PyPI reads `specky.__version__` (pyproject's version is dynamic), and
+Claude Code only offers plugin users an update when `.claude-plugin/plugin.json` `version` changes.
+Bump both, move `CHANGELOG.md`'s Unreleased notes under a `## [X.Y.Z]` heading, then push a
+`vX.Y.Z` tag. `.github/workflows/release.yml` refuses a tag that doesn't match all three, then
+publishes to PyPI (trusted publishing) and creates the GitHub release. `tests/test_packaging.py`
+catches a mismatch before that.
 
 ## Scripts
 

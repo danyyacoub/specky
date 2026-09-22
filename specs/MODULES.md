@@ -4,7 +4,8 @@ Cross-cutting references: [PRODUCT.md](PRODUCT.md), [GLOSSARY.md](GLOSSARY.md).
 
 The engine's own behavior is documented per feature, in the sections below — Documentation,
 Cli, Ai, Docs, Chat, Search, Rendering, Integration — rather than per module in `src/specky/`. The
-plugin's skills are documented in place: `document-domain` in
+plugin's skills are documented in place: `setup` (opt a repo in: provider, git hooks, first index)
+in [skills/setup/SKILL.md](../skills/setup/SKILL.md), `document-domain` in
 [skills/document-domain/SKILL.md](../skills/document-domain/SKILL.md), `explore-docs` (answer
 behaviour questions from the docs before reading code) in
 [skills/explore-docs/SKILL.md](../skills/explore-docs/SKILL.md), and `launch-viewer` (build and open
@@ -82,7 +83,7 @@ command that calls a model goes through this layer.
 
 | Doc | Purpose |
 |---|---|
-| [integration/marketplace-installation.md](integration/marketplace-installation.md) | Enable specky checkout installation via Claude Code plugin marketplace |
+| [integration/marketplace-installation.md](integration/marketplace-installation.md) | Install specky from its GitHub marketplace and PyPI, then opt a repo in with `/specky:setup` |
 
 ## Catalog
 

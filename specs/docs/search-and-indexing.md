@@ -39,6 +39,7 @@ flowchart TD
 | Scenario | Result |
 |----------|--------|
 | After running `specky index` | `.specky/index.db` created; terminal shows count of indexed docs and commits |
+| `.specky/` is created in a repo whose `.gitignore` doesn't mention it | `git status` stays clean: the directory carries its own `.gitignore` of `*`, written by whatever creates it first (the index, the run lock, a deferred-docs ledger, a parked draft) |
 | After `specky search "term"` | Matching docs listed with title and matching text snippet |
 | Search term has no matches | "no matches" message appears |
 | After running `specky render-html` | Complete website written to `.specky/site/` |
@@ -56,6 +57,8 @@ flowchart TD
 |-------|------|------|
 | A process holding an open read query on the index | Another process writes a new row and commits | Both succeed; the reader sees its original snapshot until its query ends, then the new row |
 | Project with specs/ directory and git history | `specky index` is run | Index file created; success message shows doc and commit counts |
+| A repo with no `.gitignore` | `specky index` is run | `.specky/index.db` exists and `git status --porcelain` is empty |
+| `.specky/.gitignore` already exists with other content | Anything creates `.specky/` state | The existing file is left as it was |
 | Index file exists | User runs `specky search "refund"` | Terminal lists matching documents with titles and snippets |
 | Index file exists | User runs `specky search "xyzabc123"` (nonexistent term) | "no matches" message; command exits cleanly |
 | Index file exists | `specky render-html` is run | Website files appear in `.specky/site/`; main page is `index.html` |

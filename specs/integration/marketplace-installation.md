@@ -7,49 +7,80 @@ tags: [configuration, adoption]
 
 ## What It Does
 
-Makes specky installable into Claude Code using the standard plugin installation command. Without the marketplace manifest, the documented installation workflow failed with "Marketplace file not found." The manifest is a single-plugin marketplace that points to the checkout directory, enabling the install flow to work as documented.
+Gets specky from its public GitHub repo into Claude Code, and then into one repo. The repo is its
+own single-plugin marketplace (`.claude-plugin/marketplace.json`, `source: "./"`), so there is no
+separate registry to publish to. The plugin brings the MCP server, the skills and a commit hook.
+The CLI that the git hooks call is a separate install from PyPI.
+
+Installing the plugin doesn't opt any repo in. The plugin is enabled for every repo the user opens,
+so everything it runs checks first that the repo chose specky: the commit hook waits for a
+`specky.toml`, and the MCP server waits for docs. A repo opts in through the `setup` skill, which
+runs `specky init`.
 
 ## How It Works
 
-1. **User runs the install command** — From a specky checkout, `claude plugin marketplace add /path/to/specky` tells Claude Code to register specky as an available plugin.
-
-2. **Claude Code locates the manifest** — It reads `.claude-plugin/marketplace.json` from the provided path.
-
-3. **Manifest describes the plugin** — The file declares specky as a documentation plugin, with a source path pointing to the checkout root (`./`).
-
-4. **Installation completes** — Claude Code resolves the plugin definition and installs specky into the user's Claude Code environment.
+1. **Install the CLI** — `uv tool install specky` puts `specky` and `specky-mcp` on PATH. The git
+   hooks record the absolute path of this binary, which is why it has to be a global install and
+   not the plugin's own copy: that copy lives under a versioned cache directory that moves on every
+   plugin update.
+2. **Add the marketplace** — `claude plugin marketplace add danyyacoub/specky`. Claude Code reads
+   `.claude-plugin/marketplace.json` from the repo and lists the one plugin in it.
+3. **Install the plugin** — `claude plugin install specky@specky`. Claude Code copies the repo into
+   `~/.claude/plugins/cache/specky/specky/<version>/` and loads `skills/`, `hooks/hooks.json` and
+   `.mcp.json` from that copy.
+4. **Start the MCP server** — On session start, `uv run --project ${CLAUDE_PLUGIN_ROOT} specky-mcp`
+   builds an environment for the cached copy (on first use, from `uv.lock`) and serves over stdio,
+   in the session's working directory. Its connect-time instructions depend on whether that repo
+   has docs (see [chat/mcp-host-guidance.md](../chat/mcp-host-guidance.md)).
+5. **Opt a repo in** — `/specky:setup` checks the CLI is there, runs `specky init` for the chosen
+   provider (which writes and gitignores `specky.toml`), installs the git hooks with the user's
+   go-ahead, and runs `specky index`.
+6. **Update** — Claude Code offers an update only when `.claude-plugin/plugin.json` changes its
+   `version`, so a release bumps it together with `specky.__version__`. The release workflow
+   refuses a tag where the two disagree. The CLI updates separately, with `uv tool upgrade specky`.
 
 ```mermaid
 flowchart TD
-    A[claude plugin marketplace add path] --> B{.claude-plugin/marketplace.json there?}
-    B -->|No| C[Marketplace file not found]
-    B -->|Yes| D[Read the plugin definition]
-    D --> E{Definition valid?}
-    E -->|No| F[Rejected at validate time]
-    E -->|Yes| G[specky installed from the checkout]
+    A[uv tool install specky] --> B[claude plugin marketplace add danyyacoub/specky]
+    B --> C{marketplace.json valid?}
+    C -->|No| D[Add fails with the validation error]
+    C -->|Yes| E[claude plugin install specky@specky]
+    E --> F[Repo copied into the versioned plugin cache]
+    F --> G[Skills, hook and MCP server load in every repo]
+    G --> H{Repo has specky.toml / docs?}
+    H -->|No| I[Hook exits at once; MCP tells the model to leave its tools alone]
+    H -->|Yes| J[Commits documented; MCP answers from the docs]
+    I --> K[/specky:setup runs init, hooks, index]
+    K --> J
 ```
 
 ## Outcomes
 
 | Scenario | Outcome |
 |----------|---------|
-| Manifest present and valid | Installation succeeds; specky available as a Claude Code plugin |
-| Manifest missing | `claude plugin marketplace add` fails with "Marketplace file not found" |
-| Plugin definition invalid | `claude plugin validate` catches it during initial setup |
+| Marketplace added and plugin installed | The skills are listed as `/specky:setup`, `/specky:document-domain`, `/specky:explore-docs`, `/specky:launch-viewer`, and the `specky` MCP server connects |
+| A repo that never ran `specky init` | Nothing happens in it: no commit docs, no `.specky/`, no output after commits |
+| `/specky:setup` finished | `specky.toml` exists and is gitignored, the three git hooks are installed, and the index is built |
+| A new version released | Plugin users are offered it once `plugin.json`'s `version` changes; CLI users get it with `uv tool upgrade specky` |
 
 ## Edge Cases
 
 | Situation | What happens | Why |
 |---|---|---|
-| The path has no `.claude-plugin/marketplace.json` | The add fails with "Marketplace file not found" | The manifest is what makes a directory a marketplace; without it there is nothing to describe the plugin, and this was the failure the manifest was added to fix |
-| The plugin definition is malformed | `claude plugin validate` rejects it during setup rather than at install time | A manifest that parses but describes nothing installable would fail later, further from the mistake |
-| specky is already installed | The add is idempotent or says so | Re-running an install command is the ordinary response to an unclear first run |
-| The checkout is moved after installing | The plugin stops resolving | `source` points at the checkout directory (`./`), so the install is a reference to a path on this machine, not a copy of it |
+| The CLI isn't installed, only the plugin | The MCP server and skills still work through the plugin's own copy; the setup skill offers `uv tool install specky` before installing hooks | Git hooks run outside Claude Code and need a binary at a path that survives plugin updates |
+| `uv` isn't installed | The MCP server fails to start, and the setup skill stops and points at uv's install page | The plugin runs its Python package through uv; it doesn't install uv itself |
+| The first session after an install or update | The MCP server starts once uv has built the cached copy's environment; later sessions reuse it | The environment lives in the versioned cache directory, so each new version builds its own |
+| The marketplace is added from a local checkout (`claude plugin marketplace add /path/to/specky`) | The plugin loads in place from the checkout instead of being copied | A local-directory marketplace is how specky itself is developed: edits apply without reinstalling |
+| The plugin definition is malformed | `claude plugin validate .` rejects it; `tests/test_packaging.py` also checks the versions agree, the skills have frontmatter, and the hook scripts are executable | A manifest that parses but describes nothing installable fails far from the mistake |
+| specky is already installed | Re-adding the marketplace or reinstalling is idempotent or says so | Re-running an install command is the ordinary response to an unclear first run |
 
 ## Acceptance Tests
 
 | Given | When | Then |
 |-------|------|------|
-| A specky checkout with `.claude-plugin/marketplace.json` present | User runs `claude plugin marketplace add /path/to/specky` | Installation completes without error |
-| The marketplace.json references `source: "./"` | Claude Code resolves the plugin | specky loads from the checkout directory |
-| User has already installed specky once | User runs the marketplace add command again | The operation is idempotent or reports that specky is already installed |
+| The public repo | `claude plugin marketplace add danyyacoub/specky` then `claude plugin install specky@specky` | Installation completes, and `/specky:setup` is listed |
+| `.claude-plugin/plugin.json` and `specky.__version__` | `tests/test_packaging.py` runs | They are equal, and `CHANGELOG.md` has a section for that version |
+| `marketplace.json` | `tests/test_packaging.py` runs | It lists exactly one plugin, named as in `plugin.json`, with `source: "./"` and no second copy of the version |
+| A `v*` tag whose version differs from `plugin.json` | The release workflow runs | It fails before building, naming the mismatch |
+| The plugin installed and a repo with no `specky.toml` | Claude runs `git commit` there | Nothing is documented and no `.specky/` appears |
+| A repo with no docs | The MCP server starts there | Its instructions tell the model to leave specky's tools alone and name `/specky:setup` |

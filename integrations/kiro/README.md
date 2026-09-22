@@ -16,7 +16,9 @@ Add to `.kiro/settings/mcp.json` in the repo you want documented (or
       "command": "specky-mcp",
       "args": [],
       "disabled": false,
-      "autoApprove": ["ping", "list_features", "list_workflows", "list_tags", "get_graph"]
+      "autoApprove": [
+        "ping", "list_domains", "list_features", "list_workflows", "list_tags", "get_graph"
+      ]
     }
   }
 }
@@ -26,9 +28,14 @@ Add to `.kiro/settings/mcp.json` in the repo you want documented (or
 Claude Code's [.mcp.json](../../.mcp.json) points at. It speaks stdio and answers from
 `.specky/index.db`, so run `specky index` at least once first.
 
-Tools exposed: `ping`, `list_features`, `list_workflows`, `list_tags`, `get_graph`,
-`commit_info`, `commits_for_doc`. All read-only, which is why auto-approving them is safe;
-`commit_info`/`commits_for_doc` take an argument, so they're left off that list.
+Tools exposed, all read-only: `list_domains`, `search_docs`, `read_doc`, `doc_behaviours`,
+`search_history` (the docs and their history); `list_features`, `list_workflows`, `list_tags`,
+`get_graph`, `commit_info`, `commits_for_doc` (the feature/workflow catalog);
+`render_acceptance_table` (pure formatting) and `ping`. The authoritative list is
+[`mcp_server.py`](../../src/specky/mcp_server.py).
+
+Being read-only is why auto-approving them is safe. The `autoApprove` list above covers only the
+ones that take no argument; add the rest if you'd rather not be asked.
 
 ## Skill
 
@@ -37,6 +44,8 @@ shared skills in. `explore-docs` answers behaviour questions from the docs befor
 
 ```bash
 for s in document-domain explore-docs; do
-  mkdir -p .kiro/skills/$s && cp /path/to/specky/skills/$s/SKILL.md .kiro/skills/$s/
+  mkdir -p .kiro/skills/$s
+  curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
+    -o ".kiro/skills/$s/SKILL.md"
 done
 ```

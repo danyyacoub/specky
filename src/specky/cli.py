@@ -20,8 +20,10 @@ import argparse
 import sys
 from pathlib import Path
 
-# The one module-level specky import, for `--docs-root`'s help text: `paths` imports nothing from
-# specky and nothing outside the stdlib, and `specs` is never spelled out anywhere but there.
+# The only module-level specky imports, both free: `__version__` for `--version`, and `paths` for
+# `--docs-root`'s help text. Neither imports anything outside the stdlib, and `specs` is never
+# spelled out anywhere but `paths`.
+from specky import __version__
 from specky.paths import DEFAULT_DOCS_ROOT
 
 
@@ -310,6 +312,9 @@ def _commit_info(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="specky")
+    # The first thing a bug report needs, and the only way to tell which of two installs (the
+    # global tool, the plugin's own copy) a hook or an agent actually ran.
+    parser.add_argument("--version", action="version", version=f"specky {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def command(name: str, help_text: str, func) -> argparse.ArgumentParser:

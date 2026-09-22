@@ -8,26 +8,74 @@ First-class Claude Code plugin. Also works with [opencode](integrations/opencode
 [Kiro](integrations/kiro/README.md), and [Devin](integrations/devin/README.md) via a shared
 `SKILL.md` + MCP config — see [integrations/](integrations/).
 
+## Quick start (Claude Code)
+
+```bash
+uv tool install specky                            # the CLI the git hooks call
+claude plugin marketplace add danyyacoub/specky   # this repo is its own marketplace
+claude plugin install specky@specky
+```
+
+Then, inside the repo you want documented, run `/specky:setup`. It picks an AI provider (an
+Anthropic key, any OpenAI-compatible endpoint, or `claude -p` on your Claude subscription with no
+key), installs the git hooks, and builds the first index.
+
+The plugin is enabled for every repo you open, but it does nothing in a repo until `specky init` has
+written a `specky.toml` there. Until then its commit hook exits at once and its MCP server tells the
+model to leave its tools alone.
+
 ## Install
 
-```bash
-uv tool install --editable /path/to/specky   # once published: uv tool install specky
-```
-
-Requires Python 3.11+ and [`uv`](https://docs.astral.sh/uv/). Node is optional, only for rendering
-`mermaid` diagrams. Install globally, not into a project `.venv` — the git hooks shell out to the
-absolute path of the `specky` binary that installed them.
-
-As a Claude Code plugin:
+Requires git, Python 3.11+ and [`uv`](https://docs.astral.sh/uv/). Runs on macOS and Linux. On
+Windows, use WSL (untested natively: the hooks are `/bin/sh` scripts). Node is optional, only for
+rendering `mermaid` diagrams (`specky setup-diagrams`).
 
 ```bash
-claude plugin marketplace add /path/to/specky
-claude plugin install specky
+uv tool install specky
 ```
+
+Install globally, not into a project `.venv`: the git hooks call the absolute path of the `specky`
+binary that installed them.
+
+The Claude Code plugin (MCP server, skills, commit hook) is separate from the CLI and installs as
+shown in the quick start. It runs its MCP server from its own copy of the package, through `uv`.
+
+The plugin's skills are namespaced: `/specky:setup`, `/specky:document-domain`,
+`/specky:explore-docs`, `/specky:launch-viewer`.
 
 Other agents: wire up the MCP server + `document-domain` skill by hand (config file each) — see
 [opencode](integrations/opencode/README.md), [Kiro](integrations/kiro/README.md),
 [Devin](integrations/devin/README.md). Everything below is plain CLI, identical everywhere.
+
+### What leaves your machine
+
+specky sends code and history only to the provider you configure in `specky.toml`, and only from
+these commands:
+
+- **The git hooks and `specky sync`**: each commit's message and diff (first 8,000 characters),
+  the list of existing docs, and the text of any doc the commit updates.
+- **`specky document`**: the files the model chooses to read, from `git ls-files` minus the docs
+  tree, vendored paths and `[check] ignore`.
+- **`specky tag`**: the docs it classifies.
+- **The Spec Assistant in `specky serve`**: the conversation and the docs it retrieves to answer.
+- **`specky init`**: one test prompt with no repo content (skip it with `--no-validate`).
+
+`index`, `search`, `check`, `render-html`, `export`, `pr-comment`, `tests` and `doctor` make no
+provider calls. specky never stores an API key: `specky.toml` holds only the *name* of the env var
+the key is in.
+
+### Updating and uninstalling
+
+```bash
+uv tool upgrade specky
+claude plugin update specky@specky
+```
+
+To stop documenting commits in one repo, delete the `post-commit`, `post-merge` and
+`post-rewrite` hooks that contain `specky commit-doc` (in `.git/hooks/`, or wherever
+`core.hooksPath` points). To pause them without uninstalling, set `SPECKY_DISABLE_HOOK=1`.
+`.specky/` holds only derived state and can be deleted. Then `claude plugin uninstall specky@specky`
+and `uv tool uninstall specky`.
 
 ## Configure
 
@@ -37,7 +85,8 @@ specky install-git-hook   # post-commit/post-merge/post-rewrite hooks, every fut
 ```
 
 `init` supports Anthropic, any OpenAI-compatible endpoint, or an arbitrary local command (e.g.
-`claude -p`). Non-interactive:
+`claude -p`). It adds `specky.toml` to `.gitignore`, and `.specky/` (index, site, locks) ignores
+itself. Non-interactive:
 
 ```bash
 specky init --yes                          # defaults, no prompts
@@ -109,8 +158,9 @@ depend on nothing but their own input are batched — classification stays seria
 order, because it's fed the running list of docs and answering a whole backlog against one frozen
 snapshot is how a run ends up with three docs about one subject.
 
-For a whole domain at once with an agent that can actually read the tree: `/document-domain billing`
-runs the bundled [`document-domain`](skills/document-domain/SKILL.md) skill.
+For a whole domain at once with an agent that can actually read the tree:
+`/specky:document-domain billing` runs the bundled
+[`document-domain`](skills/document-domain/SKILL.md) skill.
 
 Agents also get the docs as a first stop for questions. The MCP server tells the host's model to
 check specky before reading code when someone asks what a feature does, how a flow works or why it
@@ -118,7 +168,7 @@ changed, and the bundled [`explore-docs`](skills/explore-docs/SKILL.md) skill sp
 search, read, the doc's behaviour ids, its history, and a check against the doc's `sources` when the
 answer will drive a code change.
 
-To browse the docs from Claude Code, `/launch-viewer` runs the bundled
+To browse the docs from Claude Code, `/specky:launch-viewer` runs the bundled
 [`launch-viewer`](skills/launch-viewer/SKILL.md) skill: `index`, `render-html`, then `serve`. In the
 desktop app the viewer opens in the browser pane, via a `specky-serve` entry the skill adds to
 `.claude/launch.json`. In a terminal it runs `specky serve` in the background and opens your
@@ -218,7 +268,7 @@ Static files are never token-gated (a page can't add headers to its own `<link>`
   doc generation from real git hooks. `pending_commits()` is the source of truth for what's
   undocumented; hook fire, `sync`, `doctor`, and the CI job are all passes over it.
 - [`paths.py`](src/specky/paths.py) — only place `specs` is spelled out; never hardcode the docs root.
-- [`lock.py`](src/specky/lock.py) — non-blocking `flock` on `.specky/hook.lock`; a busy lock exits 0.
+- [`lock.py`](src/specky/lock.py) — non-blocking `flock` on `.specky/run.lock`; a busy lock exits 0.
 - [`db.py`](src/specky/db.py) — single SQLite schema. All FTS5 `MATCH` queries go through
   `db.fts_match_query()` ([fts5-syntax-safety.md](specs/search/fts5-syntax-safety.md)).
 - [`ai_provider.py`](src/specky/ai_provider.py) — single-method `Provider` protocol; `load_provider_from_toml()` is the only construction path.
@@ -241,6 +291,15 @@ Full docs, generated by running specky on this repo: [specs/MODULES.md](specs/MO
 
 ## Development
 
+From a checkout, install the CLI in editable mode and add the checkout as a local marketplace. A
+local-directory marketplace loads the plugin in place, so edits apply without reinstalling:
+
+```bash
+uv tool install --editable .
+claude plugin marketplace add "$PWD"
+claude plugin install specky@specky
+```
+
 ```bash
 scripts/test.sh                 # pytest suite, throwaway git repos in tmpdirs
 scripts/doctor.sh               # wraps `specky doctor`
@@ -250,4 +309,4 @@ scripts/mcp-inspector.sh        # MCP Inspector against src/specky/mcp_server.py
 uv run specky-mcp               # MCP server over stdio
 ```
 
-More in [CLAUDE.md](CLAUDE.md).
+More in [CLAUDE.md](CLAUDE.md). Releases: [CHANGELOG.md](CHANGELOG.md).

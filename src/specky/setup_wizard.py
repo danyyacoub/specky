@@ -10,6 +10,7 @@ CI job priming a cache) needs the answers to arrive as flags.
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -229,6 +230,39 @@ def run_init(
     return _finish_init(config_path, config, docs_root, options.validate, print_fn)
 
 
+def _ensure_ignored(config_path: Path, print_fn: Callable[[str], None]) -> None:
+    """Add specky.toml to the repo's `.gitignore` unless git already ignores it.
+
+    specky.toml is per-machine — which provider, which env var holds the key — and everything
+    downstream assumes it stays out of commits: CI writes its own, and the docs root CI must see
+    goes in pyproject.toml instead. A repo adopting specky has no rule for it yet, so without this
+    the first `git add -A` after `init` commits one developer's provider choice for everyone.
+
+    Left alone: a file that's already tracked (someone decided to commit it, and a `.gitignore`
+    entry wouldn't untrack it anyway), and a directory git can't answer for (not a repo, no git).
+    """
+    repo_root, name = config_path.parent, config_path.name
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", name], cwd=repo_root, capture_output=True
+        )
+        if tracked.returncode == 0:
+            return
+        # 0 = ignored already, 1 = not ignored, 128 = not a git repo.
+        ignored = subprocess.run(
+            ["git", "check-ignore", "-q", name], cwd=repo_root, capture_output=True
+        )
+    except OSError:
+        return
+    if ignored.returncode != 1:
+        return
+    gitignore = repo_root / ".gitignore"
+    existing = gitignore.read_text() if gitignore.exists() else ""
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    gitignore.write_text(f"{existing}{separator}{name}\n")
+    print_fn(f"Added {name} to .gitignore — it's per-machine config, not something to commit")
+
+
 def _finish_init(
     config_path: Path,
     config: dict,
@@ -245,6 +279,7 @@ def _finish_init(
 
     config_path.write_text(_render_toml(config, docs_root))
     print_fn(f"Wrote {config_path}")
+    _ensure_ignored(config_path, print_fn)
     if docs_root:
         # specky.toml is gitignored, so CI reads the committed copy or falls back to `specs` — and
         # a `specky check` pointed at the wrong tree finds no docs and reports no coverage.

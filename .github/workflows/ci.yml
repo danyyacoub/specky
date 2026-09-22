@@ -7,11 +7,17 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.13"]
+        # The hooks are /bin/sh and the run lock is flock, so macOS is the other platform specky
+        # claims. One entry is enough to catch a BSD-vs-GNU tool difference.
+        include:
+          - os: macos-latest
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@v4
         with:

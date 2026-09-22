@@ -28,11 +28,12 @@ firing doesn't recurse.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Sequence
@@ -184,9 +185,32 @@ def _commit_info(rev: str = "HEAD", with_diff: bool = True) -> Commit:
     return Commit(sha=sha, author=author, date=date, message=message.strip(), diff=diff)
 
 
+# What a commit did to the product, as the micro-doc reports it. `internal` is everything a user
+# can't observe — the home page's activity brief folds those away, so a product owner reading it
+# sees behaviour first.
+IMPACTS = ("feature", "improvement", "fix", "internal")
+
 # The micro-doc instruction, identical for every commit, so it rides as the cacheable prefix.
+#
+# Structured rather than one paragraph because three readers take different parts of it: the
+# activity brief lists headlines and folds `internal` away, the Spec Assistant retrieves the
+# what/why prose when asked why something changed, and a feature page lists the commits that
+# `features:` ties to it. `why` may be empty on purpose — a motivation the commit doesn't state is
+# one the model would have to invent.
 MICRO_DOC_PREFIX = (
-    "Summarize what changed and why, in one short paragraph, for a commit history reader."
+    "You write the history entry for one git commit. Two readers use it: a product owner scanning "
+    "what changed recently, and an assistant answering what the product does and why it changed.\n\n"
+    "Reply with only a JSON object:\n"
+    '{"headline": "...", "impact": "...", "what_changed": "...", "why": "..."}\n\n'
+    "- headline: at most 80 characters, present tense, what the product now does differently, in "
+    "its users' terms. No file, function or class names.\n"
+    "- impact: exactly one of feature (a new capability), improvement (existing behaviour "
+    "changed), fix (wrong behaviour corrected), internal (no behaviour a user can observe: "
+    "refactoring, tests, tooling, build, dependencies, documentation).\n"
+    "- what_changed: 1-3 sentences on behaviour before and after. Name the commands, flags, "
+    "settings and screens a user would recognise; leave implementation detail out.\n"
+    "- why: 1-2 sentences on the motivation, as the commit message or diff states it. An empty "
+    "string when neither says."
 )
 
 
@@ -200,8 +224,48 @@ def micro_doc_prompt(commit: Commit) -> tuple[str, str]:
 
 
 def generate_micro_doc(commit: Commit, provider: Provider) -> str:
+    """The model's reply, unparsed: every path that fetches one (serial, prefetched, batched)
+    hands the same text to `parse_micro_doc`, so the parse lives in one place."""
     prefix, prompt = micro_doc_prompt(commit)
     return provider.generate(prompt, prefix=prefix, task="summary").strip()
+
+
+@dataclass
+class MicroDoc:
+    """What a history doc says about its commit.
+
+    An empty `headline` is the legacy shape — one paragraph under `# Commit <sha8>`, all of it in
+    `what` — and is what `specky sync --refresh-history` looks for. A reply that isn't the JSON
+    asked for lands in that shape too, rather than having a headline guessed for it: the doc stays
+    readable, and a refresh will pick it up again.
+    """
+
+    headline: str = ""
+    impact: str = ""
+    what: str = ""
+    why: str = ""
+    features: list[str] = field(default_factory=list)
+
+    def text(self) -> str:
+        """The prose, as one searchable block — what the index and the Spec Assistant read."""
+        return "\n\n".join(part for part in (self.headline, self.what, self.why) if part)
+
+
+def parse_micro_doc(reply: str) -> MicroDoc:
+    from specky.generator import leading_json_object, strip_code_fence  # generator imports us
+
+    answer = leading_json_object(strip_code_fence(reply))
+    if answer is None:
+        return MicroDoc(what=reply.strip())
+    impact = str(answer.get("impact", "")).strip().lower()
+    return MicroDoc(
+        # One line, whatever came back: it becomes the doc's H1, and a newline in it would end the
+        # heading and leave the rest as an orphaned paragraph.
+        headline=" ".join(str(answer.get("headline", "")).split()),
+        impact=impact if impact in IMPACTS else "",
+        what=str(answer.get("what_changed", "")).strip(),
+        why=str(answer.get("why", "")).strip(),
+    )
 
 
 def _recorded_sha(path: Path) -> str | None:
@@ -604,7 +668,7 @@ def _write_deferred(repo_root: Path, targets: Mapping[str, bool]) -> None:
     if not targets:
         ledger.unlink(missing_ok=True)
         return
-    ledger.parent.mkdir(exist_ok=True)
+    paths.state_dir(repo_root)
     ledger.write_text("".join(f"{'-' if gone else ''}{rel}\n" for rel, gone in targets.items()))
 
 

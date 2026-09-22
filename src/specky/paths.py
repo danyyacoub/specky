@@ -129,3 +129,23 @@ def glossary(repo_root: Path) -> Path:
     """`<repo>/specs/GLOSSARY.md` — the shared vocabulary, parsed back by the viewer for term
     auto-linking (`html_render.load_glossary`)."""
     return docs_root(repo_root) / "GLOSSARY.md"
+
+
+STATE_DIR_NAME = ".specky"
+
+
+def state_dir(repo_root: Path) -> Path:
+    """`<repo>/.specky`, created if missing — the index, the rendered site, locks and ledgers.
+
+    Everything in it is derived or per-checkout, so it must never reach a commit. It ignores itself
+    (a `.gitignore` of `*`, as `.pytest_cache` and `.ruff_cache` do) rather than relying on the
+    repo's `.gitignore`: the first thing to create it can be an MCP query or `specky index` in a
+    repo nobody has run `specky init` in, and an untracked `.specky/` appearing in `git status` there
+    is specky leaving litter in someone else's tree.
+    """
+    path = repo_root / STATE_DIR_NAME
+    path.mkdir(exist_ok=True)
+    ignore = path / ".gitignore"
+    if not ignore.exists():
+        ignore.write_text("# Created by specky; everything here is derived or per-checkout.\n*\n")
+    return path
