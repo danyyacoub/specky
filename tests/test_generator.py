@@ -765,7 +765,13 @@ def test_both_diagrams_in_one_doc_are_repaired():
     assert len(repairs) == 2
 
 
-def test_an_empty_diagram_is_reported():
+def test_an_empty_diagram_is_reported(monkeypatch):
+    """The renderer is never called for an empty block, but the check only runs where it is
+    installed — which CI isn't."""
+    import specky.mermaid_tool as mermaid_tool
+
+    monkeypatch.setattr(mermaid_tool, "tool_dir", lambda: pathlib.Path("/tmp"))
+
     assert generator.unrenderable_mermaid("```mermaid\n\n```") == ["diagram 1 is empty"]
 
 
