@@ -549,6 +549,18 @@ def test_the_mention_picker_is_keyboard_driven_and_builds_no_markup(site):
     assert "selectMention(mentionHits[mentionActive]);" in mention_js
 
 
+def test_glass_popovers_blur_the_page_not_just_the_container_they_hang_from(site):
+    """An element with backdrop-filter is the backdrop root for everything inside it, so a glass
+    popover nested in a glass container — the search results in the titlebar, the @ picker in the
+    panel — blurs only that container's layer and shows the page through it, sharp. The containers
+    keep their glass on ::before, which isn't anyone's ancestor."""
+    css = re.sub(r"/\*.*?\*/", "", (site / "assets" / "site.css").read_text(), flags=re.DOTALL)
+    rules = dict(re.findall(r"^([^\s{}@][^{}]*?)\s*\{([^{}]*)\}", css, re.MULTILINE))
+    for container in (".titlebar", ".assistant-panel"):
+        assert "backdrop-filter" not in rules[container]
+        assert "backdrop-filter" in rules[f"{container}::before"]
+
+
 def test_opening_the_assistant_collapses_the_nav_rail(site):
     page = (site / "index.html").read_text()
     css = (site / "assets" / "site.css").read_text()

@@ -79,7 +79,7 @@ EXISTING_DOCS_CLIP = 8_000
 
 
 # Everything identical across every `specky document` run in one repo, so it travels as the cached
-# prefix. `CLAUDE.md` is blunt about the cost of getting this wrong: a prefix gets cached only if it
+# prefix. `AGENTS.md` is blunt about the cost of getting this wrong: a prefix gets cached only if it
 # is byte-identical across calls, and anything per-call leaking in makes every call a cache miss.
 # That matters more here than anywhere else in specky — a tool conversation resends its prefix on
 # every turn, so on a twelve-turn run this block is read thirteen times and paid for once.

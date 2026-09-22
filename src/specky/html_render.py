@@ -359,12 +359,19 @@ a { color: inherit; }
    blurring scrolled content behind it, not just tinting flat background — per the "blur on
    the floating layer, never in content" rule the rest of the chrome follows too. Diagrams are
    the one deliberate exception, and they only imitate glass (a translucent sheen, no blur —
-   see diagram_render.py). Falls back to a plain solid bar on engines without backdrop-filter. */
+   see diagram_render.py). Falls back to a plain solid bar on engines without backdrop-filter.
+   The glass sits on ::before, not on the bar: an element with backdrop-filter is the backdrop
+   root for everything inside it, so #search-results — which hangs out of the bar over the page —
+   would blur only the bar's own layer and show the page through it, sharp. */
 .titlebar {
   position: fixed; top: 0; left: 0; right: 0; z-index: 30;
   display: flex; align-items: center; gap: 20px; height: 52px; padding: 0 18px;
+  border-bottom: 1px solid var(--chrome-border);
+}
+.titlebar::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
   background: var(--chrome-bg); backdrop-filter: blur(20px) saturate(160%);
-  -webkit-backdrop-filter: blur(20px) saturate(160%); border-bottom: 1px solid var(--chrome-border);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
 }
 .titlebar .brand {
   display: flex; align-items: center; gap: 8px; font-family: var(--font-display);
@@ -689,9 +696,15 @@ body.nav-collapsed .sidebar { display: none; }
   /* A width dragged wide still leaves the doc column 360px to be read in — after the window shrinks,
      or the reader brings back the rail. */
   max-width: calc(100vw - 360px - var(--rail-width));
-  background: var(--glass-bg); backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%); border-left: 1px solid var(--glass-border);
+  border-left: 1px solid var(--glass-border);
   display: none;
+}
+/* Glass on ::before, as on .titlebar: on the panel itself it would make the panel the backdrop
+   root, and the @ picker and thinking pill floating over the log would show it through sharp. */
+.assistant-panel::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background: var(--glass-bg); backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
 }
 body.assistant-open .assistant-panel { display: block; }
 body.assistant-open .chat-toggle { display: none; }

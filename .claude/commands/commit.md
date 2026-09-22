@@ -1,99 +1,97 @@
-# Smart Commit
-Review staged/unstaged changes, run targeted review subagents, then generate a conventional commit.
+---
+description: Commit this repo's changes — run the gates, sanity-check the diff, write a Conventional Commit message, and push when asked.
+argument-hint: [optional hint about the change, or "push" / "merge to main"]
+---
 
-## Steps
+# Commit
 
-### 1. Gather the changes
-1. Run `git diff --cached` to see staged changes. If nothing is staged, run `git diff` to see unstaged changes and report what would need to be staged.
-2. Run `git diff --cached --name-only` (or `git diff --name-only` if nothing staged) to list changed files. This file list drives which subagents run in step 3.
-3. Read the full diff for each changed file before delegating, so you can give the subagents accurate context.
+`$ARGUMENTS`
 
-### 2. Inline quick checks
-Scan the diff yourself for the cheap, high-signal issues (newly-introduced lines only):
+Stage and commit the current work. Run every gate **before** writing the message, so the message
+describes something that actually works.
 
-   ### Leftover Debug Code
-   - `console.log`, `console.debug`, `print()`, `debugger`, `binding.pry`, `pdb.set_trace`, `breakpoint()`
-   - Commented-out code blocks (more than 2 consecutive commented lines that look like code, not documentation)
+## 1. Gather
 
-   ### TODO / FIXME / HACK Comments
-   - Any `TODO`, `FIXME`, `HACK`, `XXX`, or `TEMP` comments introduced in the diff (new lines only, ignore removed or pre-existing ones)
+Run in parallel:
 
-   ### Secrets & Obvious Risk
-   - Hardcoded secrets, tokens, credentials, connection strings
-   - Obvious injection risk (raw SQL string interpolation, `eval`, command injection)
+```bash
+git status --short
+git diff --stat
+git diff --staged
+git log --oneline -8     # match the message style and the scope names already in use
+```
 
-### 3. Targeted review subagents
-Spawn the applicable subagents **in parallel** (independent calls in a single message) so the review is fast. Pass each one: the list of changed files, the full diff, and an instruction to review **only newly-introduced code** in the diff (never pre-existing code). Each subagent is **read-only** — it reports findings, it does not edit or commit.
+Read the full diff for each changed file before deciding anything. If nothing changed, say so and
+stop — do not create an empty commit.
 
-Apply a **confidence filter** to every subagent: report only issues the agent is genuinely confident matter. Prefer a short list of real problems over an exhaustive list of nitpicks. No issues found is a valid, expected result.
+## 2. Gates
 
-**a. Performance subagent — CONDITIONAL.**
-Run **only if** the changed files touch the data layer, i.e. any of:
-   - a file matching `*_repository.py`
-   - a diff that adds/modifies SQLAlchemy query code (`select(`, `session.execute`, `.join(`, `selectinload`, `joinedload`, `.options(`, relationship access, `func.`, `text(`)
-   - a new or changed Alembic migration in `migrations/versions/`
+| Change touches | Run |
+|---|---|
+| Anything under `src/`, `hooks/`, or `tests/` | `scripts/test.sh` — tmpdir-based, the faster failure |
+| The engine CLI surface (`cli.py`, `indexer.py`, `db.py`, `html_render.py`, `generator.py`, `commit_doc.py`) | `scripts/smoke-test.sh` as well — it exercises the real CLI against this repo's own `specs/` tree, the one thing unit tests can't |
+| Code that a `specs/<domain>/<topic>.md` describes | `uv run specky index && uv run specky check --base origin/main` — offline, and this is exactly what CI's `docs` job runs |
+| Only docs, comments, or config | Skip the suite; say why |
 
-   Use subagent_type `general-purpose`. Ask it to check for:
-   - N+1 query patterns (querying inside a loop, lazy relationship access in a loop)
-   - Missing eager loading (`selectinload`/`joinedload`) where relationships are accessed
-   - Queries selecting full ORM objects when only a scalar/column is needed
-   - Missing or unused indexes for new filter/join/order-by columns (cross-check `api/models/db_models.py` and migrations)
-   - Unbounded queries (no pagination/limit on potentially large result sets)
-   - `flush()`/`commit()` placement that breaks the repo convention (repositories `flush()`, services own `commit()` — see `.claude/rules/backend.md`)
-   - Work done in Python that the DB should do (aggregation, filtering, sorting)
+`scripts/test.sh` passes extra arguments straight to pytest, so a scoped run is fine while iterating
+(`scripts/test.sh tests/test_check.py -q`). A pre-commit hook that auto-fixes files and reports
+"files were modified by this hook" is expected, not a failure: re-stage and re-run the same commit
+once.
 
-**b. Code quality / refactoring subagent — when non-trivial code changed.**
-Use subagent_type `code-simplifier:code-simplifier`. Ask it to identify concrete simplifications and cleanups in the newly-changed code:
-   - Duplicated logic that should be extracted
-   - Over-complex conditionals/nesting that can be flattened
-   - Dead code, unused imports/variables introduced in the diff
-   - Naming, readability, and adherence to project conventions in `.claude/rules/` (domain-module layout, Pydantic returns over tuples, `ApiErrorException` + `ErrorCode`, `log_tenant`/`log_system`)
-   - Functions doing too much that should be split
-   It should return a prioritized list of suggested refactors with file/line references — suggestions only, no edits.
+Do not claim the change works on a gate that did not run. `specky check` needs `specky index` to have
+run first, and on a shallow history it passes vacuously — if either applies, say so instead of
+reporting a green light.
 
-**c. Regression subagent — always (when code changed).**
-Use subagent_type `feature-dev:code-reviewer`. Ask it to determine whether the changes could break existing behavior:
-   - Changed function/method signatures, return types, or removed fields — find and check all callers
-   - Renamed/removed exports, schema fields, or DB columns still referenced elsewhere
-   - Behavioral changes to shared/utility code that other modules depend on
-   - Broken or now-incorrect tests, and logic paths that lost test coverage
-   - Frontend/backend contract drift (a changed API response shape vs. its TS consumer)
-   It should report concrete regression risks with the specific file/line of the affected caller, not hypotheticals.
+## 3. Sanity-check the diff
 
-If only docs/config/trivial changes are present, skip the subagents and note why.
+Newly introduced lines only — never flag pre-existing code:
 
-### 4. Report findings
-Aggregate the inline checks and all subagent results into one clear list, grouped by category (Performance / Quality / Regression / Debug / Secrets), each citing file path and line. De-duplicate overlapping findings. Then:
-- **If issues are found**: present them and ask whether to proceed with the commit, fix them first, or commit a subset. Do not auto-fix unless the user asks.
-- **If no issues (or the user chose to proceed)**: continue to step 5.
+- **Debug leftovers**: `print(`, `breakpoint()`, `pdb.set_trace()`, commented-out code blocks. Not
+  `print()` in `scripts/` or test fixtures, where it is often the output.
+- **A committed key or config**: this repo's `specky.toml` and `.env` are gitignored, and nothing that
+  ever holds a key may be staged. Providers read the key from the environment by the name
+  `[ai] api_key_env` declares; specky itself never stores one.
+- **Hand-edits under `specs/history/`**: never. One generated micro-doc per commit; a hand edit there
+  is overwritten on the next sync.
+- **A version bump**: `specky.__version__` and `.claude-plugin/plugin.json` move together, and only
+  when cutting a release (see the Releasing section of `AGENTS.md`). A feature commit does not bump
+  either; `tests/test_packaging.py` fails if they disagree.
+- **A stale doc**: if this change alters behaviour a spec describes, update that spec in the *same*
+  commit. The hook will write one afterwards, but a doc you know is wrong is yours to fix now.
 
-### 5. Generate the commit message
-Follow Conventional Commits:
-   - Format: `type(scope): description`
-   - Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `style`, `perf`, `ci`, `build`
-   - Scope: the primary module or area affected (e.g., `api`, `frontend`, `auth`, `quotes`)
-   - Description: imperative mood, lowercase, no period, max 72 chars
-   - Add a body (separated by blank line) if the change is non-trivial, explaining **why** not **what**
-   - If multiple logical changes exist, suggest splitting into separate commits
-   - Do not add co-authored-by or Signed-off-by lines
+Stage specific paths — `git add -A` will happily sweep in an untracked `assets/` or a scratch file.
 
-### 6. Commit
-1. Show the proposed commit message and ask for confirmation.
-2. Stage the relevant files (prefer specific files over `git add -A`) and create the commit.
-3. **If pre-commit hooks abort the commit by auto-fixing files** (e.g. `end-of-file-fixer`, `trailing-whitespace`, `black`, `isort` report "files were modified by this hook"): this is expected, not a failure. Re-stage the modified files (`git add` them again) and re-run the same commit once. If the hooks pass clean on the retry, the commit succeeds. Only treat it as a real failure if a hook reports an error it cannot auto-fix (e.g. a lint/type error) — surface that to the user instead of retrying.
-4. Run `git status` after committing to verify success.
+## 4. Message
 
-### 7. Follow-up reminders
-After a successful commit, remind the user to run:
-- **`/add-tests`** — to add or update unit tests for the logic introduced in this commit.
-- **`/document`** — to update the functional docs and Claude rules for any domain affected.
+Conventional Commits, matching this repo's history:
 
-Only surface the reminder that's relevant: skip `/add-tests` if no testable logic changed (docs/config/trivial only), and skip `/document` if no domain behavior changed.
+```
+type(scope): description
+```
 
-## Guidelines
-- Only flag issues that are **newly introduced** in the diff — do not flag pre-existing code. This applies to the inline checks AND every subagent.
-- Run the subagents concurrently; never block one on another. They are advisory — the user decides what to act on.
-- Be pragmatic: a `TODO` with a ticket reference (e.g., `TODO(ZI-123)`) is acceptable. Favor a few real findings over noise.
-- Do not flag test files for debug statements like `print()` — those are often intentional.
-- Keep the commit message concise. If the diff is large, focus the description on the most important change.
-- When in doubt about scope or type, ask the user.
+- **Types actually in use**: `docs` (the bulk — this repo documents itself), `feat`, `fix`,
+  `refactor`, `chore`. The rest of the convention is available but unused here; prefer one of the five
+  unless the change genuinely is a `test`, `perf`, `ci`, or `build` change.
+- **Scopes in use**: the module — `rendering`, `viewer`, `chat`, `generator`, `document`, `cli`,
+  `mcp`, `history`, `bootstrap`. A root-level change usually takes no scope at all.
+- Imperative mood, lowercase, no trailing period, subject under 72 characters.
+- Body only when the *why* isn't obvious from the subject; say why, not what. The diff says what.
+- Separate logical changes into separate commits. Do not add `Co-Authored-By` or `Signed-off-by`.
+
+Show the exact command and message, then ask before committing.
+
+## 5. Commit, then let the hook be
+
+The installed git hooks document the commit automatically. A `docs: sync specky docs [skip specky]`
+commit appearing after yours is expected — leave it alone. Do not amend it into your commit, do not
+squash it, and do not "fix" it unless its content is actually wrong (if it is, that's
+`review-generated-docs`, as its own commit).
+
+Set `SPECKY_DISABLE_HOOK=1` when the hook needs to stay out of the way. Verify with
+`git log --oneline -3` and `git status --short`.
+
+## 6. Push
+
+Only when the user asked to push, or to merge. `push it`, `commit and push`, and `merge to main and
+remove the local branch` are all explicit; a bare "commit this" is not. After pushing, report the
+branch and what the remote now has — never force-push `main`.

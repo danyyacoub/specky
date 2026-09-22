@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Render-time-only: turns one mermaid source string into an SVG string via
 // beautiful-mermaid (zero DOM dependencies, so this runs in plain Node -- no
-// jsdom/browser needed). Not shipped to readers; see ../../CLAUDE.md.
+// jsdom/browser needed). Not shipped to readers; see ../../../../AGENTS.md.
 //
 // Protocol: read one JSON object from stdin `{ source, options }`, write the
 // resulting SVG to stdout on success, or a message to stderr + exit(1) on failure.

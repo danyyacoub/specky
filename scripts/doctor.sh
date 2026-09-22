@@ -5,7 +5,7 @@
 #
 # The checks themselves live in src/specky/doctor.py, so an installed specky has them too
 # (`specky doctor`, `--json` for machine use). This script only exists so the entry point
-# documented in CLAUDE.md keeps working from a checkout.
+# documented in AGENTS.md keeps working from a checkout.
 set -eu
 
 cd "$(cd "$(dirname "$0")/.." && pwd)"

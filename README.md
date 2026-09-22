@@ -13,14 +13,14 @@ and [Devin][devin].
 A git hook documents each commit. It writes a short history note, updates the feature doc the
 commit touched, and commits both as a follow-up. Amends and rebases are handled.
 
-<!-- ![A commit and the doc update specky made for it][shot-commits] -->
+![A commit and the doc update specky made for it][shot-commits]
 
 ### Any feature documented on demand
 
 `specky document "the refund flow"` has a model search and read the code for that one feature. It
 then writes `specs/billing/refund-flow.md`. Running it again updates the doc in place.
 
-<!-- ![specky document writing a feature doc][shot-document] -->
+![specky document writing a feature doc][shot-document]
 
 ### A searchable docs site
 
@@ -28,28 +28,28 @@ then writes `specs/billing/refund-flow.md`. Running it again updates the doc in 
 step. It has full-text search over docs and history, tag filters, diagrams, glossary tooltips and
 stale-doc badges. Its home page shows recent changes.
 
-<!-- ![The docs site][shot-site] -->
+![The docs site][shot-site]
 
 ### Spec Assistant
 
 `specky serve` adds a chat panel to the site. It answers from the docs and cites them. It can also
 draft a spec change step by step: scope, impact, acceptance tests, then the final text.
 
-<!-- ![The Spec Assistant answering a question][shot-assistant] -->
+![The Spec Assistant answering a question][shot-assistant]
 
 ### A CI gate against doc drift
 
 `specky check` fails a PR that changes code without updating the doc that describes it. It runs
 offline and needs no API key.
 
-<!-- ![specky check failing a pull request][shot-check] -->
+![specky check failing a branch that skipped its doc update][shot-check]
 
 ### Docs your agent reads first
 
 An MCP server and skills let Claude Code, and other agents, answer "what does X do?" from the docs
 before reading code.
 
-<!-- ![Claude Code answering from specky's docs][shot-agent] -->
+![Claude Code answering from specky's docs][shot-agent]
 
 specky can also import existing docs (`specky adopt`), export them to PDF or Confluence, summarise
 a PR's doc changes, and scaffold tests from a doc's acceptance-test table.
@@ -132,7 +132,7 @@ To pause the hooks, set `SPECKY_DISABLE_HOOK=1`. To remove them, delete the `pos
 - [CHANGELOG][changelog]
 - Contributing: from a checkout, run `uv tool install --editable .`, then
   `claude plugin marketplace add "$PWD"` and `claude plugin install specky@specky`. The plugin then
-  loads straight from your checkout. Tests and scripts are in [CLAUDE.md][claude-md].
+  loads straight from your checkout. Tests and scripts are in [AGENTS.md][agents-md].
 
 MIT licensed.
 
@@ -142,7 +142,7 @@ MIT licensed.
 [uv]: https://docs.astral.sh/uv/
 [modules]: https://github.com/danyyacoub/specky/blob/main/specs/MODULES.md
 [changelog]: https://github.com/danyyacoub/specky/blob/main/CHANGELOG.md
-[claude-md]: https://github.com/danyyacoub/specky/blob/main/CLAUDE.md
+[agents-md]: https://github.com/danyyacoub/specky/blob/main/AGENTS.md
 [shot-commits]: https://raw.githubusercontent.com/danyyacoub/specky/main/assets/screenshots/commit-docs.png
 [shot-document]: https://raw.githubusercontent.com/danyyacoub/specky/main/assets/screenshots/document.png
 [shot-site]: https://raw.githubusercontent.com/danyyacoub/specky/main/assets/screenshots/site.png
