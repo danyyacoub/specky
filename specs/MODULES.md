@@ -92,6 +92,7 @@ command that calls a model goes through this layer.
 |---|---|
 | [integration/marketplace-installation.md](integration/marketplace-installation.md) | Install specky from its GitHub marketplace and PyPI, then opt a repo in with `/specky:setup` |
 | [integration/skill-model-selection.md](integration/skill-model-selection.md) | Let users pick the model specky's doc lookup and authoring skills run on, per host, via [skills] model or a pinned subagent. |
+| [integration/codex-setup.md](integration/codex-setup.md) | Connect specky to Codex manually — MCP server config, skills in .agents/skills, and the optional specky-lookup subagent. |
 
 ## Catalog
 
