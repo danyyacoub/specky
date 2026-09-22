@@ -1,6 +1,7 @@
 ---
 type: workflow
 tags: [adoption, configuration, cli]
+sources: [integrations/codex/README.md, integrations/codex/agents/specky-lookup.toml]
 ---
 
 # Integration — Codex Setup
