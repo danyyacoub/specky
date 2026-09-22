@@ -6,7 +6,7 @@ tags: [ai, configuration, adoption]
 # Integration — Skill Model Selection
 
 ## What It Does
-Specky's documentation skills (`find-feature`, `explore-docs`, `document-domain`) can run their lookups and writing on a chosen model instead of whatever model the current session uses. A repo sets `[skills] model` in `specky.toml` to `haiku`, `sonnet`, or `opus`, and the skill hands its work to a subagent on that model. This lets a team spend less on routine doc lookups without switching the whole session.
+Specky's documentation skills (`find-feature`, `explore-docs`, `document-domain`) can run their lookups and writing on a chosen model instead of whatever model the current session uses. Each developer sets `[skills] model` in their own `specky.toml` (gitignored, so the choice is per machine, not per repo) to `haiku`, `sonnet`, or `opus`, and the skill hands its work to a subagent on that model. This lets a developer spend less on routine doc lookups without switching the whole session.
 
 ## How It Works
 1. **Read the setting** — a skill reads `[skills] model` from `specky.toml`.
@@ -30,5 +30,5 @@ Specky's documentation skills (`find-feature`, `explore-docs`, `document-domain`
 | `[skills] model` unset | A doc skill runs | It runs on the session's model. |
 | `[skills] model = "inherit"` | A doc skill runs | It runs on the session's model. |
 | A repo being set up in Claude Code | `/specky:setup` runs | It asks which model the skills should run on. |
-| A skill pinned to a model in `SKILL.md` frontmatter on a non-Claude Code host | The host configures cheap lookups | A per-host agent or command under `integrations/` pins a host-native model instead. |
+| A non-Claude Code host (Codex, opencode, Kiro) | Cheap lookups are wanted there | The per-host agent or command under `integrations/` pins one of that host's models; `[skills] model` doesn't apply, and no skill's frontmatter carries a `model` key. |
 | `find-feature` is invoked | The agent answers | It returns the doc path and behaviour ids (`STEP-n`, `OUT-n`, `EDGE-n`, `AT-n`) without reading source. |
