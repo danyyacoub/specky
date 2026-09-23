@@ -227,6 +227,9 @@ def _config(repo_root: Path) -> list[Check]:
             else Check("config", FAIL, f"{key_env} is not set in this environment")
         )
 
+    if getattr(provider, "aws_region", None) is not None:
+        checks += _bedrock_checks(provider)
+
     command = getattr(provider, "command", None)
     if command:
         executable = shlex.split(command)[0] if shlex.split(command) else ""
@@ -240,6 +243,39 @@ def _config(repo_root: Path) -> list[Check]:
     # `[ai] document_model` is to be set once and forgotten, and the only other way to find out
     # which model answered what is to read `specky cost` after the fact.
     checks += _task_model_checks(path)
+    return checks
+
+
+def _bedrock_checks(provider) -> list[Check]:
+    """What a Bedrock call needs that specky.toml can't show: the optional AWS SDK, and a region.
+
+    Credentials aren't probed — resolving them means asking AWS, and doctor makes no calls.
+    """
+    from specky.ai_provider import BEDROCK_INSTALL_HINT
+
+    checks = [
+        Check("config", OK, "AWS SDK (botocore) importable for the bedrock provider")
+        if importlib.util.find_spec("botocore")
+        else Check(
+            "config",
+            FAIL,
+            f"the bedrock provider needs the AWS SDK — run `{BEDROCK_INSTALL_HINT}`",
+        )
+    ]
+    region = (
+        provider.aws_region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    )
+    checks.append(
+        Check("config", OK, f"AWS region: {region}")
+        if region
+        # A warning: an AWS profile can carry its own region, and doctor doesn't read AWS config.
+        else Check(
+            "config",
+            WARN,
+            "no AWS region in `[ai] aws_region` or AWS_REGION — Bedrock calls fail unless your AWS "
+            "profile supplies one",
+        )
+    )
     return checks
 
 

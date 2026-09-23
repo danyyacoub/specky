@@ -92,7 +92,7 @@ def test_the_retired_providers_are_not_offered(tmp_path):
     """`anthropic` and `command` still load from a hand-written specky.toml, but init writes
     only the agent or an OpenAI-compatible API."""
     for kind in ("anthropic", "command"):
-        with pytest.raises(ConfigError, match="expected agent or openai-compatible"):
+        with pytest.raises(ConfigError, match="expected agent, openai-compatible or bedrock"):
             _config(tmp_path, provider=kind, **NO_VALIDATE)
 
 
@@ -270,7 +270,7 @@ def test_the_interview_takes_an_explicit_model(tmp_path, monkeypatch):
 
 
 def _openai_answers():
-    return ["https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY"]
+    return ["", "https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY"]
 
 
 def test_declining_the_agent_asks_for_an_openai_compatible_api(tmp_path, monkeypatch):
@@ -286,6 +286,39 @@ def test_without_an_agent_the_interview_goes_straight_to_the_api(tmp_path, monke
 
     assert 'provider = "openai-compatible"' in body
     assert any("No coding agent found" in line for line in printed)
+
+
+def test_the_interview_can_choose_bedrock(tmp_path, monkeypatch):
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    body, _ = _interview(tmp_path, monkeypatch, ["n", "2", "", "eu-west-1", ""])
+
+    assert 'provider = "bedrock"' in body
+    assert f'model = "{setup_wizard.DEFAULT_BEDROCK_MODEL}"' in body
+    assert 'aws_region = "eu-west-1"' in body
+    assert "aws_profile" not in body
+
+
+def test_bedrock_by_flag_leaves_region_to_the_aws_chain(tmp_path):
+    """No region or profile named means none written — AWS_REGION or an instance role decides."""
+    body = _config(tmp_path, provider="bedrock", **NO_VALIDATE)
+
+    assert 'provider = "bedrock"' in body
+    assert f'model = "{setup_wizard.DEFAULT_BEDROCK_MODEL}"' in body
+    assert "aws_region" not in body
+
+
+def test_bedrock_flags_are_written(tmp_path):
+    body = _config(
+        tmp_path,
+        provider="bedrock",
+        model="anthropic.claude-sonnet-5",
+        aws_region="us-east-1",
+        aws_profile="docs",
+        **NO_VALIDATE,
+    )
+    assert 'model = "anthropic.claude-sonnet-5"' in body
+    assert 'aws_region = "us-east-1"' in body
+    assert 'aws_profile = "docs"' in body
 
 
 def test_an_agent_can_be_named_by_flag(tmp_path):

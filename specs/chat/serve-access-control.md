@@ -21,7 +21,7 @@ related: [chat/local-rag-server]
 
 ## Models on a deployed server
 
-A deployed server usually wants other models than a laptop, and a container built from the repo has no `specky.toml` at all (it's gitignored). So the Spec Assistant's provider can come from the environment too: `SPECKY_AI_PROVIDER` and its keys make the whole `[ai]` table, and `SPECKY_AI_CHAT_MODEL` / `SPECKY_AI_DRAFT_MODEL` route its answers and its drafts to their own models ([provider cost controls](../ai/provider-cost-controls.md)). A server should use an API provider: `provider = "agent"` needs a coding agent logged in on the machine, and it has no tool channel, so drafts lose their code-reading steps.
+A deployed server usually wants other models than a laptop, and a container built from the repo has no `specky.toml` at all (it's gitignored). So the Spec Assistant's provider can come from the environment too: `SPECKY_AI_PROVIDER` and its keys make the whole `[ai]` table, and `SPECKY_AI_CHAT_MODEL` / `SPECKY_AI_DRAFT_MODEL` route its answers and its drafts to their own models ([provider cost controls](../ai/provider-cost-controls.md)). A server should use an API provider — `bedrock` on AWS needs no key at all, since the container's IAM role is its credential: `provider = "agent"` needs a coding agent logged in on the machine, and it has no tool channel, so drafts lose their code-reading steps.
 
 ## What the open default costs
 

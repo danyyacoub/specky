@@ -10,9 +10,9 @@ authored: human
 
 `specky init` picks an AI provider, proves it works with one live call, and writes the result to
 `specky.toml`. It is the only command that writes that file, and it makes sure `specky.toml` is
-gitignored. There are two choices: the coding agent the developer already uses (Claude Code, Codex,
-Gemini CLI, opencode, Kiro or Cursor Agent), run headless on its own login with no API key, or any
-OpenAI-compatible API. For an agent the model is optional: named, it's pinned; left out, the agent
+gitignored. The choices are the coding agent the developer already uses (Claude Code, Codex,
+Gemini CLI, opencode, Kiro or Cursor Agent), run headless on its own login with no API key, or an
+API: any OpenAI-compatible endpoint, or Claude on Amazon Bedrock with the machine's AWS credentials. For an agent the model is optional: named, it's pinned; left out, the agent
 keeps its own default. An API config names the *environment variable* holding the key, never a key.
 Either way, which provider a developer uses is per-machine.
 
@@ -38,12 +38,14 @@ terminal to answer on.
    explicitly.
 4. **Interview, or build the config from flags** — Interactively, the first prompt offers the
    current agent; accepting asks for a model, where a blank answer writes no `model` key so the
-   agent keeps its own default. Declining, or having no agent at all, asks for the OpenAI-compatible
-   base URL, model and key variable. From flags, an unnamed provider means the current agent.
+   agent keeps its own default. Declining, or having no agent at all, asks which API: OpenAI-compatible
+   (base URL, model and key variable) or Amazon Bedrock (model, then an optional region and profile,
+   each left out of the file when blank so the AWS credential chain decides). From flags, an unnamed provider means the current agent.
 5. **Require a provider's fields before writing, naming all of them at once** — `agent` needs an
    agent: the current one, or a known `--agent` name. `openai-compatible` needs `--base-url`,
    `--model` and `--api-key-env`, and a missing one raises listing *every* missing flag, so a scripted
-   setup isn't fixed one round-trip at a time. It happens before the file is written, so the failure
+   setup isn't fixed one round-trip at a time. `bedrock` needs nothing: the model defaults to
+   `anthropic.claude-haiku-4-5`, and region and profile come from AWS when not given. It happens before the file is written, so the failure
    isn't a `specky.toml` that only breaks on the first commit. `anthropic` and `command` configs
    still load from a hand-written `specky.toml`, but `init` no longer writes them.
 6. **Only ask about the docs root when there's a reason to** — The question appears when
@@ -109,11 +111,13 @@ flowchart TD
 | Flag | Purpose |
 |------|---------|
 | `--yes` | Take the defaults and ask nothing — the current coding agent on its own default model |
-| `--provider` | `agent` or `openai-compatible`. Implies non-interactive |
+| `--provider` | `agent`, `openai-compatible` or `bedrock`. Implies non-interactive |
 | `--agent` | Which coding agent, for `agent`: `claude`, `codex`, `gemini`, `opencode`, `kiro` or `cursor`. Defaults to the current one |
-| `--model` | Model name. Optional for `agent` (left out, the agent keeps its default); required for `openai-compatible` |
+| `--model` | Model name. Optional for `agent` (left out, the agent keeps its default) and `bedrock` (defaults to `anthropic.claude-haiku-4-5`); required for `openai-compatible` |
 | `--api-key-env` | *Name* of the environment variable holding the key, never the key itself |
 | `--base-url` | Endpoint for `openai-compatible` (e.g. `https://api.deepseek.com`) |
+| `--aws-region` | AWS region for `bedrock`. Left out, `AWS_REGION` or the AWS profile decides |
+| `--aws-profile` | AWS profile for `bedrock`. Left out, the standard AWS credential chain decides |
 | `--docs-root` | Directory to generate docs into, instead of `specs/`. Must be inside the repo |
 | `--no-validate` | Skip the live provider call, for a build with no credential in its environment yet |
 
@@ -130,7 +134,8 @@ flowchart TD
 | `--provider` given without `--yes` | Still fully non-interactive — no remaining question is asked from the terminal |
 | `--provider openai-compatible` missing some of `--base-url` / `--model` / `--api-key-env` | One error listing *all* the missing flags; no file written |
 | `--agent` names an agent specky doesn't know | `ConfigError` listing the known ones; no file written |
-| `--provider anthropic` or `--provider command` | Refused; `init` writes only `agent` or `openai-compatible` |
+| `--provider anthropic` or `--provider command` | Refused; `init` writes only `agent`, `openai-compatible` or `bedrock` |
+| `--provider bedrock` alone | `[ai]` names `bedrock` and the default Bedrock model, with no region or profile |
 | A provider name that isn't one of the two | Error quoting what was passed |
 | `specs/` is free | No docs-root question; `[docs]` records `root = "specs"` |
 | `specs/` holds non-markdown files, interactively | The colliding files are named and another root is asked for |
@@ -178,11 +183,14 @@ flowchart TD
 | No coding agent on `PATH` | Run `init --yes` | `ConfigError` naming `--provider openai-compatible`; `specky.toml` does not exist afterwards |
 | The same, interactively | Run `init` | It goes straight to the OpenAI-compatible questions, saying no agent was found |
 | The interview, with Claude Code current | Answer Enter, then `opus` | `[ai]` names `agent`, `claude` and `model = "opus"` |
-| The interview | Decline the agent, then give a base URL, model and key variable | `[ai]` names `openai-compatible` with those three |
+| The interview | Decline the agent, keep the OpenAI-compatible API, then give a base URL, model and key variable | `[ai]` names `openai-compatible` with those three |
 | `--provider openai-compatible` and only `--model` | Run `init` | The error names both `--base-url` and `--api-key-env`; `specky.toml` does not exist afterwards |
 | `--provider openai-compatible` with all three fields | Run `init` | The written file round-trips: provider, base URL, model and key env var all present |
 | `--provider agent --agent hal9000` | Run `init` | `ConfigError` saying it isn't an agent specky knows; nothing written |
-| `--provider anthropic` or `--provider command` | Run `init` | `ConfigError` saying the choices are `agent` or `openai-compatible` |
+| `--provider anthropic` or `--provider command` | Run `init` | `ConfigError` saying the choices are `agent`, `openai-compatible` or `bedrock` |
+| `--provider bedrock` with no other flag | Run `init` | `[ai]` names `bedrock` and `anthropic.claude-haiku-4-5`; no `aws_region` key |
+| `--provider bedrock --model anthropic.claude-sonnet-5 --aws-region us-east-1 --aws-profile docs` | Run `init` | All four are written |
+| The interview | Decline the agent, choose Bedrock, accept the model, give `eu-west-1`, leave the profile blank | `[ai]` names `bedrock` with `aws_region = "eu-west-1"` and no `aws_profile` |
 | `--no-validate` and a provider that would fail | Run `init` | No provider is constructed, nothing is generated, and the file is written |
 | A provider whose `generate` raises | Run `init` without `--no-validate` | The error propagates and no file is written |
 | `--docs-root documentation/` | Run `init` | The file contains a `[docs]` table with `root = "documentation"` |

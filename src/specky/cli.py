@@ -37,6 +37,8 @@ def _init(args: argparse.Namespace) -> None:
         api_key_env=args.api_key_env,
         base_url=args.base_url,
         agent=args.agent,
+        aws_region=args.aws_region,
+        aws_profile=args.aws_profile,
         docs_root=args.docs_root,
         assume_yes=args.yes,
         validate=not args.no_validate,
@@ -351,7 +353,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_cmd.add_argument(
         "--provider",
-        choices=["agent", "openai-compatible"],
+        choices=["agent", "openai-compatible", "bedrock"],
         help="Answer the provider question up front (implies --yes for the rest)",
     )
     from specky.ai_provider import AGENTS
@@ -370,6 +372,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Name of the env var holding the API key — never the key itself",
     )
     init_cmd.add_argument("--base-url", help="Endpoint, for --provider openai-compatible")
+    init_cmd.add_argument(
+        "--aws-region", metavar="REGION", help="AWS region, for --provider bedrock (default: AWS_REGION)"
+    )
+    init_cmd.add_argument(
+        "--aws-profile",
+        metavar="NAME",
+        help="AWS profile, for --provider bedrock (default: the standard credential chain)",
+    )
     init_cmd.add_argument(
         "--docs-root",
         metavar="NAME",

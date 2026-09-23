@@ -1,4 +1,4 @@
-"""AI provider abstraction: agent / anthropic / openai-compatible / command.
+"""AI provider abstraction: agent / anthropic / bedrock / openai-compatible / command.
 
 Providers are configured in specky.toml under an [ai] table and constructed via
 `load_provider`. Each provider exposes `generate(prompt, *, prefix, task) -> str`, where
@@ -131,18 +131,20 @@ TurnReport = Callable[[int, int], None]
 
 
 @dataclass
-class AnthropicProvider:
+class _MessagesAPIProvider:
+    """Claude's Messages API, whichever door it's reached through — Anthropic's own endpoint or
+    Amazon Bedrock. The request shape, caching and tool loop are identical; only the client (how it
+    authenticates, where it points) and the model IDs differ, so `_client` is all a subclass adds.
+    """
+
     model: str = "claude-haiku-4-5"
-    api_key_env: str = "ANTHROPIC_API_KEY"
     max_tokens: int = DEFAULT_MAX_TOKENS
 
-    def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
-        import anthropic
+    def _client(self):
+        raise NotImplementedError
 
-        api_key = os.environ.get(self.api_key_env)
-        if not api_key:
-            raise RuntimeError(f"{self.api_key_env} is not set in the environment")
-        client = anthropic.Anthropic(api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS)
+    def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
+        client = self._client()
         # The stable half goes in `system` with a cache breakpoint on it. A prefix shorter than the
         # model's minimum cacheable length simply isn't cached — it is not an error and costs no
         # premium — so this is safe to send whatever the prefix's size, and a small repo pays
@@ -192,15 +194,10 @@ class AnthropicProvider:
         of every run, so on a twelve-turn conversation that block is read thirteen times and paid
         for once.
         """
-        import anthropic
-
-        api_key = os.environ.get(self.api_key_env)
-        if not api_key:
-            raise RuntimeError(f"{self.api_key_env} is not set in the environment")
         # A tool conversation is many sequential calls, and the last of them is the one that writes
         # a whole doc — so the per-call timeout is the same 60s every other call gets, but the run
         # as a whole is bounded by `max_turns` rather than by the clock.
-        client = anthropic.Anthropic(api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS)
+        client = self._client()
 
         specs = [
             {"name": tool.name, "description": tool.description, "input_schema": tool.schema}
@@ -266,6 +263,19 @@ class AnthropicProvider:
 
         return ""
 
+
+@dataclass
+class AnthropicProvider(_MessagesAPIProvider):
+    api_key_env: str = "ANTHROPIC_API_KEY"
+
+    def _client(self):
+        import anthropic
+
+        api_key = os.environ.get(self.api_key_env)
+        if not api_key:
+            raise RuntimeError(f"{self.api_key_env} is not set in the environment")
+        return anthropic.Anthropic(api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS)
+
     def generate_batch(
         self, prompts: dict[str, tuple[str, str]], task: str = ""
     ) -> dict[str, str]:
@@ -279,12 +289,7 @@ class AnthropicProvider:
         to 24 hours, so this is reached for by `specky sync --batch` and never by a git hook, which
         must not turn `git commit` into a long poll.
         """
-        import anthropic
-
-        api_key = os.environ.get(self.api_key_env)
-        if not api_key:
-            raise RuntimeError(f"{self.api_key_env} is not set in the environment")
-        client = anthropic.Anthropic(api_key=api_key, timeout=DEFAULT_TIMEOUT_SECONDS)
+        client = self._client()
 
         requests = []
         for key, (prefix, prompt) in prompts.items():
@@ -322,6 +327,50 @@ class AnthropicProvider:
                 continue  # same contract as `generate`: a truncated answer is not an answer
             answers[key] = message.content[0].text
         return answers
+
+
+# What `uv tool install` needs for the Bedrock client's request signing — an optional extra, so a
+# user who never touches AWS doesn't install boto3.
+BEDROCK_INSTALL_HINT = "uv tool install 'specky[bedrock]' --force"
+
+
+@dataclass
+class BedrockProvider(_MessagesAPIProvider):
+    """Claude through Amazon Bedrock's Messages API (the SDK's Mantle client).
+
+    Credentials come from the standard AWS chain — env vars, `aws_profile`, an instance or task
+    role — so specky names no secret here either. No `generate_batch`: Bedrock has no Message
+    Batches API, so `--batch` degrades to ordinary calls, as it does for every non-Anthropic
+    provider. Model IDs carry Bedrock's `anthropic.` prefix.
+    """
+
+    model: str = "anthropic.claude-haiku-4-5"
+    aws_region: str = ""
+    aws_profile: str = ""
+
+    def _client(self):
+        import importlib.util
+
+        # The SDK builds a Bedrock client without botocore and only fails on the first request,
+        # with a bare ModuleNotFoundError; saying which install fixes it is kinder.
+        if importlib.util.find_spec("botocore") is None:
+            raise RuntimeError(
+                f"the bedrock provider needs the AWS SDK, which isn't installed — run "
+                f"`{BEDROCK_INSTALL_HINT}`"
+            )
+        try:
+            from anthropic import AnthropicBedrockMantle
+        except ImportError:
+            raise RuntimeError(
+                "this anthropic SDK predates Bedrock's Messages API client — run "
+                f"`{BEDROCK_INSTALL_HINT}` to upgrade it"
+            ) from None
+
+        return AnthropicBedrockMantle(
+            aws_region=self.aws_region or None,
+            aws_profile=self.aws_profile or None,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
 
 
 @dataclass
@@ -876,6 +925,13 @@ def load_provider(config: dict) -> Provider:
             api_key_env=config.get("api_key_env", "ANTHROPIC_API_KEY"),
             max_tokens=_max_tokens(config),
         )
+    if kind == "bedrock":
+        return BedrockProvider(
+            model=config.get("model", "anthropic.claude-haiku-4-5"),
+            aws_region=config.get("aws_region", ""),
+            aws_profile=config.get("aws_profile", ""),
+            max_tokens=_max_tokens(config),
+        )
     if kind == "openai-compatible":
         for field in ("base_url", "model", "api_key_env"):
             if not config.get(field):
@@ -894,7 +950,7 @@ def load_provider(config: dict) -> Provider:
         if not config.get("command"):
             raise ConfigError('[ai] provider="command" requires \'command\'')
         return CommandProvider(command=config["command"])
-    raise ConfigError(f"Unknown [ai] provider: {kind!r} (expected agent/anthropic/openai-compatible/command)")
+    raise ConfigError(f"Unknown [ai] provider: {kind!r} (expected agent/anthropic/bedrock/openai-compatible/command)")
 
 
 def _flag(config: dict, key: str, default: bool) -> bool:

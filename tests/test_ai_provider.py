@@ -266,6 +266,77 @@ def test_anthropic_requires_the_api_key_env(monkeypatch):
         AnthropicProvider().generate("prompt")
 
 
+# --- bedrock -------------------------------------------------------------------------------------
+
+
+def _install_fake_bedrock(monkeypatch) -> dict:
+    """Stand in for the SDK's Bedrock client, capturing its constructor and request kwargs."""
+    import importlib.util
+
+    seen: dict = {}
+
+    class Messages:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return _FakeAnthropicResponse("end_turn")
+
+    class Client:
+        def __init__(self, **kwargs):
+            seen["client_kwargs"] = kwargs
+            self.messages = Messages()
+
+    module = type("anthropic", (), {"AnthropicBedrockMantle": Client})
+    monkeypatch.setitem(__import__("sys").modules, "anthropic", module)
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a: object() if name == "botocore" else real_find_spec(name, *a),
+    )
+    return seen
+
+
+def test_bedrock_defaults():
+    provider = load_provider({"provider": "bedrock"})
+    assert isinstance(provider, ai_provider.BedrockProvider)
+    assert provider.model == "anthropic.claude-haiku-4-5"
+    assert (provider.aws_region, provider.aws_profile) == ("", "")
+
+
+def test_bedrock_sends_the_same_request_through_the_bedrock_client(monkeypatch):
+    """Same Messages API body — cached prefix included — only the client differs."""
+    seen = _install_fake_bedrock(monkeypatch)
+    provider = load_provider(
+        {"provider": "bedrock", "model": "anthropic.claude-sonnet-5", "aws_region": "eu-west-1"}
+    )
+
+    assert provider.generate("the volatile half", prefix="the stable half") == "generated doc"
+    assert seen["model"] == "anthropic.claude-sonnet-5"
+    assert seen["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert seen["client_kwargs"]["aws_region"] == "eu-west-1"
+    assert seen["client_kwargs"]["aws_profile"] is None, "unset means the AWS chain decides"
+
+
+def test_bedrock_without_the_aws_sdk_names_the_install(monkeypatch):
+    import importlib.util
+
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util,
+        "find_spec",
+        lambda name, *a: None if name == "botocore" else real_find_spec(name, *a),
+    )
+    with pytest.raises(RuntimeError, match=r"specky\[bedrock\]"):
+        ai_provider.BedrockProvider().generate("prompt")
+
+
+def test_bedrock_has_tools_but_no_batch():
+    """Bedrock has no Message Batches API, so `--batch` degrades as it does for other providers."""
+    provider = ai_provider.BedrockProvider()
+    assert not ai_provider.supports_batch(provider)
+    assert ai_provider.supports_tools(provider)
+
+
 # --- the cacheable prefix -------------------------------------------------------------------------
 
 

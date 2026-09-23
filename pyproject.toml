@@ -42,6 +42,11 @@ dependencies = [
     "markdown>=3.6",
 ]
 
+[project.optional-dependencies]
+# The `bedrock` provider's request signing (boto3/botocore), kept optional so nobody who never
+# touches AWS installs it: `uv tool install 'specky[bedrock]'`.
+bedrock = ["anthropic[bedrock]"]
+
 [project.urls]
 Homepage = "https://github.com/danyyacoub/specky"
 Documentation = "https://github.com/danyyacoub/specky/blob/main/specs/MODULES.md"

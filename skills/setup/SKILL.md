@@ -46,7 +46,7 @@ entries are `ok`, and step 6 if the index is current. `doctor` doesn't cover ste
 is already set up and go to the report.
 
 ### 3. Choose the AI provider
-Ask the user which provider specky should call. Give them these two choices:
+Ask the user which provider specky should call. Give them these three choices:
 
 1. **The coding agent they're using** (recommended). Needs no API key: it runs headless on their
    existing login (`claude -p`, `codex exec`, `gemini -p`, `opencode run`, …). Ask whether they
@@ -64,6 +64,14 @@ Ask the user which provider specky should call. Give them these two choices:
    key into the chat, and never write one into a file. Then:
    ```bash
    specky init --provider openai-compatible --base-url <url> --model <model> --api-key-env <VAR>
+   ```
+3. **Claude on Amazon Bedrock**, for a team whose AWS account already has Bedrock model access. No
+   Anthropic key: credentials come from the AWS config, profile or role. It needs the AWS SDK extra,
+   so install the CLI with `uv tool install 'specky[bedrock]' --force` first. Ask for the model (a
+   Bedrock ID such as `anthropic.claude-sonnet-5`; blank keeps `anthropic.claude-haiku-4-5`), and a
+   region or profile only if their AWS config doesn't already set one:
+   ```bash
+   specky init --provider bedrock --model <bedrock model id> --aws-region <region>
    ```
 
 `init` makes one small test call to prove the provider works (add `--no-validate` to skip it). It

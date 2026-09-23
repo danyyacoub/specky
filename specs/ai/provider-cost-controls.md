@@ -24,8 +24,9 @@ already exists, resent with every commit so the classifier doesn't invent a dupl
    in a run, and a *body* that changes per call. The classification prefix is the instructions plus
    the list of every existing doc; the body is one commit's message and diff.
 
-2. **The prefix is cached by the provider** — With the `anthropic` provider the prefix is sent as a
-   cached system block, billed at a tenth of the input rate after the first call. An
+2. **The prefix is cached by the provider** — With the `anthropic` and `bedrock` providers the
+   prefix is sent as a cached system block, billed at a tenth of the input rate after the first call
+   (Bedrock bills at its own rates; the request is the same). An
    OpenAI-compatible endpoint receives it as a system message; a `command` provider has one input
    channel, so the two halves are joined back together and nothing is cached by specky.
 
@@ -123,6 +124,7 @@ A ten-thousand-commit backfill on a three-hundred-doc repo: **$221 with neither,
 | An identical call is free | The same prefix and body twice | Both are made | The provider is reached once |
 | Batch skips what is already cached | One of two entries already memoized | A batch is sent | Only the uncached entry is sent; the memoized answer is returned for the other |
 | A batch key with a slash is accepted | A domain keyed `billing/refund-flow` | It is batched | The request id is alphanumeric and within the API's length limit |
+| Bedrock has no batch API | A `bedrock` provider | Batch support is asked | No — `--batch` is ignored with a note, as for every non-Anthropic provider; tools are still supported |
 | A missing batch API degrades | A `command` provider and `--batch` | `specky sync --batch` | It says the flag was ignored and asks for each summary normally |
 | A failed batch degrades | A provider whose batch call raises | `specky sync --batch` | It says the batch failed and asks for each summary singly |
 | A per-task model routes only its task | `[ai] model = "haiku"`, `document_model = "sonnet"` | The provider is built | The document task resolves to sonnet; classification and everything else resolve to haiku |

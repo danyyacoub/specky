@@ -10,6 +10,7 @@ CI job priming a cache) needs the answers to arrive as flags.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tomllib
@@ -19,6 +20,9 @@ from typing import Callable
 
 from specky.ai_provider import AGENTS, ConfigError, agent_command, current_agent, load_provider
 from specky.paths import DEFAULT_DOCS_ROOT
+
+# Bedrock's IDs carry an `anthropic.` prefix; the model mirrors the anthropic provider's default.
+DEFAULT_BEDROCK_MODEL = "anthropic.claude-haiku-4-5"
 
 # How many of the files already living in the docs root get named when reporting a collision.
 CONFLICT_LIST_LIMIT = 5
@@ -46,6 +50,8 @@ class InitOptions:
     api_key_env: str | None = None
     base_url: str | None = None
     agent: str | None = None
+    aws_region: str | None = None
+    aws_profile: str | None = None
     docs_root: str | None = None
     assume_yes: bool = False
     # A live provider call is the point of `init` for a human — it's how they find out the key
@@ -243,7 +249,24 @@ def _config_from_options(options: InitOptions) -> dict:
             "model": options.model,
             "api_key_env": options.api_key_env,
         }
-    raise ConfigError(f"Unknown provider: {kind!r} (expected agent or openai-compatible)")
+    if kind == "bedrock":
+        return _bedrock_config(
+            options.model or DEFAULT_BEDROCK_MODEL, options.aws_region or "", options.aws_profile or ""
+        )
+    raise ConfigError(
+        f"Unknown provider: {kind!r} (expected agent, openai-compatible or bedrock)"
+    )
+
+
+def _bedrock_config(model: str, aws_region: str, aws_profile: str) -> dict:
+    # Region and profile only when named: left out, the AWS SDK's own chain (AWS_REGION, the
+    # default profile, an instance role) decides, which is what a server wants.
+    return {
+        "provider": "bedrock",
+        "model": model,
+        **({"aws_region": aws_region} if aws_region else {}),
+        **({"aws_profile": aws_profile} if aws_profile else {}),
+    }
 
 
 def _docs_root_from_options(
@@ -295,7 +318,8 @@ def _agent_config(agent: str, model: str) -> dict:
 
 
 def _interview_provider(input_fn: Callable[[str], str], print_fn: Callable[[str], None]) -> dict:
-    """The current coding agent, or an OpenAI-compatible API when there's none or it's declined.
+    """The current coding agent, or an API — OpenAI-compatible or Amazon Bedrock — when there's none
+    or it's declined.
 
     The agent comes first: it's logged in and paid for already, so it needs no key and no endpoint.
     """
@@ -308,7 +332,14 @@ def _interview_provider(input_fn: Callable[[str], str], print_fn: Callable[[str]
             return _agent_config(agent, model)
     else:
         print_fn(f"No coding agent found on PATH ({', '.join(AGENTS)}), so specky needs an API.")
-    print_fn("OpenAI-compatible API:")
+    api = input_fn("API: 1) OpenAI-compatible  2) Amazon Bedrock [1]: ").strip().lower()
+    if api in ("2", "bedrock"):
+        region_default = os.environ.get("AWS_REGION", "")
+        return _bedrock_config(
+            input_fn(f"Bedrock model [{DEFAULT_BEDROCK_MODEL}]: ").strip() or DEFAULT_BEDROCK_MODEL,
+            input_fn(f"AWS region [{region_default or 'from your AWS config'}]: ").strip(),
+            input_fn("AWS profile [default credential chain]: ").strip(),
+        )
     return {
         "provider": "openai-compatible",
         "base_url": input_fn("Base URL (e.g. https://api.deepseek.com): ").strip(),

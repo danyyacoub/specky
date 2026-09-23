@@ -217,6 +217,25 @@ def test_an_env_override_shows_in_the_task_routing(in_repo, monkeypatch):
     assert any("draft -> opus (everything else -> haiku)" in d for d in details)
 
 
+def test_bedrock_reports_the_aws_sdk_and_region(in_repo, monkeypatch):
+    _write_config(in_repo, '[ai]\nprovider = "bedrock"\naws_region = "eu-west-1"\n')
+    monkeypatch.setattr(doctor.importlib.util, "find_spec", lambda _name: None)
+    details = {c.detail: c.status for c in _by_section(doctor.run_checks())["config"]}
+
+    assert details["AWS region: eu-west-1"] == doctor.OK
+    assert any("specky[bedrock]" in d and s == doctor.FAIL for d, s in details.items())
+
+
+def test_bedrock_without_a_region_only_warns(in_repo, monkeypatch):
+    """An AWS profile can carry its own region, which doctor doesn't read."""
+    _write_config(in_repo, '[ai]\nprovider = "bedrock"\n')
+    monkeypatch.delenv("AWS_REGION", raising=False)
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+    checks = _by_section(doctor.run_checks())["config"]
+
+    assert any("no AWS region" in c.detail and c.status == doctor.WARN for c in checks)
+
+
 def test_a_missing_api_key_fails_and_a_present_one_is_never_printed(in_repo, monkeypatch):
     _write_config(
         in_repo,

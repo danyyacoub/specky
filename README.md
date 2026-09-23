@@ -49,24 +49,8 @@ stale-doc badges. Its home page shows recent changes.
 `specky serve` adds a chat panel to the site. It answers from the docs and cites them. It can also
 draft a spec change step by step: scope, impact, acceptance tests, then the final text.
 
-To deploy it for others, set `SPECKY_AUTH_USERNAME` and `SPECKY_AUTH_PASSWORD` in the server's
-environment. Every page and API call then asks for that login, so put the server behind HTTPS.
-
-The server's models can come from its environment too, so a container needs no `specky.toml` and
-your local one stays as it is. `SPECKY_AI_<KEY>` sets `[ai] <key>`; setting `SPECKY_AI_PROVIDER`
-replaces the local table rather than patching it. `SPECKY_AI_CHAT_MODEL` and
-`SPECKY_AI_DRAFT_MODEL` pick the models for answers and for drafts:
-
-```bash
-docker run \
-  -e SPECKY_AI_PROVIDER=openai-compatible -e SPECKY_AI_BASE_URL=https://api.deepseek.com/v1 \
-  -e SPECKY_AI_MODEL=deepseek-chat -e SPECKY_AI_DRAFT_MODEL=deepseek-reasoner \
-  -e SPECKY_AI_API_KEY_ENV=DEEPSEEK_API_KEY -e DEEPSEEK_API_KEY \
-  -e SPECKY_AUTH_USERNAME -e SPECKY_AUTH_PASSWORD \
-  your-specky-image
-```
-
-Use an API provider there: the `agent` provider needs a logged-in coding agent on the machine.
+To share it with your team, deploy it on a server with a login and its own models: see
+[Deploy the Spec Assistant](#deploy-the-spec-assistant).
 
 ![The Spec Assistant answering a question][shot-assistant]
 
@@ -101,8 +85,9 @@ a PR's doc changes, and scaffold tests from a doc's acceptance-test table.
 1. **Docs live in your repo as markdown**: `specs/<domain>/<topic>.md` for features and workflows,
    and `specs/history/<sha>.md` for commits. You review and version them like code.
 2. **Writing calls your AI provider.** Either the coding agent you already use (Claude Code,
-   Codex, Gemini CLI, opencode, Kiro or Cursor Agent), on its default model or one you name, or
-   any OpenAI-compatible endpoint. Only these commands call it: the commit hooks, `sync`,
+   Codex, Gemini CLI, opencode, Kiro or Cursor Agent), on its default model or one you name, any
+   OpenAI-compatible endpoint, or Claude on Amazon Bedrock (install `specky[bedrock]`; credentials
+   come from your AWS config). Only these commands call it: the commit hooks, `sync`,
    `document`, `tag` and the Spec Assistant. They send the diff, code or docs they are working on.
    Keys stay in environment variables.
 3. **Reading is offline.** `specky index` builds a SQLite full-text index of the docs and git log
@@ -162,6 +147,70 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD~1' }}
 ```
+
+### Deploy the Spec Assistant
+
+`specky serve` runs in a container with no `specky.toml`: that file is gitignored, so the image
+never has one, and the server's settings come from its environment instead.
+
+**The image.** It needs git and the repo's history, because the index is built from `git log`.
+Build the index and the site into the image, then serve on every interface:
+
+```dockerfile
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+ && rm -rf /var/lib/apt/lists/*
+RUN pip install uv && uv tool install 'specky[bedrock]'   # plain `specky` if you don't use Bedrock
+ENV PATH="/root/.local/bin:$PATH"
+COPY . /repo
+WORKDIR /repo
+RUN specky index && specky render-html
+CMD ["specky", "serve", "--host", "0.0.0.0"]
+```
+
+Copy `.git` in (don't `.dockerignore` it). New docs reach the server when the image is rebuilt.
+
+**The login.** Set `SPECKY_AUTH_USERNAME` and `SPECKY_AUTH_PASSWORD`. Every page and API call then
+asks for that login, so put the server behind HTTPS.
+
+**The models.** `SPECKY_AI_<KEY>` sets `[ai] <key>`. `SPECKY_AI_PROVIDER` makes the environment the
+whole `[ai]` table, so nothing from a local config leaks in. `SPECKY_AI_CHAT_MODEL` and
+`SPECKY_AI_DRAFT_MODEL` choose the models for answers and for drafts. Use an API provider: the
+`agent` provider needs a coding agent logged in on the machine.
+
+With Claude on Amazon Bedrock, the server needs no key at all:
+
+```bash
+SPECKY_AI_PROVIDER=bedrock
+SPECKY_AI_MODEL=anthropic.claude-haiku-4-5         # answers
+SPECKY_AI_DRAFT_MODEL=anthropic.claude-sonnet-5    # drafts, on a stronger model
+SPECKY_AI_AWS_REGION=us-east-1
+```
+
+The AWS SDK finds the credentials itself, and specky never stores them:
+
+| Where it runs | Credential |
+|---|---|
+| ECS or Fargate | the task role on the task definition |
+| EKS | a role linked to the pod's service account (Pod Identity or IRSA) |
+| EC2 | the instance profile |
+| Outside AWS | `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` as platform secrets, or a mounted profile named by `SPECKY_AI_AWS_PROFILE` |
+
+In the Bedrock console, enable the models you named in that region, and allow the role to call
+them. With an OpenAI-compatible API instead:
+
+```bash
+SPECKY_AI_PROVIDER=openai-compatible
+SPECKY_AI_BASE_URL=https://api.deepseek.com/v1
+SPECKY_AI_MODEL=deepseek-chat
+SPECKY_AI_DRAFT_MODEL=deepseek-reasoner
+SPECKY_AI_API_KEY_ENV=DEEPSEEK_API_KEY             # the name of the variable holding the key
+DEEPSEEK_API_KEY=…                                 # a platform secret
+```
+
+Run `specky doctor` in the container to see what's in effect: the provider, where it came from,
+and for Bedrock whether the AWS SDK is installed and a region set. It makes no AI call, so
+credentials and model access are first tested by the first question asked in the panel.
 
 ### Update and uninstall
 
