@@ -1,7 +1,7 @@
 # Devin integration
 
 specky needs two things from any agent: the MCP server (read-only queries over the index) and its
-skills (`find-feature`, `explore-docs`, `document-domain`). Everything else — the git hook,
+skills (`setup`, `find-feature`, `explore-docs`, `document-domain`). Everything else — the git hook,
 `specky index`, `render-html`, `serve` — is plain CLI and identical everywhere.
 
 Devin is the one host so far that isn't a plugin host. There's no directory you drop a plugin into
@@ -109,7 +109,7 @@ Devin CLI is a different surface from the cloud agent above, and the one place D
 `SKILL.md` out of the repo: `.devin/skills/<name>/SKILL.md`, committed to git:
 
 ```bash
-for s in find-feature explore-docs document-domain; do
+for s in setup find-feature explore-docs document-domain; do
   mkdir -p .devin/skills/$s
   curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
     -o ".devin/skills/$s/SKILL.md"
@@ -130,7 +130,7 @@ frontmatter. There is no model field to set — the model that answers a session
 the skill — so copy them in as they are:
 
 ```bash
-for s in find-feature explore-docs document-domain; do
+for s in setup find-feature explore-docs document-domain; do
   mkdir -p .agents/skills/$s
   curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
     -o ".agents/skills/$s/SKILL.md"
@@ -154,9 +154,9 @@ AGENTS.md line is only asking for politely.
 
 Only the delta from above.
 
-1. Add the provider key as a Devin secret (Settings → Secrets), named however `specky.toml` says —
-   `ANTHROPIC_API_KEY` by default. The blueprint references it as `$ANTHROPIC_API_KEY`; specky reads
-   it from the environment and never sees a value from the config file.
+1. Add the provider key as a Devin secret (Settings → Secrets). The name is up to you, as long as
+   `--api-key-env` below says the same; specky reads it from the environment and never sees a value
+   from the config file.
 2. Configure specky and install the hook in `maintenance`, and drop the `SPECKY_DISABLE_HOOK` line
    from `initialize`:
 
@@ -165,16 +165,18 @@ Only the delta from above.
      - name: "Set specky up"
        run: |
          git fetch --unshallow 2>/dev/null || true
-         specky init --yes --no-validate
+         specky init --provider openai-compatible --base-url https://api.anthropic.com/v1 \
+           --model claude-haiku-4-5 --api-key-env ANTHROPIC_API_KEY --no-validate
          specky install-git-hook
          specky index
    ```
 
-   `--yes` is what makes this possible: `specky init` is an interview, and a blueprint step has no
-   terminal — without it, `input()` raises `EOFError` a question or two in, after some answers have
-   been given and before anything is written. `--no-validate` skips the live provider call, which a
-   snapshot build shouldn't pay for. Pass `--provider`/`--model`/`--api-key-env` to write something
-   other than the default Anthropic config.
+   `specky init` is an interview, and a blueprint step has no terminal — without flags, `input()`
+   raises `EOFError` a question or two in, after some answers have been given and before anything
+   is written. Naming `--provider` answers it up front. It's an OpenAI-compatible API because
+   Devin has no headless CLI specky can run as its `agent` provider; Anthropic's endpoint is shown,
+   and DeepSeek, OpenRouter or any other works the same. `--no-validate` skips the live provider
+   call, which a snapshot build shouldn't pay for.
 3. Expect doc commits in Devin's branches, and tell your reviewers. They carry the
    `docs: sync specky docs [skip specky]` subject, so the hook, the docs-sync workflow and
    `specky check` all recognise them and leave them alone.

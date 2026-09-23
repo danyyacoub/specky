@@ -1,4 +1,4 @@
-"""AI provider abstraction: anthropic / openai-compatible / command.
+"""AI provider abstraction: agent / anthropic / openai-compatible / command.
 
 Providers are configured in specky.toml under an [ai] table and constructed via
 `load_provider`. Each provider exposes `generate(prompt, *, prefix, task) -> str`, where
@@ -32,13 +32,14 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import sqlite3
 import subprocess
 import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol
 
 from specky.db import connect
 
@@ -511,6 +512,72 @@ class ConfigError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class AgentCLI:
+    """A coding agent specky can run headless: prompt on stdin, answer on stdout.
+
+    `provider = "agent"` is `command` with the command line written for you — and, unlike a
+    hand-written one, with the model as a real setting, so `model` and `<task>_model` work. The
+    argv is `head + [model_flag, model] + tail`, because some CLIs (`codex exec -`) need the stdin
+    marker last.
+    """
+
+    label: str
+    head: tuple[str, ...]
+    model_flag: str = "--model"
+    tail: tuple[str, ...] = ()
+    # Env vars the agent sets for the commands it runs, so specky launched from inside a session
+    # (the setup skill, a terminal tab) can tell which agent that is.
+    env: tuple[str, ...] = ()
+
+    @property
+    def executable(self) -> str:
+        return self.head[0]
+
+    def argv(self, model: str = "") -> list[str]:
+        return [*self.head, *((self.model_flag, model) if model else ()), *self.tail]
+
+
+# Ordered by preference, for when no session says which agent is the current one.
+AGENTS: dict[str, AgentCLI] = {
+    "claude": AgentCLI("Claude Code", ("claude", "-p"), env=("CLAUDECODE",)),
+    "codex": AgentCLI(
+        "Codex", ("codex", "exec", "--skip-git-repo-check"), tail=("-",), env=("CODEX_SANDBOX",)
+    ),
+    "gemini": AgentCLI("Gemini CLI", ("gemini", "-p", ""), env=("GEMINI_CLI",)),
+    "opencode": AgentCLI("opencode", ("opencode", "run"), env=("OPENCODE",)),
+    "kiro": AgentCLI("Kiro", ("kiro-cli", "chat", "--no-interactive")),
+    "cursor": AgentCLI("Cursor Agent", ("cursor-agent", "-p")),
+}
+
+
+def current_agent(environ: Mapping[str, str] | None = None) -> str | None:
+    """The coding agent specky should run, or None if there's none on PATH.
+
+    The one whose session this is, when its env says so — its own marker, or the cross-agent
+    `AI_AGENT` (`claude-code_2-1-280_agent`) — else the first installed, in `AGENTS` order.
+    """
+    environ = os.environ if environ is None else environ
+    installed = [name for name, agent in AGENTS.items() if shutil.which(agent.executable)]
+    marker = environ.get("AI_AGENT", "").lower()
+    for name in installed:
+        if any(environ.get(var) for var in AGENTS[name].env) or (marker and marker.startswith(name)):
+            return name
+    return installed[0] if installed else None
+
+
+def agent_command(name: str, model: str = "") -> str:
+    """The shell command `provider = "agent"` runs, for `CommandProvider` and for display."""
+    if name not in AGENTS:
+        raise ConfigError(
+            f"[ai] agent = {name!r} isn't one specky knows — expected one of {', '.join(AGENTS)}, "
+            'or use provider = "command" with the command line spelled out'
+        )
+    return shlex.join(AGENTS[name].argv(model))
+
+
+
+
 # How many characters of cached responses to keep. The cache lives in the gitignored index and its
 # only job is to stop a re-run paying twice, so evicting the oldest entries costs at most a repeated
 # call — while *not* bounding it would let a backfill over a 10,000-commit history write hundreds
@@ -819,11 +886,15 @@ def load_provider(config: dict) -> Provider:
             api_key_env=config["api_key_env"],
             max_tokens=_max_tokens(config),
         )
+    if kind == "agent":
+        if not config.get("agent"):
+            raise ConfigError('[ai] provider="agent" requires \'agent\'')
+        return CommandProvider(command=agent_command(config["agent"], config.get("model", "")))
     if kind == "command":
         if not config.get("command"):
             raise ConfigError('[ai] provider="command" requires \'command\'')
         return CommandProvider(command=config["command"])
-    raise ConfigError(f"Unknown [ai] provider: {kind!r} (expected anthropic/openai-compatible/command)")
+    raise ConfigError(f"Unknown [ai] provider: {kind!r} (expected agent/anthropic/openai-compatible/command)")
 
 
 def _flag(config: dict, key: str, default: bool) -> bool:
@@ -843,6 +914,8 @@ def _model_label(config: dict) -> str:
     """
     if config.get("provider") == "command":
         return f"command:{config.get('command', '')}"
+    if config.get("provider") == "agent":
+        return f"agent:{config.get('agent', '')}:{config.get('model', '')}"
     return str(config.get("model", ""))
 
 

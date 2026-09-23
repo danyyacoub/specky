@@ -17,6 +17,12 @@ from specky.setup_wizard import InitOptions, run_init
 NO_VALIDATE = {"validate": False}
 
 
+@pytest.fixture(autouse=True)
+def _claude_is_the_current_agent(monkeypatch):
+    """Whatever this machine has on PATH, the tests see one agent: Claude Code."""
+    monkeypatch.setattr(setup_wizard, "current_agent", lambda: "claude")
+
+
 def _config(tmp_path, **options):
     """Run a non-interactive init and hand back the specky.toml it wrote."""
     path = tmp_path / "specky.toml"
@@ -31,23 +37,30 @@ def _never_asks(prompt: str) -> str:
 # --- the flags ---------------------------------------------------------------------------
 
 
-def test_yes_alone_writes_the_default_anthropic_config(tmp_path):
-    """`specky init --yes` is the one-liner a setup script wants: the same answers the first
-    prompt's default gives, with nothing to type."""
+def test_yes_alone_writes_the_current_agent_on_its_default_model(tmp_path):
+    """`specky init --yes` is the one-liner a setup script wants: the same answers the interview's
+    defaults give, with nothing to type."""
     body = _config(tmp_path, assume_yes=True, **NO_VALIDATE)
 
     assert '[ai]' in body
-    assert 'provider = "anthropic"' in body
-    assert f'model = "{setup_wizard.DEFAULT_MODEL}"' in body
-    assert f'api_key_env = "{setup_wizard.DEFAULT_API_KEY_ENV}"' in body
+    assert 'provider = "agent"' in body
+    assert 'agent = "claude"' in body
+    assert "model" not in body
+
+
+def test_yes_without_an_agent_names_the_way_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "current_agent", lambda: None)
+    with pytest.raises(ConfigError, match="--provider openai-compatible"):
+        _config(tmp_path, assume_yes=True, **NO_VALIDATE)
+    assert not (tmp_path / "specky.toml").exists()
 
 
 def test_naming_a_provider_is_enough_to_skip_the_interview(tmp_path):
     """`--provider` implies `--yes`: the interview's whole job is finding out which provider."""
-    assert InitOptions(provider="anthropic").non_interactive
-    body = _config(tmp_path, provider="anthropic", model="claude-opus-5", **NO_VALIDATE)
+    assert InitOptions(provider="agent").non_interactive
+    body = _config(tmp_path, provider="agent", model="opus", **NO_VALIDATE)
 
-    assert 'model = "claude-opus-5"' in body
+    assert 'model = "opus"' in body
 
 
 def test_an_openai_compatible_provider_needs_its_endpoint(tmp_path):
@@ -75,9 +88,12 @@ def test_a_complete_openai_compatible_provider_round_trips(tmp_path):
     assert 'api_key_env = "DEEPSEEK_API_KEY"' in body
 
 
-def test_a_command_provider_needs_a_command(tmp_path):
-    with pytest.raises(ConfigError, match="--command"):
-        _config(tmp_path, provider="command", **NO_VALIDATE)
+def test_the_retired_providers_are_not_offered(tmp_path):
+    """`anthropic` and `command` still load from a hand-written specky.toml, but init writes
+    only the agent or an OpenAI-compatible API."""
+    for kind in ("anthropic", "command"):
+        with pytest.raises(ConfigError, match="expected agent or openai-compatible"):
+            _config(tmp_path, provider=kind, **NO_VALIDATE)
 
 
 def test_no_validate_makes_no_provider_call(tmp_path, monkeypatch):
@@ -89,7 +105,7 @@ def test_no_validate_makes_no_provider_call(tmp_path, monkeypatch):
         lambda _config: pytest.fail("--no-validate still called the provider"),
     )
 
-    assert 'provider = "anthropic"' in _config(tmp_path, assume_yes=True, validate=False)
+    assert 'provider = "agent"' in _config(tmp_path, assume_yes=True, validate=False)
 
 
 def test_validation_happens_before_the_file_is_written(tmp_path, monkeypatch):
@@ -97,7 +113,7 @@ def test_validation_happens_before_the_file_is_written(tmp_path, monkeypatch):
 
     class Broken:
         def generate(self, _prompt, *, prefix: str = "", task: str = ""):
-            raise RuntimeError("ANTHROPIC_API_KEY is not set in the environment")
+            raise RuntimeError("claude exited 1")
 
     monkeypatch.setattr(setup_wizard, "load_provider", lambda _config: Broken())
 
@@ -194,7 +210,7 @@ def test_rerunning_init_keeps_the_tables_it_doesnt_own(tmp_path):
 
     body = path.read_text()
     before, after = tomllib.loads(_EXISTING), tomllib.loads(body)
-    assert after["ai"]["provider"] == "anthropic"
+    assert after["ai"]["provider"] == "agent"
     assert "base_url" not in after["ai"], "the old provider's fields outlived it"
     assert (after["serve"], after["skills"]) == (before["serve"], before["skills"])
     assert "# The viewer sits behind the team proxy.\n[serve]" in body
@@ -231,20 +247,56 @@ def test_a_table_init_would_mangle_stops_the_write(tmp_path):
 # --- the interview still works -------------------------------------------------------------
 
 
-def test_the_interview_is_still_the_default(tmp_path, monkeypatch):
-    """No options at all means ask, which is what a person at a terminal gets."""
+def _interview(tmp_path, monkeypatch, answers):
     monkeypatch.setattr(setup_wizard, "load_provider", lambda _config: _OkProvider())
-    answers = iter(["n", "anthropic", "claude-sonnet-5", "MY_KEY"])
+    replies = iter(answers)
+    printed: list[str] = []
+    run_init(tmp_path / "specky.toml", input_fn=lambda _p: next(replies), print_fn=printed.append)
+    return (tmp_path / "specky.toml").read_text(), printed
 
-    run_init(
-        tmp_path / "specky.toml",
-        input_fn=lambda _prompt: next(answers),
-        print_fn=lambda _msg: None,
-    )
 
-    body = (tmp_path / "specky.toml").read_text()
-    assert 'model = "claude-sonnet-5"' in body
-    assert 'api_key_env = "MY_KEY"' in body
+def test_the_interview_defaults_to_the_current_agent(tmp_path, monkeypatch):
+    """Enter, Enter: the agent on its own default model — no key to set up."""
+    body, _ = _interview(tmp_path, monkeypatch, ["", ""])
+
+    assert 'provider = "agent"' in body
+    assert 'agent = "claude"' in body
+    assert "model" not in body
+
+
+def test_the_interview_takes_an_explicit_model(tmp_path, monkeypatch):
+    body, _ = _interview(tmp_path, monkeypatch, ["y", "opus"])
+    assert 'model = "opus"' in body
+
+
+def _openai_answers():
+    return ["https://api.deepseek.com", "deepseek-chat", "DEEPSEEK_API_KEY"]
+
+
+def test_declining_the_agent_asks_for_an_openai_compatible_api(tmp_path, monkeypatch):
+    body, _ = _interview(tmp_path, monkeypatch, ["n", *_openai_answers()])
+
+    assert 'provider = "openai-compatible"' in body
+    assert 'model = "deepseek-chat"' in body
+
+
+def test_without_an_agent_the_interview_goes_straight_to_the_api(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup_wizard, "current_agent", lambda: None)
+    body, printed = _interview(tmp_path, monkeypatch, _openai_answers())
+
+    assert 'provider = "openai-compatible"' in body
+    assert any("No coding agent found" in line for line in printed)
+
+
+def test_an_agent_can_be_named_by_flag(tmp_path):
+    body = _config(tmp_path, provider="agent", agent="opencode", **NO_VALIDATE)
+    assert 'agent = "opencode"' in body
+
+
+def test_an_unknown_agent_is_refused_before_the_write(tmp_path):
+    with pytest.raises(ConfigError, match="isn't one specky knows"):
+        _config(tmp_path, provider="agent", agent="hal9000", **NO_VALIDATE)
+    assert not (tmp_path / "specky.toml").exists()
 
 
 class _OkProvider:
@@ -271,7 +323,7 @@ def test_init_without_a_terminal_says_so(tmp_repo, monkeypatch):
 
 def test_init_flags_reach_the_wizard(tmp_repo, monkeypatch):
     """The parser's names and `InitOptions`' fields drift apart silently otherwise — `--command`
-    lands on `provider_command` to keep it off argparse's own `command` dest."""
+    """
     monkeypatch.chdir(tmp_repo)
     captured: dict = {}
     # The handler imports `run_init` inside its body, so patching the module's attribute is enough.
@@ -285,9 +337,11 @@ def test_init_flags_reach_the_wizard(tmp_repo, monkeypatch):
         [
             "init",
             "--provider",
-            "command",
-            "--command",
-            "claude -p",
+            "agent",
+            "--agent",
+            "codex",
+            "--model",
+            "gpt-5",
             "--docs-root",
             "documentation",
             "--no-validate",
@@ -297,7 +351,7 @@ def test_init_flags_reach_the_wizard(tmp_repo, monkeypatch):
 
     assert captured["path"] == tmp_repo / "specky.toml"
     options = captured["options"]
-    assert (options.provider, options.command) == ("command", "claude -p")
+    assert (options.provider, options.agent, options.model) == ("agent", "codex", "gpt-5")
     assert (options.docs_root, options.validate) == ("documentation", False)
 
 

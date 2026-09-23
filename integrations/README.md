@@ -1,8 +1,9 @@
 # Set up specky with your AI agent
 
 specky gives an agent two things: an MCP server that runs read-only queries over the docs index, and
-three skills. `find-feature` looks up what a feature is meant to do, `explore-docs` answers "how
-does X work?" from the docs, and `document-domain` writes the docs. Everything else is plain CLI and
+four skills. `setup` configures specky in a repo, `find-feature` looks up what a feature is meant
+to do, `explore-docs` answers "how does X work?" from the docs, and `document-domain` writes the
+docs. Everything else is plain CLI and
 works the same with any agent: the git hooks, `specky index`, `render-html`, `serve` and `check`.
 
 Every agent starts the same way. Install the CLI, then in the repo you want documented:
@@ -30,7 +31,8 @@ skills on a lower-cost model, set `[skills] model = "haiku"` in `specky.toml`.
 ## Other agents
 
 These agents have no plugin, so you add the MCP server and copy in the skills yourself. Each guide
-has the exact config and commands.
+has the exact config and commands. Once the `setup` skill is copied in, asking the agent to "set up
+specky" runs the steps above for you, as `/specky:setup` does in Claude Code.
 
 | Agent | MCP server config | Skills folder | Lower-cost model for lookups | Guide |
 |---|---|---|---|---|

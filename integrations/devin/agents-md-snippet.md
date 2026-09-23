@@ -37,3 +37,6 @@ no doc.
   `specky index`.
 
 To document a domain from scratch, follow the procedure in `.devin/document-domain.md`.
+If `specky doctor` reports specky isn't configured here, or you're asked to set it up or change its
+provider, follow the `setup` skill (`.agents/skills/setup/SKILL.md`) — its Devin section says what
+belongs in the blueprint rather than in this session.

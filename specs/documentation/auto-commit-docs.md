@@ -55,10 +55,11 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
 
 ## How It Works
 
-1. **Configure AI provider** — Run `specky init` and choose your AI backend (Anthropic,
-   OpenAI-compatible — e.g. DeepSeek — or a local command). Specky validates the choice with a test
+1. **Configure AI provider** — Run `specky init` and choose your AI backend (the coding
+   agent you already use, on its default or a named model, or an OpenAI-compatible API such as
+   DeepSeek). Specky validates the choice with a test
    call before saving it to specky.toml. Every answer the interview asks for is also a flag
-   (`--yes` for the defaults, `--provider`/`--model`/`--api-key-env`/`--base-url`/`--command`,
+   (`--yes` for the defaults, `--provider`/`--agent`/`--model`/`--api-key-env`/`--base-url`,
    `--docs-root`, `--no-validate` to skip the test call), because a setup script has no terminal to
    answer on: without them `input()` raises `EOFError` mid-interview, after some answers have been
    given and before anything has been written. A flag a chosen provider needs and didn't get is an
@@ -222,4 +223,4 @@ flowchart TD
 | Malformed `post-rewrite` stdin (blank, one field, a short token) | `--rewritten` runs | The line is skipped rather than raising in the middle of somebody's rebase |
 | `specky init` is run with Anthropic selected | Provider is configured | A live API call is made; if successful, config is written; if it fails, setup aborts and the user sees the error |
 | The hooks are installed but `specky.toml` is missing or invalid | A commit is made | Commit succeeds; no summary is written; the reason is printed |
-| `specky init` is run with a local command provider | Provider is configured and validated | The user is prompted for a shell command; specky pipes a test prompt to it and verifies non-empty output before saving |
+| `specky init` is run with a coding agent installed | Provider is configured and validated | The agent is offered first and a model asked for (blank keeps its default); specky pipes a test prompt to it and verifies the answer before saving |

@@ -63,6 +63,58 @@ def test_command_provider_requires_a_command():
         load_provider({"provider": "command"})
 
 
+def test_an_agent_provider_is_the_agents_headless_command():
+    """`provider = "agent"` is `command` with the command line written for it."""
+    provider = load_provider({"provider": "agent", "agent": "claude", "model": "opus"})
+    assert isinstance(provider, CommandProvider)
+    assert provider.command == "claude -p --model opus"
+
+
+def test_an_agent_without_a_model_keeps_its_own_default():
+    provider = load_provider({"provider": "agent", "agent": "claude"})
+    assert provider.command == "claude -p"
+
+
+def test_the_stdin_marker_stays_last():
+    """`codex exec -` reads stdin only when `-` is the final argument."""
+    provider = load_provider({"provider": "agent", "agent": "codex", "model": "gpt-5"})
+    assert provider.command.endswith("--model gpt-5 -")
+
+
+def test_an_unknown_agent_is_a_config_error():
+    with pytest.raises(ConfigError, match="isn't one specky knows"):
+        load_provider({"provider": "agent", "agent": "hal9000"})
+    with pytest.raises(ConfigError, match="requires 'agent'"):
+        load_provider({"provider": "agent"})
+
+
+def test_an_agent_provider_can_route_task_models(tmp_path):
+    """Unlike a hand-written command, an agent's model is a real setting, so it can be swapped."""
+    (tmp_path / "specky.toml").write_text(
+        '[ai]\nprovider = "agent"\nagent = "claude"\nmodel = "haiku"\n'
+        'document_model = "opus"\ncache = false\n'
+    )
+    router = load_provider_from_toml(tmp_path / "specky.toml")
+    assert unwrap(router).command == "claude -p --model haiku"
+    assert router.for_task("document").command == "claude -p --model opus"
+
+
+def test_the_current_agent_is_the_one_whose_session_this_is(monkeypatch):
+    monkeypatch.setattr(ai_provider.shutil, "which", lambda exe: f"/bin/{exe}")
+    assert ai_provider.current_agent({}) == "claude", "none running: first installed"
+    assert ai_provider.current_agent({"OPENCODE": "1"}) == "opencode"
+    assert ai_provider.current_agent({"AI_AGENT": "gemini-cli_0-30_agent"}) == "gemini"
+
+
+def test_a_running_agent_that_isnt_on_path_is_skipped(monkeypatch):
+    monkeypatch.setattr(
+        ai_provider.shutil, "which", lambda exe: "/bin/kiro-cli" if exe == "kiro-cli" else None
+    )
+    assert ai_provider.current_agent({"CLAUDECODE": "1"}) == "kiro"
+    monkeypatch.setattr(ai_provider.shutil, "which", lambda _exe: None)
+    assert ai_provider.current_agent({"CLAUDECODE": "1"}) is None
+
+
 def test_unknown_provider():
     with pytest.raises(ConfigError, match="Unknown"):
         load_provider({"provider": "telepathy"})

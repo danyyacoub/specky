@@ -84,8 +84,9 @@ a PR's doc changes, and scaffold tests from a doc's acceptance-test table.
 
 1. **Docs live in your repo as markdown**: `specs/<domain>/<topic>.md` for features and workflows,
    and `specs/history/<sha>.md` for commits. You review and version them like code.
-2. **Writing calls your AI provider.** Choose Anthropic, any OpenAI-compatible endpoint, or a
-   local command such as `claude -p`. Only these commands call it: the commit hooks, `sync`,
+2. **Writing calls your AI provider.** Either the coding agent you already use (Claude Code,
+   Codex, Gemini CLI, opencode, Kiro or Cursor Agent), on its default model or one you name, or
+   any OpenAI-compatible endpoint. Only these commands call it: the commit hooks, `sync`,
    `document`, `tag` and the Spec Assistant. They send the diff, code or docs they are working on.
    Keys stay in environment variables.
 3. **Reading is offline.** `specky index` builds a SQLite full-text index of the docs and git log

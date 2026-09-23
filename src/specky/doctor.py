@@ -177,7 +177,14 @@ def _config(repo_root: Path) -> list[Check]:
 
     path = repo_root / "specky.toml"
     if not path.exists():
-        return [Check("config", WARN, f"{path.name} missing — run `specky init`")]
+        return [
+            Check(
+                "config",
+                WARN,
+                f"{path.name} missing — run `specky init` (or `specky init --provider agent` to "
+                "use your coding agent without the interview)",
+            )
+        ]
 
     try:
         with path.open("rb") as f:

@@ -36,7 +36,7 @@ def _init(args: argparse.Namespace) -> None:
         model=args.model,
         api_key_env=args.api_key_env,
         base_url=args.base_url,
-        command=args.provider_command,
+        agent=args.agent,
         docs_root=args.docs_root,
         assume_yes=args.yes,
         validate=not args.no_validate,
@@ -46,8 +46,8 @@ def _init(args: argparse.Namespace) -> None:
     if not options.non_interactive and not sys.stdin.isatty():
         raise ValueError(
             "stdin is not a terminal, so there's nobody to interview. Pass --yes to take the "
-            "defaults, or --provider (with --model/--api-key-env/--base-url/--command) to answer "
-            "up front."
+            "defaults, or --provider (with --agent/--model/--api-key-env/--base-url) to answer up "
+            "front."
         )
     # The repo root, not the cwd: specky.toml is looked for beside `.git` by every reader of it, so
     # `specky init` run from a subdirectory has to write it there too.
@@ -311,8 +311,26 @@ def _commit_info(args: argparse.Namespace) -> None:
         print(f"{doc['path']}  —  {doc['title']} ({doc['type']})")
 
 
+# `specky --help` is the first thing an agent with no instructions runs, so it says how a repo
+# gets set up — the same three commands as the `setup` skill, in the order it runs them.
+GETTING_STARTED = """\
+setting up a repo:
+  specky init --provider agent   use your coding agent (its own model; --model NAME to pin one)
+  specky install-git-hook        document every commit from now on
+  specky index                   make the docs searchable (offline, no AI call)
+
+`specky doctor` shows which of these a repo still needs. An agent with specky's
+`setup` skill can run all of it for you.
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="specky")
+    parser = argparse.ArgumentParser(
+        prog="specky",
+        description="Functional docs for your repo, kept current from its git history.",
+        epilog=GETTING_STARTED,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     # The first thing a bug report needs, and the only way to tell which of two installs (the
     # global tool, the plugin's own copy) a hook or an agent actually ran.
     parser.add_argument("--version", action="version", version=f"specky {__version__}")
@@ -333,22 +351,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     init_cmd.add_argument(
         "--provider",
-        choices=["anthropic", "openai-compatible", "command"],
+        choices=["agent", "openai-compatible"],
         help="Answer the provider question up front (implies --yes for the rest)",
     )
-    init_cmd.add_argument("--model", help="Model name, for anthropic and openai-compatible")
+    from specky.ai_provider import AGENTS
+
+    init_cmd.add_argument(
+        "--agent",
+        choices=list(AGENTS),
+        help="Coding agent to run headless (default: the current one), for --provider agent",
+    )
+    init_cmd.add_argument(
+        "--model", help="Model name; for --provider agent, omit to keep the agent's own default"
+    )
     init_cmd.add_argument(
         "--api-key-env",
         metavar="VAR",
         help="Name of the env var holding the API key — never the key itself",
     )
     init_cmd.add_argument("--base-url", help="Endpoint, for --provider openai-compatible")
-    init_cmd.add_argument(
-        "--command",
-        dest="provider_command",
-        metavar="CMD",
-        help="Command reading the prompt on stdin, for --provider command",
-    )
     init_cmd.add_argument(
         "--docs-root",
         metavar="NAME",

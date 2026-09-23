@@ -10,8 +10,11 @@ authored: human
 
 `specky init` picks an AI provider, proves it works with one live call, and writes the result to
 `specky.toml`. It is the only command that writes that file, and it makes sure `specky.toml` is
-gitignored. The file names the *environment variable* holding the API key, never a key, but which
-provider a developer uses is per-machine.
+gitignored. There are two choices: the coding agent the developer already uses (Claude Code, Codex,
+Gemini CLI, opencode, Kiro or Cursor Agent), run headless on its own login with no API key, or any
+OpenAI-compatible API. For an agent the model is optional: named, it's pinned; left out, the agent
+keeps its own default. An API config names the *environment variable* holding the key, never a key.
+Either way, which provider a developer uses is per-machine.
 
 Interactive by default, because the interview is the friendliest way to hand someone a working
 provider config. Every answer it asks for is also a flag, because anywhere specky is installed by a
@@ -20,8 +23,8 @@ terminal to answer on.
 
 ## How It Works
 
-1. **Decide whether anyone is being asked** — `--yes` means "the defaults are fine", the same choice
-   the first prompt offers. Naming `--provider` also implies non-interactive: the interview exists to
+1. **Decide whether anyone is being asked** — `--yes` means "the defaults are fine": the current
+   coding agent on its own default model. Naming `--provider` also implies non-interactive: the interview exists to
    find out which provider, and a caller that already said has stopped having a question to answer.
    There is no partial interview — either every answer comes from flags and defaults, or every answer
    comes from the terminal.
@@ -29,30 +32,35 @@ terminal to answer on.
    naming `--yes` and `--provider` if it isn't a terminal. This is the whole reason the flags exist:
    `input()` on a closed stdin raises `EOFError` *mid-interview*, after some questions have been
    answered and before anything has been written, so the failure names neither the cause nor a fix.
-3. **Interview, or build the config from flags** — Interactively, the first prompt offers Anthropic
-   with the default model; declining it asks which of `anthropic` / `openai-compatible` / `command`,
-   then that provider's own fields. From flags, an unnamed provider defaults to `anthropic` with the
-   default model and `ANTHROPIC_API_KEY`.
-4. **Require a provider's fields before writing, naming all of them at once** — `openai-compatible`
-   needs `--base-url`, `--model` and `--api-key-env`; `command` needs `--command`. A missing one
-   raises listing *every* missing flag, so a scripted setup isn't fixed one round-trip at a time. It
-   happens before the file is written, so the failure isn't a `specky.toml` that only breaks on the
-   first commit.
-5. **Only ask about the docs root when there's a reason to** — The question appears when
+3. **Find the current agent** — The agent whose session this is, when its environment says so
+   (its own marker such as `CLAUDECODE`, or the shared `AI_AGENT`), provided its CLI is on `PATH`;
+   otherwise the first agent installed on `PATH`, in a fixed preference order. `--agent` names one
+   explicitly.
+4. **Interview, or build the config from flags** — Interactively, the first prompt offers the
+   current agent; accepting asks for a model, where a blank answer writes no `model` key so the
+   agent keeps its own default. Declining, or having no agent at all, asks for the OpenAI-compatible
+   base URL, model and key variable. From flags, an unnamed provider means the current agent.
+5. **Require a provider's fields before writing, naming all of them at once** — `agent` needs an
+   agent: the current one, or a known `--agent` name. `openai-compatible` needs `--base-url`,
+   `--model` and `--api-key-env`, and a missing one raises listing *every* missing flag, so a scripted
+   setup isn't fixed one round-trip at a time. It happens before the file is written, so the failure
+   isn't a `specky.toml` that only breaks on the first commit. `anthropic` and `command` configs
+   still load from a hand-written `specky.toml`, but `init` no longer writes them.
+6. **Only ask about the docs root when there's a reason to** — The question appears when
    `specs/` already holds files specky can't have written (any non-markdown file: a `specs/openapi.yaml`,
    a `specs/src/lib.rs`), because generating into that directory mixes two unrelated trees together
    and no command unpicks it afterwards. On the overwhelming majority of repos, where `specs/` is
    free, this is silent. Non-interactively the collision is reported and *accepted* — refusing to
    write a config would be worse than the mixed tree — with `--docs-root` named as the fix.
-6. **Reject a docs root that escapes the repo** — An absolute path or one containing `..` raises. The
+7. **Reject a docs root that escapes the repo** — An absolute path or one containing `..` raises. The
    absolute check reads the raw answer, not the tidied one, because stripping the slashes that turn
    `documentation/` into `documentation` would also turn `/etc/specs` into the innocuous-looking
    relative `etc/specs`.
-7. **Validate before writing** — Load the provider through the same `load_provider()` generation
+8. **Validate before writing** — Load the provider through the same `load_provider()` generation
    uses and ask it to reply `ok`, so the credential is proven by the command whose job is to prove it
    rather than by the first commit. `--no-validate` skips it: a snapshot build that bakes the config
    in has no key in its environment yet and shouldn't fail — or bill — for that.
-8. **Write, and say what CI still needs** — Render the `[ai]` and `[docs]` tables (`[docs]` always,
+9. **Write, and say what CI still needs** — Render the `[ai]` and `[docs]` tables (`[docs]` always,
    spelling out the default root too). They are the only tables `init` owns: in an existing
    `specky.toml` they replace the old ones whole, and every other table (`[serve]`, `[skills]`, …)
    is kept as written, comments included, with a line naming what was kept. A comment directly
@@ -61,7 +69,7 @@ terminal to answer on.
    and writes nothing. Because `specky.toml` is gitignored, a chosen root is also printed as the
    `[tool.specky.docs]` block to commit to `pyproject.toml`: CI never sees the gitignored file, and
    a `specky check` pointed at the wrong tree finds no docs and reports no coverage.
-9. **Keep specky.toml out of commits** — Unless git already ignores it, append `specky.toml` to the
+10. **Keep specky.toml out of commits** — Unless git already ignores it, append `specky.toml` to the
    repo's `.gitignore` (creating the file if needed) and say so in one line. A repo adopting specky
    has no rule for it yet, so without this the first `git add -A` after `init` would commit one
    developer's provider choice for everyone. A `specky.toml` that is already *tracked* is left
@@ -73,8 +81,8 @@ flowchart TD
     A["specky init"] --> B{"--yes or --provider?"}
     B -->|No| C{"stdin a terminal?"}
     C -->|No| D["error: nobody to interview,<br/>names --yes / --provider"]
-    C -->|Yes| E["Interview: provider,<br/>then its fields"]
-    B -->|Yes| F["Build [ai] from flags,<br/>defaults for the rest"]
+    C -->|Yes| E["Interview: current agent and model,<br/>or an OpenAI-compatible API"]
+    B -->|Yes| F["Build [ai] from flags,<br/>the current agent by default"]
     F --> G{"Provider's required<br/>flags all present?"}
     G -->|No| H["error naming every<br/>missing flag at once"]
     E --> I{"specs/ holds foreign files?"}
@@ -100,12 +108,12 @@ flowchart TD
 
 | Flag | Purpose |
 |------|---------|
-| `--yes` | Take the defaults and ask nothing — Anthropic, the default model, `ANTHROPIC_API_KEY` |
-| `--provider` | `anthropic`, `openai-compatible` or `command`. Implies non-interactive |
-| `--model` | Model name. Defaults to the built-in one for `anthropic`; required for `openai-compatible` |
+| `--yes` | Take the defaults and ask nothing — the current coding agent on its own default model |
+| `--provider` | `agent` or `openai-compatible`. Implies non-interactive |
+| `--agent` | Which coding agent, for `agent`: `claude`, `codex`, `gemini`, `opencode`, `kiro` or `cursor`. Defaults to the current one |
+| `--model` | Model name. Optional for `agent` (left out, the agent keeps its default); required for `openai-compatible` |
 | `--api-key-env` | *Name* of the environment variable holding the key, never the key itself |
 | `--base-url` | Endpoint for `openai-compatible` (e.g. `https://api.deepseek.com`) |
-| `--command` | Shell command for the `command` provider: reads the prompt on stdin, writes the completion to stdout |
 | `--docs-root` | Directory to generate docs into, instead of `specs/`. Must be inside the repo |
 | `--no-validate` | Skip the live provider call, for a build with no credential in its environment yet |
 
@@ -113,13 +121,17 @@ flowchart TD
 
 | Condition | Behavior |
 |-----------|----------|
-| No flags, on a terminal | The interview runs; the first prompt offers the default Anthropic provider |
+| No flags, on a terminal | The interview runs; the first prompt offers the current coding agent |
+| The agent is accepted and the model left blank | `[ai]` has `provider = "agent"` and the agent, with no `model` key |
+| The agent is declined, or none is installed | The OpenAI-compatible base URL, model and key variable are asked for |
 | No flags, stdin is not a terminal | Error naming `--yes` and `--provider`; nothing written, no `EOFError` from inside the interview |
-| `--yes` alone | Anthropic, default model, `ANTHROPIC_API_KEY`; validated and written with no prompt |
+| `--yes` alone | The current agent on its default model; validated and written with no prompt |
+| `--yes` with no coding agent on `PATH` | `ConfigError` naming the `--provider openai-compatible` flags; no file written |
 | `--provider` given without `--yes` | Still fully non-interactive — no remaining question is asked from the terminal |
 | `--provider openai-compatible` missing some of `--base-url` / `--model` / `--api-key-env` | One error listing *all* the missing flags; no file written |
-| `--provider command` without `--command` | Error naming `--command`; no file written |
-| A provider name that isn't one of the three | Error quoting what was passed |
+| `--agent` names an agent specky doesn't know | `ConfigError` listing the known ones; no file written |
+| `--provider anthropic` or `--provider command` | Refused; `init` writes only `agent` or `openai-compatible` |
+| A provider name that isn't one of the two | Error quoting what was passed |
 | `specs/` is free | No docs-root question; `[docs]` records `root = "specs"` |
 | `specs/` holds non-markdown files, interactively | The colliding files are named and another root is asked for |
 | The answer is empty or `specs` again | `specs/` is kept, with a line saying specky's docs will sit alongside what's there |
@@ -138,6 +150,8 @@ flowchart TD
 
 | Situation | What happens | Why |
 |---|---|---|
+| Several agents are installed | The one whose session this is wins; outside any session, the first in preference order | An agent that is running `specky init` is the one the developer is using, and the preference order only breaks a tie nothing else can |
+| An agent's session marker is set but its CLI isn't on `PATH` | That agent is skipped | A config naming a command that can't run would only fail at the first commit |
 | Neither `--yes` nor `--provider`, and stdin isn't a terminal | It errors naming both flags, before anything is written | `input()` on a closed stdin raises `EOFError` *mid-interview*, naming neither the cause nor a fix — this check is the whole reason those flags exist |
 | `--provider` is given without `--yes` | The run is fully non-interactive anyway | The interview exists to find out which provider; a caller who already said has stopped having a question to answer. There is no partial interview |
 | `openai-compatible` is named with some of its fields missing | One error listing *every* missing flag | A scripted setup shouldn't be fixed one round-trip at a time — and it happens before the write, so the failure isn't a `specky.toml` that only breaks on the first commit |
@@ -159,11 +173,16 @@ flowchart TD
 
 | Given | When | Then |
 |-------|------|------|
-| A repo with no `specky.toml` | Run `init` with `--yes` | `[ai]` names `anthropic`, the default model and `ANTHROPIC_API_KEY`; no question is asked |
-| The same | Run `init --provider anthropic` with no `--yes` | It is still non-interactive — the interview's input function is never called |
+| A repo with no `specky.toml` and Claude Code as the current agent | Run `init` with `--yes` | `[ai]` names `agent` and `claude` with no `model`; no question is asked |
+| The same | Run `init --provider agent --model opus` with no `--yes` | It is still non-interactive, and `model = "opus"` is written |
+| No coding agent on `PATH` | Run `init --yes` | `ConfigError` naming `--provider openai-compatible`; `specky.toml` does not exist afterwards |
+| The same, interactively | Run `init` | It goes straight to the OpenAI-compatible questions, saying no agent was found |
+| The interview, with Claude Code current | Answer Enter, then `opus` | `[ai]` names `agent`, `claude` and `model = "opus"` |
+| The interview | Decline the agent, then give a base URL, model and key variable | `[ai]` names `openai-compatible` with those three |
 | `--provider openai-compatible` and only `--model` | Run `init` | The error names both `--base-url` and `--api-key-env`; `specky.toml` does not exist afterwards |
 | `--provider openai-compatible` with all three fields | Run `init` | The written file round-trips: provider, base URL, model and key env var all present |
-| `--provider command` with no `--command` | Run `init` | The error names `--command` |
+| `--provider agent --agent hal9000` | Run `init` | `ConfigError` saying it isn't an agent specky knows; nothing written |
+| `--provider anthropic` or `--provider command` | Run `init` | `ConfigError` saying the choices are `agent` or `openai-compatible` |
 | `--no-validate` and a provider that would fail | Run `init` | No provider is constructed, nothing is generated, and the file is written |
 | A provider whose `generate` raises | Run `init` without `--no-validate` | The error propagates and no file is written |
 | `--docs-root documentation/` | Run `init` | The file contains a `[docs]` table with `root = "documentation"` |
@@ -175,6 +194,6 @@ flowchart TD
 | `.gitignore` is `*.toml` | Run `init --yes` | `.gitignore` is unchanged and nothing is printed about it |
 | `specky.toml` is committed | Run `init --yes` | No `.gitignore` is created |
 | Any flag added to `init` | Compare against `known_flags()` | It is listed, so `generator.ungrounded_flags` doesn't report a doc that mentions it as invented |
-| `specky.toml` holds an openai-compatible `[ai]`, `[docs]`, a commented `[serve]` and `[skills]` | Run `init --yes` | `[ai]` is Anthropic with no `base_url`; `[serve]` and `[skills]` parse as before; the comment is still above `[serve]`; a line names both kept tables |
+| `specky.toml` holds an openai-compatible `[ai]`, `[docs]`, a commented `[serve]` and `[skills]` | Run `init --yes` | `[ai]` is the agent with no `base_url`; `[serve]` and `[skills]` parse as before; the comment is still above `[serve]`; a line names both kept tables |
 | `specky.toml` isn't valid TOML | Run `init` | `ConfigError` saying so; no question is asked, no provider is called, and the file is unchanged |
 | `[serve]` holds a multi-line string with a line reading `[ai]` | Run `init --yes` | `ConfigError`; the file is unchanged |

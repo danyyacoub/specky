@@ -1,7 +1,7 @@
 # Kiro integration
 
 specky needs two things from any agent: the MCP server (read-only queries over the index) and its
-skills (`find-feature`, `explore-docs`, `document-domain`). Everything else — the git hook,
+skills (`setup`, `find-feature`, `explore-docs`, `document-domain`). Everything else — the git hook,
 `specky index`, `render-html`, `serve` — is plain CLI and identical everywhere.
 
 ## MCP server
@@ -43,7 +43,7 @@ Kiro follows the same open Agent Skills standard as Claude Code's `SKILL.md`, so
 skills in as they are:
 
 ```bash
-for s in find-feature explore-docs document-domain; do
+for s in setup find-feature explore-docs document-domain; do
   mkdir -p .kiro/skills/$s
   curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
     -o ".kiro/skills/$s/SKILL.md"

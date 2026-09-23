@@ -17,11 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from specky.ai_provider import ConfigError, load_provider
+from specky.ai_provider import AGENTS, ConfigError, agent_command, current_agent, load_provider
 from specky.paths import DEFAULT_DOCS_ROOT
-
-DEFAULT_MODEL = "claude-haiku-4-5"
-DEFAULT_API_KEY_ENV = "ANTHROPIC_API_KEY"
 
 # How many of the files already living in the docs root get named when reporting a collision.
 CONFLICT_LIST_LIMIT = 5
@@ -38,8 +35,8 @@ _TABLE_HEADER = re.compile(r"^\s*\[\[?([^\[\]]+)\]\]?\s*(?:#.*)?$")
 class InitOptions:
     """Answers `run_init` would otherwise have asked for, supplied by the caller.
 
-    `assume_yes` on its own means "the defaults are fine" — the same choice the first prompt
-    offers — so `specky init --yes` is the one-liner a setup script wants. Naming a `provider`
+    `assume_yes` on its own means "the defaults are fine" — the current coding agent on its own
+    default model — so `specky init --yes` is the one-liner a setup script wants. Naming a `provider`
     also implies non-interactive: the interview exists to find out which provider, and a caller
     that already said stops having a question to answer.
     """
@@ -48,7 +45,7 @@ class InitOptions:
     model: str | None = None
     api_key_env: str | None = None
     base_url: str | None = None
-    command: str | None = None
+    agent: str | None = None
     docs_root: str | None = None
     assume_yes: bool = False
     # A live provider call is the point of `init` for a human — it's how they find out the key
@@ -222,13 +219,16 @@ def _config_from_options(options: InitOptions) -> dict:
     written, so a scripted setup fails on the flag it's missing rather than writing a specky.toml
     that only breaks on the first commit.
     """
-    kind = options.provider or "anthropic"
-    if kind == "anthropic":
-        return {
-            "provider": "anthropic",
-            "model": options.model or DEFAULT_MODEL,
-            "api_key_env": options.api_key_env or DEFAULT_API_KEY_ENV,
-        }
+    kind = options.provider or "agent"
+    if kind == "agent":
+        agent = options.agent or current_agent()
+        if not agent:
+            raise ConfigError(
+                f"no coding agent found on PATH ({', '.join(AGENTS)}). Install one, or pass "
+                "--provider openai-compatible --base-url URL --model NAME --api-key-env VAR"
+            )
+        agent_command(agent)  # rejects an unknown name before anything is written
+        return _agent_config(agent, options.model or "")
     if kind == "openai-compatible":
         required = {
             "--base-url": options.base_url,
@@ -243,11 +243,7 @@ def _config_from_options(options: InitOptions) -> dict:
             "model": options.model,
             "api_key_env": options.api_key_env,
         }
-    if kind == "command":
-        if not options.command:
-            raise ConfigError("provider 'command' needs --command")
-        return {"provider": "command", "command": options.command}
-    raise ConfigError(f"Unknown provider: {kind!r}")
+    raise ConfigError(f"Unknown provider: {kind!r} (expected agent or openai-compatible)")
 
 
 def _docs_root_from_options(
@@ -284,40 +280,41 @@ def run_init(
         docs_root = _docs_root_from_options(config_path.parent, options, print_fn)
         return _finish_init(config_path, config, docs_root, existing, options.validate, print_fn)
 
-    use_default = input_fn(f"Use the default Anthropic provider ({DEFAULT_MODEL})? [Y/n] ").strip().lower()
-
-    if use_default in ("", "y", "yes"):
-        config = {"provider": "anthropic", "model": DEFAULT_MODEL, "api_key_env": DEFAULT_API_KEY_ENV}
-    else:
-        kind = input_fn("Provider (anthropic/openai-compatible/command): ").strip()
-        if kind == "anthropic":
-            model = input_fn(f"Model [{DEFAULT_MODEL}]: ").strip() or DEFAULT_MODEL
-            api_key_env = (
-                input_fn(f"Env var holding the API key [{DEFAULT_API_KEY_ENV}]: ").strip()
-                or DEFAULT_API_KEY_ENV
-            )
-            config = {"provider": "anthropic", "model": model, "api_key_env": api_key_env}
-        elif kind == "openai-compatible":
-            config = {
-                "provider": "openai-compatible",
-                "base_url": input_fn("Base URL (e.g. https://api.deepseek.com): ").strip(),
-                "model": input_fn("Model (e.g. deepseek-chat): ").strip(),
-                "api_key_env": input_fn("Env var holding the API key (e.g. DEEPSEEK_API_KEY): ").strip(),
-            }
-        elif kind == "command":
-            config = {
-                "provider": "command",
-                "command": input_fn(
-                    "Command (reads the prompt on stdin, writes the completion to stdout): "
-                ).strip(),
-            }
-        else:
-            raise ConfigError(f"Unknown provider: {kind!r}")
+    config = _interview_provider(input_fn, print_fn)
 
     # Asked before the live call, so the whole interview happens up front rather than either side
     # of a network wait.
     docs_root = _choose_docs_root(config_path.parent, input_fn, print_fn)
     return _finish_init(config_path, config, docs_root, existing, options.validate, print_fn)
+
+
+def _agent_config(agent: str, model: str) -> dict:
+    # No `model` key at all for the agent's own default, rather than an empty one: the agent then
+    # keeps following whatever its own settings say.
+    return {"provider": "agent", "agent": agent, **({"model": model} if model else {})}
+
+
+def _interview_provider(input_fn: Callable[[str], str], print_fn: Callable[[str], None]) -> dict:
+    """The current coding agent, or an OpenAI-compatible API when there's none or it's declined.
+
+    The agent comes first: it's logged in and paid for already, so it needs no key and no endpoint.
+    """
+    agent = current_agent()
+    if agent:
+        label = AGENTS[agent].label
+        use = input_fn(f"Use your coding agent, {label} ({agent})? [Y/n] ").strip().lower()
+        if use in ("", "y", "yes"):
+            model = input_fn(f"Model (blank for {label}'s own default): ").strip()
+            return _agent_config(agent, model)
+    else:
+        print_fn(f"No coding agent found on PATH ({', '.join(AGENTS)}), so specky needs an API.")
+    print_fn("OpenAI-compatible API:")
+    return {
+        "provider": "openai-compatible",
+        "base_url": input_fn("Base URL (e.g. https://api.deepseek.com): ").strip(),
+        "model": input_fn("Model (e.g. deepseek-chat): ").strip(),
+        "api_key_env": input_fn("Env var holding the API key (e.g. DEEPSEEK_API_KEY): ").strip(),
+    }
 
 
 def _ensure_ignored(config_path: Path, print_fn: Callable[[str], None]) -> None:
