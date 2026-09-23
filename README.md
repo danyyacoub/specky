@@ -49,6 +49,9 @@ stale-doc badges. Its home page shows recent changes.
 `specky serve` adds a chat panel to the site. It answers from the docs and cites them. It can also
 draft a spec change step by step: scope, impact, acceptance tests, then the final text.
 
+To deploy it for others, set `SPECKY_AUTH_USERNAME` and `SPECKY_AUTH_PASSWORD` in the server's
+environment. Every page and API call then asks for that login, so put the server behind HTTPS.
+
 ![The Spec Assistant answering a question][shot-assistant]
 
 ### A CI gate against doc drift

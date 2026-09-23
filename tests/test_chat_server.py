@@ -1,3 +1,4 @@
+import base64
 import json
 import threading
 from contextlib import contextmanager
@@ -587,6 +588,47 @@ def test_token_check(token, supplied, ok):
     assert ServeConfig(token=token).token_ok(supplied) is ok
 
 
+def test_auth_comes_from_the_environment_not_the_toml(tmp_repo):
+    env = {chat_server.AUTH_USERNAME_ENV: "admin", chat_server.AUTH_PASSWORD_ENV: "pw"}
+    config = ServeConfig.load(tmp_repo, environ=env)
+    assert (config.username, config.password, config.auth_required) == ("admin", "pw", True)
+    assert ServeConfig.load(tmp_repo, environ={}).auth_required is False
+
+
+@pytest.mark.parametrize("var", ["SPECKY_AUTH_USERNAME", "SPECKY_AUTH_PASSWORD"])
+def test_half_configured_auth_refuses_to_load(tmp_repo, var):
+    """Serving the repo open because one variable was mistyped would hide the mistake."""
+    with pytest.raises(ValueError, match="both"):
+        ServeConfig.load(tmp_repo, environ={var: "x"})
+
+
+def _basic(username: str, password: str) -> str:
+    return "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+
+
+@pytest.mark.parametrize(
+    "header, ok",
+    [
+        (None, False),
+        ("", False),
+        (_basic("admin", "pw"), True),
+        (_basic("admin", "wrong"), False),
+        (_basic("other", "pw"), False),
+        ("Basic " + base64.b64encode(b"adminpw").decode(), False),  # no colon
+        ("Basic not-base64!!", False),
+        ("Bearer pw", False),
+        ("basic " + base64.b64encode(b"admin:pw").decode(), True),  # scheme is case-insensitive
+        (_basic("admin", "pw:extra"), False),
+    ],
+)
+def test_basic_credentials_check(header, ok):
+    assert ServeConfig(username="admin", password="pw").credentials_ok(header) is ok
+
+
+def test_no_credentials_configured_lets_everything_through():
+    assert ServeConfig().credentials_ok(None) is True
+
+
 @pytest.mark.parametrize(
     "host, loopback",
     [("127.0.0.1", True), ("localhost", True), ("::1", True), ("0.0.0.0", False), ("::", False)],
@@ -613,9 +655,11 @@ def _running(repo_root: Path, config: ServeConfig = ServeConfig()):
         thread.join(timeout=5)
 
 
-def _request(port, method, path, *, origin=None, token=None, body=None):
+def _request(port, method, path, *, origin=None, token=None, body=None, auth=None):
     conn = HTTPConnection("127.0.0.1", port, timeout=5)
     headers = {}
+    if auth is not None:
+        headers["Authorization"] = _basic(*auth)
     if origin is not None:
         headers["Origin"] = origin
     if token is not None:
@@ -709,6 +753,52 @@ def test_a_configured_token_is_required(tmp_repo, answering):
     assert (no_token[0], wrong[0], right[0]) == (403, 403, 200)
     assert chat_server.TOKEN_HEADER in json.loads(no_token[2])["error"]
     assert _questions(answering) == ["q"]  # only the authenticated call reached the provider
+
+
+def test_a_login_gates_pages_and_the_api(tmp_repo, answering):
+    site = tmp_repo / ".specky" / "site"
+    site.mkdir(parents=True)
+    (site / "index.html").write_text("<h1>docs</h1>")
+    (site / "app.css").write_text("body{}")
+    config = ServeConfig(username="admin", password="pw")
+    with _running(tmp_repo, config) as port:
+        page = _request(port, "GET", "/")
+        css = _request(port, "GET", "/app.css")
+        chat = _request(port, "POST", "/chat", body={"question": "q"})
+        search = _request(port, "GET", "/search?q=x")
+        wrong = _request(port, "GET", "/", auth=("admin", "nope"))
+        ok_page = _request(port, "GET", "/", auth=("admin", "pw"))
+        ok_css = _request(port, "GET", "/app.css", auth=("admin", "pw"))
+        ok_chat = _request(port, "POST", "/chat", body={"question": "q"}, auth=("admin", "pw"))
+    for status, headers, _ in (page, css, chat, search, wrong):
+        assert status == 401
+        assert headers["WWW-Authenticate"].startswith('Basic realm="specky"')
+    assert (ok_page[0], ok_css[0], ok_chat[0]) == (200, 200, 200)
+    assert ok_page[2] == b"<h1>docs</h1>"
+    assert _questions(answering) == ["q"]  # only the logged-in call reached the provider
+
+
+def test_a_preflight_is_not_behind_the_login(tmp_repo, answering):
+    """Browsers never attach credentials to a preflight."""
+    with _running(tmp_repo, ServeConfig(username="admin", password="pw")) as port:
+        assert _request(port, "OPTIONS", "/chat", origin="https://docs.example")[0] == 204
+
+
+def test_login_and_token_both_apply(tmp_repo, answering):
+    config = ServeConfig(username="admin", password="pw", token="s3cret")
+    with _running(tmp_repo, config) as port:
+        login_only = _request(port, "POST", "/chat", body={"question": "q"}, auth=("admin", "pw"))
+        both = _request(
+            port, "POST", "/chat", body={"question": "q"}, auth=("admin", "pw"), token="s3cret"
+        )
+    assert (login_only[0], both[0]) == (403, 200)
+
+
+def test_serve_refuses_to_start_with_half_the_login(tmp_repo, monkeypatch):
+    monkeypatch.setenv(chat_server.AUTH_USERNAME_ENV, "admin")
+    monkeypatch.delenv(chat_server.AUTH_PASSWORD_ENV, raising=False)
+    with pytest.raises(SystemExit, match="SPECKY_AUTH_PASSWORD"):
+        chat_server.serve(tmp_repo, port=0)
 
 
 def test_an_unknown_post_path_is_404_not_a_chat_call(tmp_repo, answering):

@@ -38,13 +38,21 @@ working without configuration. Open means what it says: any page in a reader's b
 POST to this port and read answers derived from the repo's docs, and a non-loopback `host`
 extends that to anyone who can reach the port. `allow_origins` and `token` are how you
 narrow it; `serve()` warns when the bind address isn't loopback.
+
+A deployed server gets a login instead: set `SPECKY_AUTH_USERNAME` and `SPECKY_AUTH_PASSWORD`
+in its environment and every route — pages, `/chat`, `/search` — answers 401 until the browser
+sends those credentials as HTTP Basic auth. Environment only, never specky.toml: the toml is
+committed, and a password in it would ship with the repo it's meant to guard.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import ipaddress
 import json
 import mimetypes
+import os
 import re
 import secrets
 import threading
@@ -68,6 +76,11 @@ DEFAULT_HOST = "127.0.0.1"
 # that header triggers a CORS preflight the widget would have to survive anyway, and this
 # is a local shared secret, not a bearer credential for a third party.
 TOKEN_HEADER = "X-Specky-Token"
+
+# Environment variables that turn on HTTP Basic auth for the whole server (see ServeConfig).
+AUTH_USERNAME_ENV = "SPECKY_AUTH_USERNAME"
+AUTH_PASSWORD_ENV = "SPECKY_AUTH_PASSWORD"
+AUTH_REALM = "specky"
 
 # Ceiling on `GET /search?limit=`: the viewer asks for 15, and a caller asking for 100k rows
 # would be asking this process to serialize the whole index in one response.
@@ -462,9 +475,27 @@ class ServeConfig:
     port: int = DEFAULT_PORT
     allow_origins: tuple[str, ...] = ("*",)
     token: str = ""
+    username: str = ""
+    password: str = ""
 
     @classmethod
-    def load(cls, repo_root: Path, host: str | None = None, port: int | None = None) -> ServeConfig:
+    def load(
+        cls,
+        repo_root: Path,
+        host: str | None = None,
+        port: int | None = None,
+        environ: dict[str, str] | None = None,
+    ) -> ServeConfig:
+        """Raises ValueError when only one of the two auth variables is set: a half-configured
+        login is a deploy mistake, and silently serving the repo open would hide it."""
+        env = os.environ if environ is None else environ
+        username = env.get(AUTH_USERNAME_ENV, "")
+        password = env.get(AUTH_PASSWORD_ENV, "")
+        if bool(username) != bool(password):
+            raise ValueError(
+                f"set both {AUTH_USERNAME_ENV} and {AUTH_PASSWORD_ENV}, or neither — "
+                "only one of them is set"
+            )
         table: dict = {}
         config_path = repo_root / "specky.toml"
         if config_path.exists():
@@ -477,7 +508,30 @@ class ServeConfig:
             # A single string is what someone writes first (`allow_origins = "null"`); take it.
             allow_origins=tuple([origins] if isinstance(origins, str) else origins),
             token=str(table.get("token", "")),
+            username=username,
+            password=password,
         )
+
+    @property
+    def auth_required(self) -> bool:
+        return bool(self.username)
+
+    def credentials_ok(self, authorization: str | None) -> bool:
+        """Check an `Authorization: Basic …` header. Both halves are compared in constant time,
+        and both always are, so the response time doesn't say which one was wrong."""
+        if not self.auth_required:
+            return True
+        scheme, _, encoded = (authorization or "").partition(" ")
+        if scheme.lower() != "basic":
+            return False
+        try:
+            decoded = base64.b64decode(encoded.strip(), validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError):
+            return False
+        username, sep, password = decoded.partition(":")
+        user_ok = secrets.compare_digest(username.encode(), self.username.encode())
+        pass_ok = secrets.compare_digest(password.encode(), self.password.encode())
+        return bool(sep) and user_ok and pass_ok
 
     @property
     def open_to_everyone(self) -> bool:
@@ -550,6 +604,21 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             self._json(403, {"error": f"origin {origin} is not in [serve] allow_origins"})
             return False
 
+        def _authenticated(self) -> bool:
+            """HTTP Basic auth over every route when it's configured. Unlike the token this
+            can gate static files: the browser re-sends Basic credentials on every same-origin
+            load once the reader has logged in, `<link>` and `<script>` included."""
+            if config.credentials_ok(self.headers.get("Authorization")):
+                return True
+            body = json.dumps({"error": "authentication required"}).encode()
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", f'Basic realm="{AUTH_REALM}", charset="UTF-8"')
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return False
+
         def _api_allowed(self) -> bool:
             """Origin *and* token. The token guards the API only, never static files — a page
             can't send a header for its own `<link>`/`<script>` loads, so requiring one there
@@ -561,7 +630,9 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
                 return False
             return True
 
-        def do_OPTIONS(self) -> None:  # preflight for the file:// widget's cross-origin fetch()
+        # Preflight for the file:// widget's cross-origin fetch(). Not behind Basic auth:
+        # browsers never attach credentials to a preflight, so gating it would fail every one.
+        def do_OPTIONS(self) -> None:
             if not self._origin_ok():
                 return
             self.send_response(204)
@@ -569,7 +640,7 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             self.end_headers()
 
         def do_POST(self) -> None:
-            if not self._api_allowed():
+            if not self._authenticated() or not self._api_allowed():
                 return
             path = urlparse(self.path).path
             if path not in ("/chat", "/chat/reset", "/draft"):
@@ -617,7 +688,7 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
 
         def do_GET(self) -> None:
             """Serve `.specky/site/`, so the viewer and its chat share an origin."""
-            if not self._origin_ok():
+            if not self._authenticated() or not self._origin_ok():
                 return
             route = urlparse(self.path)
             if route.path == "/search":
@@ -661,7 +732,10 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
 
 
 def serve(repo_root: Path, port: int | None = None, host: str | None = None) -> None:
-    config = ServeConfig.load(repo_root, host=host, port=port)
+    try:
+        config = ServeConfig.load(repo_root, host=host, port=port)
+    except ValueError as exc:
+        raise SystemExit(f"specky serve: {exc}") from None
     server = ThreadingHTTPServer((config.host, config.port), _make_handler(repo_root, config))
     url = f"http://{config.host}:{config.port}"
     # flush: stdout is block-buffered when it isn't a terminal, and these two lines have to be
@@ -669,11 +743,17 @@ def serve(repo_root: Path, port: int | None = None, host: str | None = None) -> 
     print(
         f"specky serve: viewer on {url}/ , Spec Assistant on {url}/chat (Ctrl+C to stop)", flush=True
     )
-    if not _is_loopback(config.host):
+    if config.auth_required:
+        print(
+            f"specky serve: login required ({AUTH_USERNAME_ENV}/{AUTH_PASSWORD_ENV} are set). "
+            "Basic auth sends the password in the clear — put this behind HTTPS.",
+            flush=True,
+        )
+    elif not _is_loopback(config.host):
         print(
             f"specky serve: WARNING — bound to {config.host}, which is not loopback. Every doc in "
             "this repo, and AI answers drawn from them, are readable by anyone who can reach this "
-            "port. Restrict it with [serve] allow_origins and [serve] token in specky.toml.",
+            "port. Require a login with SPECKY_AUTH_USERNAME and SPECKY_AUTH_PASSWORD.",
             flush=True,
         )
     try:
