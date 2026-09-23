@@ -197,6 +197,26 @@ def test_an_unusable_provider_config_fails(in_repo):
     assert "base_url" in checks[0].detail
 
 
+def test_an_environment_only_config_is_reported_without_a_file(in_repo, monkeypatch):
+    """The deployed-server case: no specky.toml, the provider and models come from the env."""
+    monkeypatch.setenv("SPECKY_AI_PROVIDER", "command")
+    monkeypatch.setenv("SPECKY_AI_COMMAND", "git --version")
+    checks = _by_section(doctor.run_checks())["config"]
+
+    assert all(c.status == doctor.OK for c in checks)
+    assert 'SPECKY_AI_PROVIDER: [ai] provider = "command"' in checks[0].detail
+    assert "SPECKY_AI_COMMAND, SPECKY_AI_PROVIDER" in checks[1].detail
+
+
+def test_an_env_override_shows_in_the_task_routing(in_repo, monkeypatch):
+    _write_config(in_repo, '[ai]\nprovider = "agent"\nagent = "claude"\nmodel = "haiku"\n')
+    monkeypatch.setenv("SPECKY_AI_DRAFT_MODEL", "opus")
+    details = [c.detail for c in _by_section(doctor.run_checks())["config"]]
+
+    assert any("set from the environment: SPECKY_AI_DRAFT_MODEL" in d for d in details)
+    assert any("draft -> opus (everything else -> haiku)" in d for d in details)
+
+
 def test_a_missing_api_key_fails_and_a_present_one_is_never_printed(in_repo, monkeypatch):
     _write_config(
         in_repo,

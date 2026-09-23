@@ -941,6 +941,43 @@ def task_models(config: dict) -> dict[str, str]:
     return models
 
 
+# `[ai]` from the environment, for a deployed `specky serve`: a container is built from the repo,
+# and specky.toml is gitignored, so it has no file to read — and a server usually wants its own
+# models anyway (`SPECKY_AI_DRAFT_MODEL` for the Spec Assistant's drafts). Same shape as
+# `SPECKY_AUTH_*`: configuration a host's env settings can hold.
+AI_ENV_PREFIX = "SPECKY_AI_"
+
+
+def ai_env_overrides(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """`{"draft_model": "…"}` from `SPECKY_AI_DRAFT_MODEL=…`, empty values ignored."""
+    environ = os.environ if environ is None else environ
+    return {
+        name[len(AI_ENV_PREFIX) :].lower(): value.strip()
+        for name, value in environ.items()
+        if name.startswith(AI_ENV_PREFIX) and len(name) > len(AI_ENV_PREFIX) and value.strip()
+    }
+
+
+def read_ai_config(path: Path, environ: Mapping[str, str] | None = None) -> dict:
+    """The `[ai]` table in effect: specky.toml's, with `SPECKY_AI_*` applied on top.
+
+    `SPECKY_AI_PROVIDER` replaces the table outright rather than patching it, because the file's
+    keys belong to the file's provider: a local `agent = "claude"`, `model = "opus"` carried into a
+    server's DeepSeek config would be a model name DeepSeek has never heard of. Without it, each
+    variable overrides its one key. Either way, env alone is enough — no file needed.
+    """
+    overrides = ai_env_overrides(environ)
+    if "provider" in overrides:
+        return overrides
+    if not path.exists():
+        raise ConfigError(f"{path} not found — run `specky init` first")
+    with path.open("rb") as f:
+        table = tomllib.load(f).get("ai")
+    if not table:
+        raise ConfigError(f"{path} has no [ai] table — run `specky init` first")
+    return {**table, **overrides}
+
+
 def load_provider_from_toml(path: Path, command: str = "") -> Provider:
     """The only construction path, so `[ai] cache`, per-task models and the usage log apply to
     every caller.
@@ -949,13 +986,7 @@ def load_provider_from_toml(path: Path, command: str = "") -> Provider:
     can say which part of specky spent what. Each task that names its own model gets its own
     provider and its own cache namespace; everything else shares the default.
     """
-    if not path.exists():
-        raise ConfigError(f"{path} not found — run `specky init` first")
-    with path.open("rb") as f:
-        data = tomllib.load(f)
-    ai_config = data.get("ai")
-    if not ai_config:
-        raise ConfigError(f"{path} has no [ai] table — run `specky init` first")
+    ai_config = read_ai_config(path)
 
     cache = _flag(ai_config, "cache", True)
 

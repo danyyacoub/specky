@@ -115,6 +115,65 @@ def test_a_running_agent_that_isnt_on_path_is_skipped(monkeypatch):
     assert ai_provider.current_agent({"CLAUDECODE": "1"}) is None
 
 
+def _ai_toml(tmp_path, body='provider = "agent"\nagent = "claude"\nmodel = "opus"\n'):
+    path = tmp_path / "specky.toml"
+    path.write_text("[ai]\n" + body)
+    return path
+
+
+def test_an_env_var_overrides_its_one_key(tmp_path):
+    """A server keeping the file's provider but drafting on its own model."""
+    config = ai_provider.read_ai_config(
+        _ai_toml(tmp_path), {"SPECKY_AI_DRAFT_MODEL": "sonnet", "UNRELATED": "x"}
+    )
+    assert config == {"provider": "agent", "agent": "claude", "model": "opus", "draft_model": "sonnet"}
+
+
+def test_an_env_provider_replaces_the_whole_table(tmp_path):
+    """The file's `agent` and `model` belong to its provider; they mustn't leak into the server's."""
+    env = {
+        "SPECKY_AI_PROVIDER": "openai-compatible",
+        "SPECKY_AI_BASE_URL": "https://api.deepseek.com/v1",
+        "SPECKY_AI_MODEL": "deepseek-chat",
+        "SPECKY_AI_API_KEY_ENV": "DEEPSEEK_API_KEY",
+    }
+    config = ai_provider.read_ai_config(_ai_toml(tmp_path), env)
+    assert config == {
+        "provider": "openai-compatible",
+        "base_url": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "api_key_env": "DEEPSEEK_API_KEY",
+    }
+
+
+def test_the_environment_alone_is_a_config(tmp_path):
+    """A container built from the repo has no specky.toml — it's gitignored."""
+    config = ai_provider.read_ai_config(
+        tmp_path / "specky.toml", {"SPECKY_AI_PROVIDER": "agent", "SPECKY_AI_AGENT": "claude"}
+    )
+    assert config == {"provider": "agent", "agent": "claude"}
+
+
+def test_no_file_and_no_env_provider_still_says_run_init(tmp_path):
+    with pytest.raises(ConfigError, match="run `specky init`"):
+        ai_provider.read_ai_config(tmp_path / "specky.toml", {"SPECKY_AI_MODEL": "x"})
+
+
+def test_env_overrides_reach_the_provider_and_its_task_routing(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPECKY_AI_DRAFT_MODEL", "sonnet")
+    monkeypatch.setenv("SPECKY_AI_CACHE", "false")
+    router = load_provider_from_toml(_ai_toml(tmp_path))
+
+    assert router.for_task("draft").command == "claude -p --model sonnet"
+    assert router.for_task("chat").command == "claude -p --model opus"
+
+
+def test_a_misspelt_task_in_the_environment_is_a_config_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("SPECKY_AI_DRAFTS_MODEL", "sonnet")
+    with pytest.raises(ConfigError, match="names no task"):
+        load_provider_from_toml(_ai_toml(tmp_path))
+
+
 def test_unknown_provider():
     with pytest.raises(ConfigError, match="Unknown"):
         load_provider({"provider": "telepathy"})

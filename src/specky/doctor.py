@@ -173,10 +173,19 @@ def _diagrams() -> list[Check]:
 
 
 def _config(repo_root: Path) -> list[Check]:
-    from specky.ai_provider import ConfigError, load_provider_from_toml, unwrap
+    from specky.ai_provider import (
+        AI_ENV_PREFIX,
+        ConfigError,
+        ai_env_overrides,
+        load_provider_from_toml,
+        read_ai_config,
+        unwrap,
+    )
 
     path = repo_root / "specky.toml"
-    if not path.exists():
+    overrides = ai_env_overrides()
+    from_env = "provider" in overrides
+    if not path.exists() and not from_env:
         return [
             Check(
                 "config",
@@ -187,10 +196,11 @@ def _config(repo_root: Path) -> list[Check]:
         ]
 
     try:
-        with path.open("rb") as f:
-            provider_name = tomllib.load(f).get("ai", {}).get("provider", "(unset)")
+        provider_name = read_ai_config(path).get("provider", "(unset)")
     except tomllib.TOMLDecodeError as exc:
         return [Check("config", FAIL, f"{path.name} is not valid TOML ({exc})")]
+    except ConfigError as exc:
+        return [Check("config", FAIL, str(exc))]
 
     try:
         # Unwrapped: this reads fields off the concrete provider, and the caching wrapper doesn't
@@ -199,7 +209,14 @@ def _config(repo_root: Path) -> list[Check]:
     except ConfigError as exc:
         return [Check("config", FAIL, str(exc))]
 
-    checks = [Check("config", OK, f'{path.name}: [ai] provider = "{provider_name}"')]
+    source = f"{AI_ENV_PREFIX}PROVIDER" if from_env else path.name
+    checks = [Check("config", OK, f'{source}: [ai] provider = "{provider_name}"')]
+    # Names only: a deployed server's config lives in its environment, and without this line the
+    # report would read as if specky.toml were what's in effect.
+    if overrides:
+        names = ", ".join(f"{AI_ENV_PREFIX}{key.upper()}" for key in sorted(overrides))
+        replaced = " (replacing specky.toml's [ai])" if from_env and path.exists() else ""
+        checks.append(Check("config", OK, f"[ai] set from the environment: {names}{replaced}"))
 
     # Whether the credential is *present*, never what it is.
     key_env = getattr(provider, "api_key_env", None)
@@ -227,10 +244,10 @@ def _config(repo_root: Path) -> list[Check]:
 
 
 def _task_model_checks(path: Path) -> list[Check]:
-    from specky.ai_provider import ConfigError, task_models
+    from specky.ai_provider import ConfigError, read_ai_config, task_models
 
     try:
-        config = paths.read_table(path, ("ai",))
+        config = read_ai_config(path)
         routed = task_models(config)
     except ConfigError as exc:
         return [Check("config", FAIL, str(exc))]

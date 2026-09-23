@@ -52,6 +52,22 @@ draft a spec change step by step: scope, impact, acceptance tests, then the fina
 To deploy it for others, set `SPECKY_AUTH_USERNAME` and `SPECKY_AUTH_PASSWORD` in the server's
 environment. Every page and API call then asks for that login, so put the server behind HTTPS.
 
+The server's models can come from its environment too, so a container needs no `specky.toml` and
+your local one stays as it is. `SPECKY_AI_<KEY>` sets `[ai] <key>`; setting `SPECKY_AI_PROVIDER`
+replaces the local table rather than patching it. `SPECKY_AI_CHAT_MODEL` and
+`SPECKY_AI_DRAFT_MODEL` pick the models for answers and for drafts:
+
+```bash
+docker run \
+  -e SPECKY_AI_PROVIDER=openai-compatible -e SPECKY_AI_BASE_URL=https://api.deepseek.com/v1 \
+  -e SPECKY_AI_MODEL=deepseek-chat -e SPECKY_AI_DRAFT_MODEL=deepseek-reasoner \
+  -e SPECKY_AI_API_KEY_ENV=DEEPSEEK_API_KEY -e DEEPSEEK_API_KEY \
+  -e SPECKY_AUTH_USERNAME -e SPECKY_AUTH_PASSWORD \
+  your-specky-image
+```
+
+Use an API provider there: the `agent` provider needs a logged-in coding agent on the machine.
+
 ![The Spec Assistant answering a question][shot-assistant]
 
 ### A CI gate against doc drift

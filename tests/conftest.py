@@ -18,6 +18,15 @@ import pytest
 from specky.commit_doc import MICRO_DOC_PREFIX
 
 
+@pytest.fixture(autouse=True)
+def _no_ai_env_overrides(monkeypatch):
+    """`SPECKY_AI_*` in the developer's shell would silently reconfigure every provider a test builds."""
+    import os
+
+    for name in [n for n in os.environ if n.startswith("SPECKY_AI_")]:
+        monkeypatch.delenv(name)
+
+
 class FakeProvider:
     """Returns canned replies in order, and records every prompt it was given.
 

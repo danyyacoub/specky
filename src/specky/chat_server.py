@@ -41,8 +41,10 @@ narrow it; `serve()` warns when the bind address isn't loopback.
 
 A deployed server gets a login instead: set `SPECKY_AUTH_USERNAME` and `SPECKY_AUTH_PASSWORD`
 in its environment and every route — pages, `/chat`, `/search` — answers 401 until the browser
-sends those credentials as HTTP Basic auth. Environment only, never specky.toml: the toml is
-committed, and a password in it would ship with the repo it's meant to guard.
+sends those credentials as HTTP Basic auth. Environment only, never specky.toml: the toml is easily
+copied into an image along with the repo, and a password in it would travel with the docs it's
+meant to guard. The provider can come from the environment too (`SPECKY_AI_*`, see ai_provider), so
+a container needs no specky.toml at all.
 """
 
 from __future__ import annotations

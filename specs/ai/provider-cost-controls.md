@@ -52,8 +52,19 @@ already exists, resent with every commit so the classifier doesn't invent a dupl
 
 8. **Each kind of call can name its own model** — `[ai] <task>_model` in `specky.toml` routes one
    task elsewhere; everything else uses `[ai] model`. Tasks: `summary`, `classify`, `doc`,
-   `tag`, `chat`. `specky doctor` prints the routing, because it is
-   otherwise invisible until someone reads a bill.
+   `document`, `tag`, `chat` (the Spec Assistant's answers) and `draft` (its draft-spec workflow).
+   `specky doctor` prints the routing, because it is otherwise invisible until someone reads a bill.
+
+9. **The environment can set `[ai]`, for a deployed server** — `SPECKY_AI_<KEY>` sets `[ai] <key>`:
+   `SPECKY_AI_MODEL`, `SPECKY_AI_DRAFT_MODEL`, `SPECKY_AI_BASE_URL`, `SPECKY_AI_API_KEY_ENV` and so
+   on. A container built from the repo has no `specky.toml` (it's gitignored), and a server
+   usually wants other models than a laptop, so a host's env settings are where its config
+   belongs, as with `SPECKY_AUTH_*`. Without `SPECKY_AI_PROVIDER`, each variable overrides its one
+   key of the file. With it, the environment *replaces* the file's `[ai]` table, because the file's
+   keys belong to the file's provider: a local `agent = "claude"`, `model = "opus"` carried into a
+   server's DeepSeek config would name a model DeepSeek doesn't have. The key itself still goes
+   through `api_key_env`, so no secret is ever a `SPECKY_AI_*` value. `specky doctor` names the
+   variables in effect.
 
 ## Two Different Caches
 
@@ -81,6 +92,9 @@ rate; `specky cost --clear-cache` empties it.
 | `--batch` returns only some answers | The missing ones are generated singly |
 | `[ai] <task>_model` names an unknown task | Config error at startup, not a setting that quietly does nothing |
 | `[ai] <task>_model` on a `command` provider | Refused — there is no model to swap |
+| `SPECKY_AI_DRAFT_MODEL` set over a `specky.toml` | Drafts use that model; every other key comes from the file |
+| `SPECKY_AI_PROVIDER` set | The environment is the whole `[ai]` table; the file's `[ai]` is ignored, and no file is needed |
+| Neither `specky.toml` nor `SPECKY_AI_PROVIDER` | The usual "run `specky init`" error |
 | A git hook fires | Never batches, by design; `git commit` must not become a long poll |
 
 ## What It Saves
@@ -115,3 +129,8 @@ A ten-thousand-commit backfill on a three-hundred-doc repo: **$221 with neither,
 | A task specky no longer has is a config error | `[ai] discovery_model = "sonnet"`, left over from `specky bootstrap` | The provider is built | It fails naming the tasks that exist, rather than routing nothing in silence |
 | A misspelled task is caught | `[ai] docs_model = "x"` | The provider is built | A config error naming the valid tasks, not a silent no-op |
 | A command provider refuses task models | `provider = "command"` with any `<task>_model` | The provider is built | A config error explaining there is no model to swap |
+| One key overridden from the environment | `specky.toml` with `agent = "claude"`, `model = "opus"`; `SPECKY_AI_DRAFT_MODEL=sonnet` | The provider is built | The draft task runs `claude -p --model sonnet`; chat still runs on opus |
+| The environment replaces the table | `specky.toml` with an agent config; `SPECKY_AI_PROVIDER=openai-compatible` plus its base URL, model and key variable | The config is read | Only the environment's keys are present — no `agent` or `model` from the file |
+| No file, environment only | No `specky.toml`; `SPECKY_AI_PROVIDER=agent`, `SPECKY_AI_AGENT=claude` | The config is read | `provider = "agent"`, `agent = "claude"` |
+| A misspelt task from the environment | `SPECKY_AI_DRAFTS_MODEL=sonnet` | The provider is built | The same "names no task" config error as in the file |
+| doctor on an environment-only server | No `specky.toml`; `SPECKY_AI_PROVIDER` and its keys set | `specky doctor` | The provider is reported from `SPECKY_AI_PROVIDER` and the variables in effect are named, never their values |
