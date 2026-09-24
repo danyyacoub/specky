@@ -238,12 +238,24 @@ def _config(repo_root: Path) -> list[Check]:
             if executable and shutil.which(executable)
             else Check("config", FAIL, f"provider command `{executable}` not found on PATH")
         )
+        if executable == "devin" and shutil.which("devin"):
+            checks.append(_devin_login_check())
 
     # Per-task model routing, reported because it is invisible otherwise: the whole point of
     # `[ai] document_model` is to be set once and forgotten, and the only other way to find out
     # which model answered what is to read `specky cost` after the fact.
     checks += _task_model_checks(path)
     return checks
+
+
+def _devin_login_check() -> Check:
+    """Devin CLI keeps its own login, separate from Devin Desktop's: installed-but-logged-out is
+    the common state, and `devin -p` then fails every call with only `Login canceled`. Local, no
+    network: `devin auth status` reads the stored credentials."""
+    status = _run(["devin", "auth", "status"])
+    if "not logged in" in (status.stdout + status.stderr).lower():
+        return Check("config", FAIL, "Devin CLI is not logged in — run `devin auth login`")
+    return Check("config", OK, "Devin CLI is logged in")
 
 
 def _bedrock_checks(provider) -> list[Check]:

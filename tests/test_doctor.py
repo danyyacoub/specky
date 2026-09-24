@@ -180,6 +180,27 @@ def test_a_provider_command_that_isnt_installed_fails(in_repo):
     assert "definitely-not-a-real-binary" in checks[-1].detail
 
 
+@pytest.mark.parametrize(
+    ("status_output", "expected"), [("Not logged in.\n", "fail"), ("Logged in as a@b.c\n", "ok")]
+)
+def test_the_devin_agent_checks_devin_cli_is_logged_in(in_repo, monkeypatch, status_output, expected):
+    """Devin CLI's login is separate from Devin Desktop's, and a logged-out `devin -p` fails every
+    call with nothing but `Login canceled`."""
+    _write_config(in_repo, '[ai]\nprovider = "agent"\nagent = "devin"\n')
+    monkeypatch.setattr(doctor.shutil, "which", lambda exe: f"/bin/{exe}")
+    real_run = doctor._run
+
+    def fake_run(args, cwd=None):
+        if args[:3] == ["devin", "auth", "status"]:
+            return doctor.subprocess.CompletedProcess(args, 0, status_output, "")
+        return real_run(args, cwd)
+
+    monkeypatch.setattr(doctor, "_run", fake_run)
+    check = _by_section(doctor.run_checks())["config"][-1]
+    assert check.status == expected
+    assert "Devin CLI" in check.detail
+
+
 def test_broken_toml_fails_without_a_traceback(in_repo):
     _write_config(in_repo, "[ai\nprovider =\n")
     checks = _by_section(doctor.run_checks())["config"]

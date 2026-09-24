@@ -524,6 +524,22 @@ class OpenAICompatibleProvider:
         return ""
 
 
+class CommandFailed(subprocess.CalledProcessError):
+    """A provider command's non-zero exit, with the reason it printed.
+
+    Still a `CalledProcessError`, for the callers that catch one. The default message says only
+    "returned non-zero exit status 1", which for an agent CLI hides the one line that matters —
+    `Error: Login canceled` from a `devin -p` that isn't logged in.
+    """
+
+    def __str__(self) -> str:
+        detail = (self.stderr or "").strip() or (self.output or "").strip()
+        lines = detail.splitlines()[-5:]
+        return f"`{shlex.join(self.cmd)}` exited {self.returncode}" + (
+            ": " + " / ".join(lines) if lines else ""
+        )
+
+
 @dataclass
 class CommandProvider:
     command: str
@@ -533,13 +549,15 @@ class CommandProvider:
         # exactly the prompt it would have seen before `prefix` existed. Whether anything is cached
         # is then the command's own business — `claude -p` does its own prompt caching, and specky
         # can neither help nor measure it.
+        argv = shlex.split(self.command)
         result = subprocess.run(
-            shlex.split(self.command),
+            argv,
             input=f"{prefix}\n\n{prompt}" if prefix else prompt,
             capture_output=True,
             text=True,
-            check=True,
         )
+        if result.returncode:
+            raise CommandFailed(result.returncode, argv, result.stdout, result.stderr)
         return result.stdout.strip()
 
     def converse(self, prompt: str, **kwargs) -> str:

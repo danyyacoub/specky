@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from specky import ai_provider
@@ -1028,3 +1030,12 @@ def test_a_task_specky_no_longer_has_is_a_config_error(tmp_path):
 
     with pytest.raises(ConfigError, match="names no task"):
         load_provider_from_toml(path)
+
+
+def test_a_failing_command_says_why(tmp_path):
+    """An agent CLI's exit status alone hides the reason, e.g. `devin -p` logged out."""
+    script = tmp_path / "agent"
+    script.write_text("#!/bin/sh\necho 'Welcome' ; echo 'Error: Login canceled' >&2; exit 1\n")
+    script.chmod(0o755)
+    with pytest.raises(subprocess.CalledProcessError, match="Login canceled"):
+        CommandProvider(command=str(script)).generate("hi")
