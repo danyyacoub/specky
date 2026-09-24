@@ -36,10 +36,7 @@ never been set up and can be dropped into CI as-is. Exit 1 means something needs
    dependencies once: a dependency added to `pyproject.toml` afterwards is absent from the installed
    tool while the code importing it ships from the checkout on every run, so `render-html` dies on
    `No module named 'markdown'` while every other section reads `[ok]`.
-3. **Diagrams** — Ask `mermaid_tool` which copy of the Node renderer is installed. If none is, list
-   every directory that was searched and point at `specky setup-diagrams`, since the failure mode
-   otherwise is invisible: diagrams silently stay fenced text.
-4. **Repo** — Resolve the repository root with `git rev-parse --show-toplevel`. Outside a repo this is
+3. **Repo** — Resolve the repository root with `git rev-parse --show-toplevel`. Outside a repo this is
    a `fail` and every later check is skipped rather than reported against the wrong directory. Then
    ask `git rev-parse --is-shallow-repository`, and `warn` if it is. A shallow clone is the one repo
    state that makes every check below it *lie* rather than fail: the commits under the clone depth
@@ -48,22 +45,31 @@ never been set up and can be dropped into CI as-is. Exit 1 means something needs
    history. CI runners and some cloud coding-agent VMs clone shallow by default, which is exactly
    where nobody is reading the output. Silent on a normal clone — an `[ok] not shallow` row would be
    noise on every developer machine.
-5. **Config** — If `specky.toml` is absent, `warn` and point at `specky init`. Otherwise parse it and
+4. **Config** — If `specky.toml` is absent, `warn` and point at `specky init`. Otherwise parse it and
    build a provider through `load_provider_from_toml()` — the same construction path generation uses,
    so this check can't drift from what the hook will actually do. Report the configured provider,
    whether the credential's environment variable is **set** (never any part of its value), and
    whether a `command` provider's executable is on `PATH`.
-6. **Git hook** — A missing `post-commit` hook is a `warn`. A hook that exists but has no specky
+5. **Git hook** — A missing `post-commit` hook is a `warn`. A hook that exists but has no specky
    marker is a `fail`: `install-git-hook` refuses to overwrite someone else's hook, so this state
    needs a human to merge the two. A hook that isn't executable is also a `fail`, because git skips
    it without a word, which looks exactly like specky being broken. `SPECKY_DISABLE_HOOK` set in the
    environment is reported first, as a `warn`, because it makes every row under it moot — all three
    hooks can be installed and correct and still document nothing.
-7. **Index** — Open `.specky/index.db` read-only, report doc and commit counts, and `warn` if
+6. **Index** — Open `.specky/index.db` read-only, report doc and commit counts, and `warn` if
    `journal_mode` isn't `wal` (that's the reason a commit landing during `specky serve` could hit a
    locked database). A file that's missing its tables is a `fail` pointing at `specky index`.
-8. **Site** — Report the page count under `.specky/site`, or `warn` that `specky render-html` hasn't
+7. **Site** — Report the page count under `.specky/site`, or `warn` that `specky render-html` hasn't
    run yet.
+8. **Diagrams** — Ask `mermaid_tool` which copy of the Node renderer is installed, and count the
+   docs (outside `specs/history/`) carrying a ```mermaid``` block. Installed is `ok`. Missing while
+   any doc has a diagram is a `fail` naming how many and pointing at `specky setup-diagrams`:
+   two things are silently broken then, not one — the viewer shows those diagrams as source text,
+   and the write-time check that refuses a doc whose diagram doesn't parse has nothing to parse with,
+   so it passes everything. This used to be a `warn`, and a repo whose docs were written by agents
+   ran with both broken for weeks, because nobody reads a warning in an otherwise green report.
+   Missing with no diagrams yet stays a `warn` listing every directory searched: nothing is broken,
+   but the next workflow doc will need it.
 9. **Refused drafts** — Count the drafts waiting in `.specky/pending/`, naming the first three. Those
    are regenerated docs the hook declined to write, because writing them would have dropped
    hand-written content or because they named a flag this CLI doesn't have. A `warn`, not a `fail`:
@@ -81,8 +87,7 @@ traceback — this is the command someone runs when things are already broken.
 flowchart TD
     A["Run specky doctor (--json)"] --> B["Toolchain: python, git, uv, node"]
     B --> N["Deps: find_spec each runtime import"]
-    N --> C["Diagrams: resolve mermaid renderer"]
-    C --> D{"Inside a git repo?"}
+    N --> D{"Inside a git repo?"}
     D -->|No| E["fail: not a git repository<br/>skip remaining checks"]
     D -->|Yes| O{"Shallow clone?"}
     O -->|Yes| Q["warn: history below the clone<br/>depth is invisible"]
@@ -91,7 +96,8 @@ flowchart TD
     F --> G["Git hook: installed, ours, executable"]
     G --> H["Index: counts + journal_mode"]
     H --> I["Site: page count"]
-    I --> P["Pending: drafts the hook refused"]
+    I --> C["Diagrams: renderer vs docs with diagrams"]
+    C --> P["Pending: drafts the hook refused"]
     P --> J["Docs: last 20 commits documented?"]
     J --> K{"Any fail row?"}
     E --> K
@@ -124,7 +130,8 @@ flowchart TD
 | Index isn't in WAL mode | `[warn]` — reads and writes can collide; re-run `specky index` |
 | Every runtime dependency imports | One `[ok]` row reporting how many were probed |
 | A runtime dependency is missing from this environment | `[fail]` per missing module, naming what breaks and the `uv tool install --editable <checkout> --force` that fixes it; exit 1 |
-| Mermaid renderer not installed anywhere | `[warn]` listing the directories searched; diagrams stay plain text |
+| Mermaid renderer not installed, and no doc has a diagram yet | `[warn]` listing the directories searched |
+| Mermaid renderer not installed, and docs carry ```mermaid``` blocks | `[fail]` naming how many docs and `specky setup-diagrams`; exit 1 |
 | No refused drafts waiting | `[ok]` saying so |
 | One or more refused drafts in `.specky/pending/` | `[warn]` with the count and the first three names; exit 0 |
 | Some recent commits have no history doc | `[warn]` with the count, pointing at `specky sync --dry-run` |
@@ -146,6 +153,8 @@ flowchart TD
 | Nothing is configured yet — no config, hook, index or site | Four `[warn]` rows naming their fixes, and exit 0 | Nothing is broken on a fresh repo; a `doctor` that fails on one is a `doctor` nobody runs first |
 | A refused draft is waiting in `.specky/pending/` | A `[warn]` with the count and the first three names, exit 0 | Nothing was lost — a doc is knowingly behind its code until somebody reads the draft and keeps or deletes it |
 | One check raises an unexpected error | That section becomes a `[fail]` and every other check still reports | A diagnostic tool that stops at the first surprise is the least useful exactly when it is most needed |
+| The renderer is missing and docs have diagrams | A `[fail]`, not a `[warn]` | The viewer's diagrams and the write-time diagram check are both off, silently — and a warning among green rows went unread for weeks on a real repo |
+| Only `specs/history/` docs have diagrams | Still a `[warn]` | History docs aren't rendered as diagrams anyone relies on, and nothing specky writes checks them |
 
 ## Acceptance Tests
 
@@ -172,3 +181,7 @@ flowchart TD
 | specky's own commits don't count | A repo whose newest commit is a `docs: sync specky docs [skip specky]` commit | Run `specky doctor` | That commit isn't counted as an undocumented one |
 | Machine-readable output | Any repo | Run `specky doctor --json` | Valid JSON array of `{section, status, detail}` objects, statuses drawn from ok/warn/fail |
 | Outside a repo | Current directory isn't a git repo | Run `specky doctor` | A `fail` row for the repo check; config/hook/index/site rows are absent; exit 1 |
+| No renderer, no diagrams | Renderer not installed; no doc has a ```mermaid``` block | Run `specky doctor` | The diagrams row is `warn` |
+| No renderer, docs with diagrams | Renderer not installed; one feature doc has a ```mermaid``` block | Run `specky doctor` | The diagrams row is `fail`, says 1 doc, names `specky setup-diagrams`; exit 1 |
+| History diagrams don't count | Renderer not installed; only a `specs/history/` doc has a diagram | Run `specky doctor` | The diagrams row is `warn` |
+| Renderer installed | Renderer present | Run `specky doctor` | The diagrams row is `ok` |

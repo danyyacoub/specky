@@ -157,16 +157,49 @@ def _imports() -> list[Check]:
     ]
 
 
-def _diagrams() -> list[Check]:
+def _docs_with_diagrams(repo_root: Path) -> int:
+    root = paths.docs_root(repo_root)
+    if not root.exists():
+        return 0
+    history = paths.history_dir(repo_root)
+    return sum(
+        1
+        for doc in root.rglob("*.md")
+        if history not in doc.parents and "```mermaid" in doc.read_text(errors="replace")
+    )
+
+
+def _diagrams(repo_root: Path) -> list[Check]:
+    """The renderer, judged by whether this repo's docs need it.
+
+    A **fail** once any doc has a ```mermaid``` block and the renderer is missing, because then two
+    things are silently broken rather than one: the viewer shows those diagrams as source text, and
+    the write-time check that refuses a doc whose diagram doesn't parse (`generator.unrenderable_
+    mermaid`) has nothing to parse with, so it passes everything. A warning was what this used to
+    say, and a repo whose docs were written by agents ran with both broken for weeks — nobody
+    reads a warning in a report that is otherwise green. With no diagrams yet it stays a warning:
+    nothing is broken, the next workflow doc will need it.
+    """
     installed = mermaid_tool.tool_dir()
     if installed:
         return [Check("diagrams", OK, f"mermaid renderer installed at {installed}")]
     looked = ", ".join(str(p) for p in mermaid_tool.candidate_dirs())
+    count = _docs_with_diagrams(repo_root)
+    if count:
+        return [
+            Check(
+                "diagrams",
+                FAIL,
+                f"{count} doc(s) have ```mermaid``` diagrams, but the renderer isn't installed — the "
+                "viewer shows them as source text and the diagram check on doc writes is off. Run "
+                f"`specky setup-diagrams` (needs Node; looked in: {looked})",
+            )
+        ]
     return [
         Check(
             "diagrams",
             WARN,
-            "mermaid renderer not installed, so diagrams stay as plain text — run "
+            "mermaid renderer not installed, so diagrams would stay as plain text — run "
             f"`specky setup-diagrams` (looked in: {looked})",
         )
     ]
@@ -495,7 +528,7 @@ def _backlog(repo_root: Path) -> list[Check]:
 def run_checks() -> list[Check]:
     """Every check, in report order. Never raises: a failed check is a `fail` row, not a traceback,
     because this is the command someone runs *when* things are already broken."""
-    checks = _toolchain() + _imports() + _diagrams()
+    checks = _toolchain() + _imports()
 
     root = _run(["git", "rev-parse", "--show-toplevel"])
     if root.returncode != 0:
@@ -504,7 +537,7 @@ def run_checks() -> list[Check]:
     checks.append(Check("repo", OK, str(repo_root)))
 
     # `_history` first so its row lands under the `== repo ==` header the line above just opened.
-    for section in (_history, _config, _git_hook, _index, _site, _pending, _backlog):
+    for section in (_history, _config, _git_hook, _index, _site, _diagrams, _pending, _backlog):
         try:
             checks += section(repo_root)
         except Exception as exc:  # a broken check must not hide the other checks' answers

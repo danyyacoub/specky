@@ -41,9 +41,9 @@ specky doctor --json
 
 Each entry has a `section` (`config`, `git hook`, `index`, …), a `status` (`ok`, `warn`, `fail`) and
 a `detail`. Skip step 3 if `config` already reports a provider, step 5 if all three `git hook`
-entries are `ok`, and step 6 if the index is current. `doctor` doesn't cover step 4: skip it if
-`specky.toml` already has a `[skills]` table with a `model` key. If all four are done, say the repo
-is already set up and go to the report.
+entries are `ok`, step 6 if `diagrams` is `ok`, and step 7 if the index is current. `doctor` doesn't
+cover step 4: skip it if `specky.toml` already has a `[skills]` table with a `model` key. If all
+five are done, say the repo is already set up and go to the report.
 
 ### 3. Choose the AI provider
 Ask the user which provider specky should call. Give them these three choices:
@@ -123,7 +123,20 @@ If it refuses because a hook it didn't write is already there (husky, lefthook, 
 overwrite anything. Relay the line from the error that says what to add to the existing hook by
 hand.
 
-### 6. Build the index
+### 6. Install the diagram renderer
+Workflow docs always carry a ```mermaid``` diagram, and the viewer draws them with a small Node
+tool. Without it they show as source text, and specky's check that a newly written diagram actually
+parses has nothing to parse with — `specky doctor` fails once the docs have a diagram and this is
+missing. Skip this step if `doctor` already reports `diagrams` as `ok`.
+
+```bash
+command -v node >/dev/null && specky setup-diagrams || echo "no node"
+```
+
+No Node: don't install it yourself. Say that diagrams stay as text until Node is installed and
+`specky setup-diagrams` is re-run.
+
+### 7. Build the index
 ```bash
 specky index
 ```
@@ -132,7 +145,8 @@ No AI call. This makes the docs and git history searchable by the MCP tools and 
 
 ## Report
 
-- What was already set up and what this run changed: provider, the skills' model, hooks, index.
+- What was already set up and what this run changed: provider, the skills' model, hooks, diagram
+  renderer, index.
   Mention that `specky.toml` went into `.gitignore` if `init` said so.
 - Next steps, by what the user wants:
   - **Document a feature now**: `specky document "<feature or workflow>"`, or the
@@ -147,7 +161,7 @@ No AI call. This makes the docs and git history searchable by the MCP tools and 
 
 ## Devin
 Devin's cloud agent works in a throwaway VM built from `.devin/blueprint.yaml`, so the setup that
-lasts is the blueprint, not this session. Don't run steps 3–6 for their own sake. Instead:
+lasts is the blueprint, not this session. Don't run steps 3–7 for their own sake. Instead:
 
 1. Ask which mode the user wants. **Read-only** (the default): Devin searches and hand-edits
    `specs/`, and `specky check` on the pull request is the gate. It needs no provider and no key.

@@ -498,3 +498,37 @@ def test_the_report_is_grouped_by_section(in_repo):
     assert report.startswith("== toolchain ==")
     assert "== git hook ==" in report
     assert all(line.startswith(("==", "  [")) for line in report.splitlines())
+
+
+# --- diagrams ------------------------------------------------------------------------------
+
+
+def test_no_renderer_and_no_diagrams_only_warns(in_repo, monkeypatch):
+    monkeypatch.setattr(doctor.mermaid_tool, "tool_dir", lambda: None)
+
+    assert _statuses(doctor.run_checks(), "diagrams") == [doctor.WARN]
+
+
+def test_no_renderer_while_docs_have_diagrams_fails(in_repo, monkeypatch, write_doc):
+    """Two things break silently then — the viewer's diagrams and the write-time diagram check —
+    and a warning in an otherwise green report is one nobody reads."""
+    monkeypatch.setattr(doctor.mermaid_tool, "tool_dir", lambda: None)
+    write_doc("billing/refund-flow.md", "# Refunds\n\n```mermaid\nflowchart LR\n  A --> B\n```\n")
+
+    (check,) = [c for c in doctor.run_checks() if c.section == "diagrams"]
+    assert check.status == doctor.FAIL
+    assert "1 doc(s) have ```mermaid``` diagrams" in check.detail
+    assert "specky setup-diagrams" in check.detail
+
+
+def test_a_diagram_in_a_history_doc_does_not_count(in_repo, monkeypatch, write_doc):
+    monkeypatch.setattr(doctor.mermaid_tool, "tool_dir", lambda: None)
+    write_doc("history/abcd1234.md", "# Commit\n\n```mermaid\nflowchart LR\n  A --> B\n```\n")
+
+    assert _statuses(doctor.run_checks(), "diagrams") == [doctor.WARN]
+
+
+def test_an_installed_renderer_passes(in_repo, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor.mermaid_tool, "tool_dir", lambda: tmp_path)
+
+    assert _statuses(doctor.run_checks(), "diagrams") == [doctor.OK]
