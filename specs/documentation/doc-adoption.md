@@ -25,6 +25,10 @@ specky generating into it would mix two unrelated trees together in a way no com
 afterwards. The root is read from config, and `specky init` notices the collision and offers a
 different name before anything is written.
 
+**`specky adopt --verify`** covers the migration that rewrites instead of importing: it reports every
+number, formula and defined term the old tree stated that no doc in the new tree states, so a
+rewrite's silent losses become a list a human can review (see *Verifying a rewritten migration*).
+
 Three properties of `adopt`, each a deliberate decision:
 
 - **No AI call, ever.** It's discovery, `git mv` and frontmatter. Filling in `type:` and `tags:` is
@@ -84,6 +88,38 @@ Three properties of `adopt`, each a deliberate decision:
    revision>`. The last one is narrow on purpose: this repo is already documented, so a full-history
    sync would pay to describe commits these docs already cover.
 
+### Verifying a rewritten migration
+
+`specky adopt --verify` is for the other way a repo gets into specky: the old tree wasn't imported
+but **rewritten** — an agent read each old doc, checked it against the code and wrote a new one in
+specky's shape. Nothing in that loop notices a scoring weight, a formula or a glossary term that
+didn't make it across. One real migration lost dozens — allocation weights, a `variance_pct`
+formula, a field-precedence table, two dozen glossary rows — while every new doc read well.
+
+It moves nothing, writes nothing and makes no AI call. It prints a report:
+
+1. **Pick the old docs** — the same discovery as an import. `--only GLOB` replaces the
+   conventions outright, so `--only 'specs/**'` checks exactly the old `specs/` tree without
+   `docs/` or `DESIGN.md` joining the report. `--exclude` still wins.
+2. **Pair each with its replacement** — a new doc whose `origin:` names it first (adoption wrote
+   that pointer, and a human who moved the doc since has kept it), then a root `GLOSSARY.md`,
+   `PRODUCT.md` or `MODULES.md` of the old tree with the docs root's own, then the path an import
+   would have used (`destination()` above).
+3. **List the facts the old doc stated** — numbers, formulas, glossary definitions and named fields
+   (the same extraction `specky check` uses for docs a pull request edited). Numbers in worked
+   examples, file paths, and the helper names inside pseudo-code are left out: flagging those buried
+   the real losses in one early report under a hundred of them.
+4. **Drop what the replacement still states**, then look for the rest across the whole docs tree:
+   a fact another new doc states is **moved**, not missing — a rewrite that split one doc into two, or
+   gave a formula to the doc that owns it, lost nothing. A number only counts as moved when it sits on
+   a line sharing a word with its original context: "1000 cm" in a quotes doc is not an allocation
+   weight of 1000. An old doc with no replacement at all (a `FORMULAS.md` spread across topic docs) is
+   checked fact by fact the same way.
+5. **Report** — per old doc, its missing **constants** in full (numbers, formulas, definitions,
+   each with the line it came from), its missing **names** compactly, and a count of moved facts per
+   destination. `--json` carries everything. Each missing constant is a decision: restore it, or
+   confirm the code no longer applies it.
+
 The docs root itself is resolved in one place, which every other module asks instead of hardcoding
 `specs`:
 
@@ -139,6 +175,8 @@ flowchart TD
 | **Custom root honoured** | `[docs] root` or `[tool.specky.docs] root` is set | Index, search, check, render, export, testgen, doctor and both doc-generation paths all read that tree |
 | **Bad root ignored** | The configured root is absolute, escapes the repo, or is empty | Falls back to `specs` rather than writing outside the repo |
 | **Collision caught at init** | `specs/` holds non-markdown files | `specky init` names them, offers another root, writes `[docs] root`, and prints the pyproject lines to commit for CI |
+| **Verified** | `--verify` | A markdown report (or `--json`) of each old doc's facts the docs tree no longer states — missing constants in full, missing names compactly, moved facts counted; nothing written or moved |
+| **Narrowed** | `--only GLOB` | Only paths matching the glob are considered, instead of the docs/adr conventions, for an import or a verify |
 
 ## Edge Cases
 
@@ -154,6 +192,9 @@ flowchart TD
 | `specs/` already holds something else — OpenAPI documents, a Rust crate, an ECS module | `specky init` names the files, offers another root and writes `[docs] root` | Generating into it would mix two unrelated trees together in a way no command can unpick afterwards |
 | The import is wrong | Nothing was committed, so `git checkout` undoes it | A one-time rearrangement of a repo's documentation is exactly the change a human should read in `git status` first |
 | `type:` and `tags:` are wanted on the adopted docs | Adoption doesn't fill them in; `specky tag` does | Adoption makes no AI call at all, which is what makes it free, instant and easy to trust |
+| `--verify` finds a fact in some other new doc | It's reported as moved, with that doc, not as missing | A rewrite that splits a doc or gives a rule to its owner lost nothing |
+| `--verify` finds a bare number elsewhere in an unrelated context | It's still missing | A number only counts as moved beside a word of its original line — "1000 cm" is not a weight of 1000 |
+| `--verify` meets a threshold the code has since changed | It's reported missing like any other | The old value is absent either way; the report is for a human to confirm, never a gate |
 
 ## Acceptance Tests
 
@@ -187,3 +228,10 @@ flowchart TD
 | `specs/openapi.yaml` exists | Run `specky init` | It names the file, offers another root, writes `[docs] root` to specky.toml, and prints the `[tool.specky.docs]` lines to commit |
 | The same, answering with an absolute path | Run `specky init` | It refuses with an error rather than silently treating it as relative |
 | `specs/` is free | Run `specky init` | No docs-root question is asked and no `[docs]` table is written |
+| An old `old/matching/scoring.md` stating "+1000" and "500", rewritten as `_specs/matching/scoring.md` in prose | Run `specky adopt --verify --only 'old/**'` | The pair is reported with `1000` and `500` as missing constants |
+| The same old doc also names `variance_pct`, which a different new doc states | Run `specky adopt --verify --only 'old/**'` | `variance_pct` is moved to that doc, not missing |
+| An old `old/GLOSSARY.md` defining "Tolerance" and "Regular entry"; the new glossary defines only the second | Run `specky adopt --verify --only 'old/**'` | The pair is the docs root's `GLOSSARY.md`, and "Tolerance" is the one missing definition |
+| An old `old/FORMULAS.md` with no replacement | Run `specky adopt --verify --only 'old/**'` | Reported as having no counterpart, its formula missing |
+| A new doc with `origin: old/matching/scoring.md` stating the weights | Run `specky adopt --verify --only 'old/**'` | That doc is the pair, not the mapped destination, and the weights aren't missing |
+| Any verify run | After it | `git status` is clean |
+| A `docs/other.md` beside the old tree | Run `specky adopt --verify --only 'old/**'` | It isn't in the report |

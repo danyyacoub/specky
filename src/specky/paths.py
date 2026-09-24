@@ -13,6 +13,7 @@ bottom of the dependency graph and can't take part in a cycle.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass
 from functools import lru_cache
@@ -129,6 +130,30 @@ def glossary(repo_root: Path) -> Path:
     """`<repo>/specs/GLOSSARY.md` — the shared vocabulary, parsed back by the viewer for term
     auto-linking (`html_render.load_glossary`)."""
     return docs_root(repo_root) / "GLOSSARY.md"
+
+
+def tags_registry(repo_root: Path) -> Path:
+    """`<repo>/specs/TAGS.md` — the tag vocabulary: which `tags:` values a doc may carry, readable by
+    an agent that can open files but can't run `specky tags`."""
+    return docs_root(repo_root) / "TAGS.md"
+
+
+# A `| **Term** | Text |` row: the shape of GLOSSARY.md and TAGS.md, the two docs-root files whose
+# rows code reads back. The term group excludes `*` and `|` outright, so a writer that can't express
+# a term in it drops the term rather than escaping it (see `generator.append_glossary_rows`).
+TERM_ROW = re.compile(r"^\|\s*\*\*([^*|]+)\*\*\s*\|\s*(.+?)\s*\|\s*$")
+
+
+def read_term_table(path: Path) -> dict[str, str]:
+    """`{term: cell text as written}` for every `TERM_ROW` in `path`; `{}` if there's no file."""
+    if not path.exists():
+        return {}
+    rows: dict[str, str] = {}
+    for line in path.read_text(errors="replace").splitlines():
+        match = TERM_ROW.match(line)
+        if match:
+            rows[match.group(1).strip()] = match.group(2)
+    return rows
 
 
 STATE_DIR_NAME = ".specky"

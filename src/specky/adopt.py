@@ -17,6 +17,14 @@ Three properties worth stating, because each is a decision:
   post-commit hook should rewrite the week after it's imported. Clearing the line opts back in.
 - **Nothing is committed.** A one-time import that rearranges a repo's documentation is exactly
   the change a human should read in `git status` before it becomes history.
+
+`--verify` is the other half of a migration, for the repo that didn't import its old docs but had
+them *rewritten* — an agent reading the old tree, checking it against the code and writing a new
+doc per topic. Nothing in that loop notices a scoring weight or a formula that didn't make it
+across, and a real migration lost dozens that way. `run_verify` pairs each old doc with the new one
+that replaced it, the same way an import would have placed it, and reports every fact
+(`facts.py`) the old one stated that no doc in the new tree states now. Same three properties:
+no AI call, nothing written, and the report is for a human to act on.
 """
 
 from __future__ import annotations
@@ -29,7 +37,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from specky import frontmatter, paths
+from specky import facts, frontmatter, paths
 
 # Directories whose markdown is documentation by convention. First path segment, except
 # `decisions`/`adr`, which are usually nested (`docs/adr/`, `architecture/decisions/`).
@@ -46,6 +54,11 @@ ROOT_DOCS = ("ARCHITECTURE.md", "DESIGN.md", "RUNBOOK.md", "OPERATIONS.md")
 
 # A folder's own index doc, which becomes `<domain>/overview.md` rather than `<domain>/readme.md`.
 INDEX_STEMS = ("readme", "index", "overview")
+
+# Root files of a docs tree that pair with their counterpart in the docs root rather than mapping
+# like a topic doc would (`specs/GLOSSARY.md` → `<root>/specs/glossary.md` names nothing). Checked
+# by exact name, since these are specky's own file names.
+ROOT_COUNTERPARTS = {"GLOSSARY.md": paths.glossary, "PRODUCT.md": paths.product_doc, "MODULES.md": paths.modules_index}
 
 # Above this many files, adoption stops to confirm. Not about money — nothing here is billable —
 # but about scale: this rewrites where a repo's documentation lives, and someone who meant to
@@ -99,17 +112,24 @@ def discover(
     repo_root: Path,
     include: tuple[str, ...] = (),
     exclude: tuple[str, ...] = (),
+    only: tuple[str, ...] = (),
 ) -> list[str]:
     """The repo's existing documentation, as repo-relative paths.
 
     `include` globs add files the conventions below wouldn't have found (and override the furniture
     exclusion); `exclude` globs win over everything, so a repo can adopt `docs/` while leaving
-    `docs/vendor/` where it is.
+    `docs/vendor/` where it is. `only` replaces the conventions outright — the files matching it and
+    nothing else — for the run that is about one tree: importing a single directory, or verifying
+    that an old `specs/` made it across without `docs/` and `DESIGN.md` joining the report.
     """
     docs_prefix = paths.docs_prefix(repo_root)
     found = []
     for path in _tracked_markdown(repo_root):
         if path.startswith(docs_prefix) or any(fnmatch(path, pat) for pat in exclude):
+            continue
+        if only:
+            if any(fnmatch(path, pat) for pat in only):
+                found.append(path)
             continue
         if any(fnmatch(path, pat) for pat in include):
             found.append(path)
@@ -230,6 +250,7 @@ def run_adopt(
     exclude: tuple[str, ...] = (),
     dry_run: bool = False,
     assume_yes: bool = False,
+    only: tuple[str, ...] = (),
 ) -> Report:
     """Import the repo's existing markdown into the docs tree. Writes files, commits nothing.
 
@@ -242,7 +263,7 @@ def run_adopt(
     if mode not in ("move", "keep", "stub"):
         raise ValueError(f"unknown mode {mode!r} — expected move, keep or stub")
 
-    sources = discover(repo_root, include=include, exclude=exclude)
+    sources = discover(repo_root, include=include, exclude=exclude, only=only)
     adopted, skipped = _plan(repo_root, sources, domain)
     report = Report(adopted=adopted, skipped=skipped, dry_run=dry_run)
     if dry_run or not adopted:
@@ -293,4 +314,156 @@ def report_lines(report: Report) -> list[str]:
             "The last one narrowly on purpose: this repo is already documented, so a full-history "
             "sync would pay to describe commits these docs already cover."
         )
+    return lines
+
+
+# --- verify ---------------------------------------------------------------------------------------
+
+
+@dataclass
+class VerifiedDoc:
+    source: str
+    # The doc in the docs tree that replaced `source`, or None when nothing did.
+    counterpart: str | None
+    stated: int  # how many facts `source` states
+    missing: list[facts.Fact] = field(default_factory=list)  # stated nowhere in the docs tree now
+    moved: list[tuple[facts.Fact, str]] = field(default_factory=list)  # (fact, doc that states it)
+
+    def as_dict(self) -> dict:
+        return {
+            "source": self.source,
+            "counterpart": self.counterpart,
+            "facts": self.stated,
+            "missing": [f.as_dict() | {"constant": f.constant} for f in self.missing],
+            "moved": [f.as_dict() | {"constant": f.constant, "to": to} for f, to in self.moved],
+        }
+
+
+@dataclass
+class VerifyReport:
+    docs: list[VerifiedDoc] = field(default_factory=list)
+
+    def as_dict(self) -> dict:
+        return {"docs": [d.as_dict() for d in self.docs]}
+
+
+def _tree(repo_root: Path) -> dict[str, str]:
+    """Every doc in the docs tree but `history/`, as `{repo-relative path: text}`."""
+    root = paths.docs_root(repo_root)
+    history = paths.history_dir(repo_root)
+    if not root.exists():
+        return {}
+    return {
+        p.relative_to(repo_root).as_posix(): p.read_text(errors="replace")
+        for p in sorted(root.rglob("*.md"))
+        if history not in p.parents
+    }
+
+
+def counterpart(repo_root: Path, source: str, tree: dict[str, str], domain: str | None) -> str | None:
+    """The doc in the docs tree that replaced `source`, in the order an import would decide it.
+
+    1. A doc whose `origin:` names `source` — `specky adopt` wrote that pointer, and a human who
+       moved the doc since has kept it, so it outranks any mapping.
+    2. A root `GLOSSARY.md` / `PRODUCT.md` / `MODULES.md` of the old tree — the new tree's own one.
+    3. `destination()`, the path an import would have put it at.
+    """
+    for path, text in tree.items():
+        meta, _ = frontmatter.parse(text)
+        if str(meta.get("origin", "")).strip() == source:
+            return path
+    name = Path(source).name
+    if name in ROOT_COUNTERPARTS and len(Path(source).parts) <= 2:
+        return ROOT_COUNTERPARTS[name](repo_root).relative_to(repo_root).as_posix()
+    dest = destination(repo_root, source, domain)
+    return dest if dest in tree else None
+
+
+def run_verify(
+    repo_root: Path,
+    domain: str | None = None,
+    include: tuple[str, ...] = (),
+    exclude: tuple[str, ...] = (),
+    only: tuple[str, ...] = (),
+) -> VerifyReport:
+    """What each old doc said that the docs tree doesn't say anymore. Reads only; writes nothing.
+
+    A fact the counterpart dropped is looked for across the whole tree before it's called missing:
+    a rewrite that splits one old doc into two, or moves a formula to the doc that owns it, has
+    lost nothing, and a report that said otherwise would be one nobody trusts twice. An old doc with
+    no counterpart at all (a `FORMULAS.md` whose contents were spread across topic docs) is checked
+    the same way, fact by fact.
+    """
+    tree = _tree(repo_root)
+    indexes = {path: facts.Index(text) for path, text in tree.items()}
+    report = VerifyReport()
+    for source in discover(repo_root, include=include, exclude=exclude, only=only):
+        text = (repo_root / source).read_text(errors="replace")
+        stated = facts.extract(text)
+        paired = counterpart(repo_root, source, tree, domain)
+        dropped = facts.missing_from(stated, indexes[paired]) if paired else stated
+        others = {path: index for path, index in indexes.items() if path != paired}
+        doc = VerifiedDoc(source, paired, len(stated))
+        for fact in dropped:
+            found = facts.locate(fact, others)
+            if found:
+                doc.moved.append((fact, found))
+            else:
+                doc.missing.append(fact)
+        report.docs.append(doc)
+    return report
+
+
+# How many of a doc's missing *names* the report lists; its missing constants are always all shown.
+VERIFY_NAMES_SHOWN = 20
+
+
+def verify_lines(report: VerifyReport) -> list[str]:
+    """The report as markdown — the review artifact a migration hands a human.
+
+    Missing constants are listed in full with the line they came from, because each one is a
+    decision to make: restore it, or confirm the code dropped it. Missing names are listed
+    compactly, and moved facts are counted per destination — both are context, not findings.
+    """
+    docs = report.docs
+    missing_constants = sum(1 for d in docs for f in d.missing if f.constant)
+    missing_names = sum(1 for d in docs for f in d.missing if not f.constant)
+    unpaired = sum(1 for d in docs if d.counterpart is None)
+    lines = [
+        "# specky adopt --verify",
+        "",
+        f"{len(docs)} source doc(s) checked; {unpaired} with no counterpart in the docs tree. "
+        f"{missing_constants} constant(s) and {missing_names} name(s) they state appear nowhere "
+        "in the docs tree now.",
+    ]
+    clean = [d for d in docs if not d.missing]
+    for doc in docs:
+        if not doc.missing:
+            continue
+        target = doc.counterpart or "no counterpart"
+        lines += ["", f"## {doc.source} → {target}", ""]
+        constants = [f for f in doc.missing if f.constant]
+        names = [f for f in doc.missing if not f.constant]
+        if constants:
+            lines.append(f"Missing constants ({len(constants)}):")
+            for fact in constants:
+                where = f" _({fact.section})_" if fact.section else ""
+                context = "" if fact.kind == "formula" else f" — `{fact.line}`"
+                lines.append(f"- {fact.kind} {fact.label()}{where}{context}")
+        if names:
+            if constants:
+                lines.append("")
+            shown = ", ".join(f.label() for f in names[:VERIFY_NAMES_SHOWN])
+            more = len(names) - VERIFY_NAMES_SHOWN
+            lines.append(
+                f"Missing names ({len(names)}): {shown}" + (f" and {more} more" if more > 0 else "")
+            )
+        if doc.moved:
+            by_target: dict[str, int] = {}
+            for _, to in doc.moved:
+                by_target[to] = by_target.get(to, 0) + 1
+            spread = ", ".join(f"{to} ({n})" for to, n in sorted(by_target.items(), key=lambda x: -x[1]))
+            lines += ["", f"Found elsewhere: {spread}"]
+    if clean:
+        lines += ["", f"Nothing missing from {len(clean)} doc(s): " + ", ".join(d.source for d in clean)]
     return lines

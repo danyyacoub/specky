@@ -14,7 +14,7 @@ No AI provider is ever called and history is never walked, so it costs nothing a
 
 The gate asks for one honest doc update per file, not a checklist: a file covered by several docs is satisfied by updating **any** of them, and so is a new sibling doc in the same domain.
 
-It fails by default — a doc gate that only warns is a doc gate nobody notices — with `--advisory` to print the identical report and exit 0, which is how a repo adopts the gate before it's clean. Everything else it reports — commits with no history doc, changed files with no doc at all, docs that had already fallen behind their code, docs with nobody to ask about them — is advice and never affects the exit code.
+It fails by default — a doc gate that only warns is a doc gate nobody notices — with `--advisory` to print the identical report and exit 0, which is how a repo adopts the gate before it's clean. Everything else it reports — commits with no history doc, changed files with no doc at all, docs that had already fallen behind their code, docs with nobody to ask about them, facts a doc stopped stating, and [`specky lint`](lint.md)'s findings on the docs in play — is advice and never affects the exit code.
 
 ## How It Works
 
@@ -23,7 +23,7 @@ It fails by default — a doc gate that only warns is a doc gate nobody notices 
 3. **Split the changed files.** Paths under `specs/` are the *doc updates* being checked for. Everything else is candidate code, minus the ignore list (`[check] ignore`, defaulting to `.github/`, `.specky/`, markdown outside `specs/`, lockfiles, `*.txt`, `*.cfg`, `*.ini`).
 4. **Look up covering docs** in `doc_files` — one indexed SQL query for the whole diff, joined against `documents` so a doc that has since been deleted can't be demanded.
 5. **A violation is a file none of whose covering docs the range touched, in a domain the range left untouched**, reported as `src/specky/db.py → specs/search/fts5-syntax-safety.md`, and only when the file/doc pair recurs across at least `[check] min_link_commits` separate commits (default 2). Pairs below that threshold count as coverage but are only tallied as a note — see *Why recurrence* below. Two relaxations aim at the same thing: *any* covering doc counts rather than all of them, because a file described by several docs is changed for one reason at a time; and updating any doc under `specs/<domain>/` satisfies every covering doc in that domain, because a domain is specky's unit of functional grouping and a change most often documents itself by adding a *new* sibling doc, which can't be in `doc_files` yet.
-6. **Report the advice that never fails the build**: commits in the range with no `specs/history/` doc (the hook probably isn't installed), changed files with no covering doc at all, docs covering this range's code that had already fallen behind it, classified docs in play with no `owner:`, weak links that weren't enforced, and the coverage figure. Those are states a repo grows into, not regressions a contributor introduced.
+6. **Report the advice that never fails the build**: commits in the range with no `specs/history/` doc (the hook probably isn't installed), changed files with no covering doc at all, docs covering this range's code that had already fallen behind it, classified docs in play with no `owner:`, workflow docs in play missing their diagram or Edge Cases, the facts each doc the range edited stopped stating, `specky lint`'s findings on the docs in play, weak links that weren't enforced, and the coverage figure. Those are states a repo grows into, or judgements only the author can make — not regressions a contributor introduced.
 
 ```mermaid
 flowchart TD
@@ -35,7 +35,7 @@ flowchart TD
     E -->|No| G{Pair seen in min_link_commits commits?}
     G -->|No| H[Weak link: counted, only noted]
     G -->|Yes| I[Violation: exit 1]
-    F --> J[Report the advice: stale, unowned, misshapen, coverage]
+    F --> J[Report the advice: stale, unowned, misshapen, removed facts, lint, coverage]
     H --> J
     I --> J
 ```
@@ -60,13 +60,15 @@ Measured on specky's own repo, that threshold cut a 6-commit range from 9 report
 
 ## Stale, Unowned And Misshapen Docs
 
-Three things the gate reports without ever failing over them, all scoped to the range in front of you rather than to all of `specs/`:
+Five things the gate reports without ever failing over them, all scoped to the range in front of you rather than to all of `specs/`:
 
 - **Stale**: a doc whose code has run ahead of it by more than `[check] stale_after_days` (default 14). The verdict is read from the index, not recomputed, so it costs one query and agrees with the badge the HTML viewer shows. Only docs covering *this range's* files are listed, worst-first, capped at ten; the rest of the repo's stale docs are a single count. A doc this range updated isn't reported whatever the index still says — the update is the fix.
 - **Unowned**: a classified doc with an empty `owner:`, so a reader who lands on it has nobody to ask. Scoped to the docs covering this range plus the docs the range edited — someone with the doc already open is exactly who can add the line. `specs/history/` docs are never asked: they're machine-written, one per commit, and nobody is meant to hand-edit them.
 - **Misshapen**: a `type: workflow` doc that isn't the shape a workflow doc is meant to be — the happy path under `## How It Works`, a ```mermaid``` diagram of it directly below, and the branches off it gathered in `## Edge Cases`. Read from the indexed content, scoped exactly like unowned. A `type: feature` doc owes neither: it earns a diagram rather than owing one, and has no Edge Cases section to be missing.
+- **Removed facts**: for each doc the range edited, the **facts** it stated at the fork point and no longer states at HEAD — numbers, formulas, glossary definitions, named fields — constants first, listed as ``specs/billing/refund-flow.md — 2: 500.00, `refund_cap` ``. Both versions come from git, never the worktree, so CI and a laptop agree. This is the one place a lost constant is caught however the rewrite happened: the commit hook (which also says so in its own output), `specky document`, an agent following the `document-domain` skill, or a hand edit. A doc new in the range has nothing to lose and a deleted one isn't a rewrite, so both are skipped, as is `specs/history/`. It can't tell a threshold the code changed from one a rewrite dropped — the old value is gone either way — which is exactly why it's a question for the author rather than a failure.
+- **Lint**: [`specky lint`](lint.md) run over the docs in play (the ones covering this range plus the ones it edited) — terms other docs share that `GLOSSARY.md` doesn't define, tags outside `TAGS.md` (or carried by one doc only, when there's no registry), and numbers two docs sharing a tag attach to the same name differently.
 
-None of the three is a regression a contributor introduced, which is why none affects the exit code. The `--json` output carries all of them, not just the first ten.
+None of the five is a regression a contributor introduced, which is why none affects the exit code. The `--json` output carries all of them (`removed_facts`, `undefined_terms`, `tag_problems`, `conflicts` alongside the rest), not just the first ten.
 
 ## Flags
 
@@ -104,6 +106,9 @@ stale_after_days = 14             # how far a doc may lag its code before it's r
 | Stale docs elsewhere in `specs/` | A count, not a list; never a failure |
 | A classified doc in play carries no `owner:` | Named as a note; never a failure |
 | A workflow doc in play has no diagram or no `## Edge Cases` | Named as a note, with what it's missing; never a failure |
+| A doc the range edited no longer states a number, formula or defined term it used to | Named as a note with the facts, constants first; never a failure |
+| A doc the range added, or `specs/history/` | Not compared — nothing to lose, or append-only |
+| A doc in play uses a term other docs share that `GLOSSARY.md` lacks, or a stray tag, or disagrees on a number | Named as a note (lint's findings); never a failure |
 | The covering doc has since been deleted | Not demanded |
 | A commit in the range has no `specs/history/` doc | Warning pointing at `install-git-hook` and `specky sync` |
 | specky's own `docs: sync specky docs [skip specky]` commits | Never counted as undocumented |
@@ -136,6 +141,7 @@ The checkout needs `fetch-depth: 0`: both the base revision and the `specs/`-lim
 | The repo has a single commit | It is compared against git's empty-tree hash | There is no parent to diff against, and the whole worktree is the honest range |
 | `--base` names something that isn't a revision | One stderr line and exit 1, no traceback | A CI failure should read as a configuration mistake, not a crash |
 | The gate is failing on a repo that was never clean | `--advisory` prints the identical report and exits 0 | Adopting the gate is a project, and a build that can't go green is one nobody adopts |
+| A doc lost a constant because the code changed it | Still listed under removed facts; exit unaffected | The old value is absent either way; only the author knows which this was, so it's asked, never enforced |
 
 ## Acceptance Tests
 
@@ -174,3 +180,7 @@ The checkout needs `fetch-depth: 0`: both the base revision and the `specs/`-lim
 | specky's own outputs | A doc-producing commit that touched only `specs/` or `.specky/` | Run `specky index` | No coverage rows recorded |
 | Reindexing | Any indexed repo | Run `specky index` twice | The map is rebuilt, not accumulated |
 | Bad base | `--base v9.9.9-nope` | Run `specky check` | One stderr line, no traceback; exit 1 |
+| Rewrite drops a constant | A doc stating "above €500.00" and `refund_cap`; the range rewrites it as "large refunds" | Run `specky check` | Note: ``2: 500.00, `refund_cap` ``, constants first; no violation; exit 0 |
+| Facts kept or doc new | The range rewords a doc keeping its facts, and adds another doc | Run `specky check` | No removed facts reported |
+| History docs never compared | The range edits a `specs/history/` doc's numbers | Run `specky check` | No removed facts reported |
+| Lint on the docs in play | The range adds a doc using bold "Price variance" (also used by another doc, not in the glossary) with a tag nothing else carries | Run `specky check` | Notes naming the term and the single-doc tag; no violation |

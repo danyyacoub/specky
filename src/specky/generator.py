@@ -94,6 +94,27 @@ Diff (may be truncated):
 {diff}
 """
 
+# The two sections both templates share, and the style line that has to make room for them. Held once
+# so the feature and workflow shapes can't drift apart on what a constant is.
+#
+# Constants have their own section because "focus on WHAT, not implementation detail" was read — by
+# every model and agent that wrote docs from these templates — as licence to summarise a scoring
+# weight into "a high score" and a formula into "compared against the reference". A migration of one
+# real repo's docs lost dozens of those that way; the numbers are the WHAT, and saying so where the
+# style rule is stated is the only placement a model reliably honours.
+_CONSTANTS_SECTION = """Every threshold, weight or score, limit, formula and precedence order the code applies — numbers
+verbatim ("+1000 when within tolerance", never "a high score"), formulas in a code block, which field
+or source wins over which. Required whenever the code has any; omit the section when it has none.
+"""
+_NOTES_SECTION = """Optional, for maintainers: which consumers read a field, implementations that must change in lockstep
+(e.g. a function and its SQL twin), operational steps tied to this feature. The one section where
+implementation detail belongs; omit it when there is nothing a maintainer must know.
+"""
+_STYLE_LINE = """Style: plain language, compact, focus on WHAT and WHY not implementation details (constants are part of
+the WHAT; Maintainer Notes is exempt), tables for structured information, no code blocks except
+formulas/thresholds, understandable by non-technical stakeholders.
+"""
+
 DOC_STYLE_INSTRUCTIONS = """Write the doc in this style:
 
 # {domain_title} — {topic_title}
@@ -106,14 +127,12 @@ Numbered steps explaining the process. Each step is one sentence with a bold lab
 
 ## Outcomes
 Table of possible outcomes/results, if the feature has distinct outcomes/statuses.
-
+{constants_and_notes}
 ## Acceptance Tests
 Given/When/Then table pinning down expected behaviour. If nothing testable, say so explicitly rather than
 omitting the section.
 
-Style: plain language, compact, focus on WHAT and WHY not implementation details, tables for structured
-information, no code blocks except formulas/thresholds, understandable by non-technical stakeholders.
-"""
+{style}"""
 
 # A workflow is a sequence, and the thing a reader needs from it is the order — so its doc is shaped
 # around one: the happy path as numbered steps, the same path drawn once underneath them, and every
@@ -144,18 +163,34 @@ and if the diagram and the steps ever disagree, the steps win.
 ## Outcomes
 Table of the distinct end states this flow can reach, and what each one means.
 
+## Constants & Invariants
+{constants}
 ## Edge Cases
 Table: Situation | What happens | Why. Every branch off the happy path — what is refused, what is
 skipped silently, what is retried, what a partial run leaves behind. If there genuinely are none,
 say so in one line rather than omitting the section.
 
+## Maintainer Notes
+{notes}
 ## Acceptance Tests
 Given/When/Then table pinning down expected behaviour: the happy path, plus a row for every Edge
 Cases row above. If nothing testable, say so explicitly rather than omitting the section.
 
-Style: plain language, compact, focus on WHAT and WHY not implementation details, tables for structured
-information, no code blocks except formulas/thresholds, understandable by non-technical stakeholders.
-"""
+{style}"""
+
+
+# Filled once, here, rather than left as format fields: every other brace in these templates is meant
+# for the model (or for `doc_style`'s own `.format` of the titles), and one more `.format` pass would
+# have to escape all of them.
+DOC_STYLE_INSTRUCTIONS = DOC_STYLE_INSTRUCTIONS.replace(
+    "{constants_and_notes}",
+    f"\n## Constants & Invariants\n{_CONSTANTS_SECTION}\n## Maintainer Notes\n{_NOTES_SECTION}",
+).replace("{style}", _STYLE_LINE)
+WORKFLOW_STYLE_INSTRUCTIONS = (
+    WORKFLOW_STYLE_INSTRUCTIONS.replace("{constants}", _CONSTANTS_SECTION)
+    .replace("{notes}", _NOTES_SECTION)
+    .replace("{style}", _STYLE_LINE)
+)
 
 
 def doc_style(doc_type: str, *, domain_title: str, topic_title: str) -> str:
@@ -192,6 +227,8 @@ SECTION_UPDATE_INSTRUCTIONS = """Respond with ONLY a JSON object, no other text:
 - A section you do rewrite must carry its existing content through. It may hold hand-written
   detail, tables or diagrams that are still correct; edit around them rather than summarising them
   away. A rewrite that shortens a section is rejected outright and the doc is left alone.
+- Never drop a number, formula or precedence order this commit didn't change — state it exactly as
+  before. One the commit did change is replaced by its new value, not removed.
 - Respond with {{"sections": {{}}}} if the doc is already accurate for this change.
 
 Sections in the doc right now:
@@ -261,10 +298,13 @@ class ExistingDocs:
 
     tags: set[str] = field(default_factory=set)
     purposes: dict[str, str] = field(default_factory=dict)  # "domain/topic" -> one-liner
+    # TAGS.md's tags, when the repo keeps one. Then they are the list a prompt offers, not whatever
+    # docs happen to carry — offering the sprawl back to the model is how it reproduces.
+    registry: list[str] = field(default_factory=list)
 
     @classmethod
     def load(cls, repo_root: Path) -> ExistingDocs:
-        snapshot = cls()
+        snapshot = cls(registry=sorted(paths.read_term_table(paths.tags_registry(repo_root))))
         specs_root = paths.docs_root(repo_root)
         if not specs_root.exists():
             return snapshot
@@ -291,6 +331,11 @@ class ExistingDocs:
         self.purposes[name] = purpose or self.purposes.get(name, "")
 
     def tags_line(self) -> str:
+        if self.registry:
+            return (
+                ", ".join(self.registry)
+                + " (this repo's TAGS.md registry — use only these; a tag outside it is flagged)"
+            )
         return ", ".join(sorted(self.tags)) or "(none yet)"
 
     def docs_block(self) -> str:
@@ -868,11 +913,10 @@ def append_glossary_rows(repo_root: Path, terms: list[dict]) -> tuple[Path | Non
     """Add unseen terms to `specs/GLOSSARY.md`. Returns the file and how many rows landed.
 
     **Additive, never a rewrite.** Existing definitions win and existing prose is untouched — this
-    is a file people hand-edit, and it is also the one specky file with a machine contract on the
-    other side: `html_render.load_glossary` parses it back with
-    `^\\|\\s*\\*\\*([^*|]+)\\*\\*\\s*\\|\\s*(.+?)\\s*\\|\\s*$` to drive the viewer's term
-    auto-linking, which degrades silently to a no-op against any row that doesn't match. So the
-    round trip is guaranteed by construction: the existing terms are read with `load_glossary`
+    is a file people hand-edit, and it is also a specky file with a machine contract on the other
+    side: `html_render.load_glossary` parses it back with `paths.TERM_ROW` to drive the viewer's
+    term auto-linking, which degrades silently to a no-op against any row that doesn't match. So
+    the round trip is guaranteed by construction: the existing terms are read with `load_glossary`
     itself — the writer's exact inverse — and a term carrying a `|` or a `*` is dropped rather than
     escaped, because the regex's term group is `[^*|]+` and an escaped pipe fails it just the same.
     """
@@ -907,6 +951,25 @@ def append_glossary_rows(repo_root: Path, terms: list[dict]) -> tuple[Path | Non
     lines[last_row + 1 : last_row + 1] = rows
     path.write_text("\n".join(lines).rstrip("\n") + "\n")
     return path, len(rows)
+
+
+def removed_facts_note(existing_body: str | None, body: str) -> str:
+    """` — removed 3 fact(s): 1000, `variance_pct` …` for a note, or "" when the update kept them all.
+
+    Said, never enforced — unlike `lost_content`, which refuses. A section shrinking by half is
+    almost never what a commit meant; a threshold vanishing often is, because the commit changed it
+    and the doc now states the new one. So this names what went, constants first, for whoever reads
+    the hook's output or the `specky document` summary to confirm. `specky check` says the same
+    about every doc a pull request touched, which also covers the agent path this can't see.
+    """
+    if not existing_body:
+        return ""
+    from specky import facts
+
+    lost = sorted(facts.dropped(existing_body, body), key=lambda fact: not fact.constant)
+    if not lost:
+        return ""
+    return f" — removed {len(lost)} fact(s): {facts.summary(lost)}"
 
 
 def stage_pending(repo_root: Path, domain: str, topic: str, content: str) -> Path:
@@ -1025,7 +1088,7 @@ def sync_feature_doc(
     doc_rel_path = f"{classification.domain}/{classification.topic}.md"
     update_modules_index(repo_root, classification.domain, doc_rel_path, classification.purpose)
     existing.record(f"{classification.domain}/{classification.topic}", classification.purpose, tags)
-    return DocSync(doc_path, True, f"updated {rel}")
+    return DocSync(doc_path, True, f"updated {rel}" + removed_facts_note(existing_body, body))
 
 
 TAG_PROMPT = """You maintain a set of feature/workflow reference docs under specs/<domain>/<topic>.md for \

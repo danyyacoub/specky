@@ -58,6 +58,7 @@ from specky.generator import (
     append_glossary_rows,
     doc_problem,
     leading_json_object,
+    removed_facts_note,
     repair_mermaid,
     settled_type_and_tags,
     stage_pending,
@@ -148,6 +149,10 @@ Also:
   covering the happy path, at least one edge case, and every threshold or boundary the feature has.
   State the formula inline when a "Then" is a computed number. If there is genuinely nothing
   testable, say so in that section rather than omitting it.
+- **Constants are the WHAT.** Every threshold, weight, limit, formula and precedence order you find in
+  the code goes in `## Constants & Invariants`, exactly as the code has it — a doc that says "lines
+  are scored on price and quantity" where the code adds +1000 within tolerance has lost the one
+  thing a reader came for. Updating a doc, keep every constant the code still applies.
 - **Say what would surprise a careful reader.** What deliberately does *not* happen, where the
   behaviour is narrower than its name suggests, what is asymmetric, what is silently ignored. A
   reader can guess the happy path; they cannot guess the exception, and finding it the hard way is
@@ -164,7 +169,8 @@ Also:
   fields you pass to submit_doc.
 - **Vocabulary.** Reuse the glossary terms below exactly; do not invent a synonym for a concept that
   already has one. Pass `glossary_terms` only for genuinely new shared vocabulary other docs will
-  reuse — not for terms local to this one doc.
+  reuse — not for terms local to this one doc. A status or outcome name other docs also use (the
+  first column of an Outcomes table) is shared vocabulary: pass it if the glossary lacks it.
 """
 )
 
@@ -434,7 +440,7 @@ def write(
 
     glossary_path, added = append_glossary_rows(repo_root, submission.glossary_terms)
     verb = "updated" if existing_body else "wrote"
-    note = f"{verb} {rel}"
+    note = f"{verb} {rel}" + removed_facts_note(existing_body, body)
     if repairs:
         note += f" (repaired its diagram: {', '.join(sorted(set(repairs)))})"
     return Written(DocSync(doc_path, True, note), glossary_path, added)

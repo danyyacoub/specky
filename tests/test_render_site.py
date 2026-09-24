@@ -185,6 +185,33 @@ def test_related_docs_are_linked_by_page_name(site):
     assert 'href="billing-refund-limits.html"' in page
 
 
+def _related_block(page: str) -> str:
+    match = re.search(r'<div class="related">.*?</div>', page, re.S)
+    return match.group(0) if match else ""
+
+
+def test_docs_sharing_a_tag_are_related_without_anyone_writing_the_link(site):
+    """refund-limits names no `related:`, but shares `refunds` with refund-flow — so its page lists
+    refund-flow, and says which tag they share."""
+    block = _related_block((site / "billing-refund-limits.html").read_text())
+
+    assert 'href="billing-refund-flow.html"' in block
+    assert '<span class="why">refunds</span>' in block
+
+
+def test_a_hand_written_related_link_is_not_listed_twice(site):
+    block = _related_block((site / "billing-refund-flow.html").read_text())
+
+    assert block.count('href="billing-refund-limits.html"') == 1
+    assert '<span class="why">' not in block
+
+
+def test_history_docs_and_untagged_docs_are_never_tag_siblings(site):
+    block = _related_block((site / "billing-refund-limits.html").read_text())
+
+    assert "history-abc12345.html" not in block and "root-GLOSSARY.html" not in block
+
+
 # --- links inside a doc's body -------------------------------------------------------------
 # Docs link each other the way they read in the repo (`../cli/check.md`). The site has no .md
 # files and no folders, so each such link has to land on the page its target was rendered to.

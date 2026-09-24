@@ -536,6 +536,7 @@ body.nav-collapsed .sidebar { display: none; }
 .related ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .related a { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
 .related a:hover { text-decoration: underline; }
+.related .why { color: var(--text-secondary); font-size: 0.8125rem; margin-left: 6px; }
 
 .stat-row { display: flex; gap: 12px; margin: 20px 0 0; flex-wrap: wrap; }
 .stat {
@@ -2568,7 +2569,6 @@ def _step_list(body_html: str) -> str:
 # term-wins, first-occurrence-per-page algorithm, over plain markdown output rather than
 # a model-sanitized fragment.
 
-_GLOSSARY_ROW = re.compile(r"^\|\s*\*\*([^*|]+)\*\*\s*\|\s*(.+?)\s*\|\s*$")
 _TAG_OR_TEXT = re.compile(r"(<[^>]+>)")
 # A term is not wrapped inside these: one in a code sample or diagram source is a
 # literal, and one already inside a link or a marked span has its own behaviour.
@@ -2586,16 +2586,10 @@ def load_glossary(repo_root: Path) -> dict[str, str]:
     Empty if the repo has no glossary yet — auto-linking degrades to a no-op, same as a
     doc with no glossary terms to find.
     """
-    path = paths.glossary(repo_root)
-    if not path.exists():
-        return {}
-    terms: dict[str, str] = {}
-    for line in path.read_text().splitlines():
-        match = _GLOSSARY_ROW.match(line)
-        if not match:
-            continue
-        terms[match.group(1).strip()] = _strip_markdown(match.group(2))
-    return terms
+    return {
+        term: _strip_markdown(text)
+        for term, text in paths.read_term_table(paths.glossary(repo_root)).items()
+    }
 
 
 def _terms_pattern(terms: list[str]) -> re.Pattern[str]:
@@ -2807,17 +2801,49 @@ def _doc_header(doc: dict) -> str:
     return "".join(parts)
 
 
-def _related_section(doc: dict, path_lookup: dict[str, dict]) -> str:
-    """`related:` slugs resolved to real links — dead data until now (see module docstring)."""
+# How many tag siblings a page lists under Related. Past a handful the list stops being "the docs to
+# read next" and becomes the tag's index, which the rail's tag filter already is.
+RELATED_BY_TAG_LIMIT = 6
+
+
+def _related_section(doc: dict, path_lookup: dict[str, dict], docs: list[dict] = ()) -> str:
+    """The docs to read next: hand-written `related:` links first, then the docs sharing a tag.
+
+    The tag siblings are derived here, at render time, rather than written into anyone's
+    frontmatter. That was the other way to get cross-doc links, and it's the worse one: `related:`
+    is reserved for a link no shared tag explains (the `document-domain` skill says so), an agent
+    writing one doc can't safely edit thirty others, and a derived list can't go stale — it's
+    recomputed from the tags on every render, the same way `specky graph` draws its edges. Ordered
+    by how many tags a sibling shares, then title, and each names the tags it shares so the reader
+    sees *why* it's listed.
+    """
     items = []
+    listed = {doc["path"]}
     for slug in doc["related"]:
         target = path_lookup.get(f"{slug}.md")
         if not target:
             continue
+        listed.add(target["path"])
         items.append(
             f'<li><a href="{target["html_name"]}">'
             f'<svg class="icon" aria-hidden="true"><use href="#icon-link"></use></svg>'
             f'{html.escape(target["title"])}</a></li>'
+        )
+    own = set(doc["tags"])
+    siblings = sorted(
+        (
+            (sorted(own & set(other["tags"])), other)
+            for other in docs
+            if other["path"] not in listed and other["doc_type"] and own & set(other["tags"])
+        ),
+        key=lambda pair: (-len(pair[0]), pair[1]["title"].lower()),
+    )
+    for shared, other in siblings[:RELATED_BY_TAG_LIMIT]:
+        items.append(
+            f'<li><a href="{other["html_name"]}">'
+            f'<svg class="icon" aria-hidden="true"><use href="#icon-link"></use></svg>'
+            f'{html.escape(other["title"])}</a>'
+            f'<span class="why">{html.escape(", ".join(shared))}</span></li>'
         )
     if not items:
         return ""
@@ -3195,7 +3221,7 @@ def render_site(repo_root: Path) -> Path:
         docs.append(doc)
         # Keyed by `<domain>/<topic>.md`: that's how a `related:` entry names its target, whatever
         # the docs root happens to be called (see `_related_section`).
-        path_lookup[path.split("/", 1)[-1]] = {"title": title, "html_name": html_name}
+        path_lookup[path.split("/", 1)[-1]] = {"title": title, "html_name": html_name, "path": path}
         pages[path] = html_name
         entry = {
             "title": title,
@@ -3241,7 +3267,7 @@ def render_site(repo_root: Path) -> Path:
         any_mermaid_rendered = any_mermaid_rendered or has_rendered
         body_html = anchor_headings(body_html)
         body_html = rewrite_links(body_html, doc["path"], _page_href(doc["path"], pages))
-        body = _doc_header(doc) + body_html + _related_section(doc, path_lookup)
+        body = _doc_header(doc) + body_html + _related_section(doc, path_lookup, docs)
         page = _page(doc["title"], rail_html, body, doc["doc_type"])
         (site_dir / doc["html_name"]).write_text(page)
 

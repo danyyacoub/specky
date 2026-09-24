@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from specky import adopt, frontmatter
+from specky import adopt, frontmatter, paths
 from conftest import git
 
 
@@ -264,3 +264,104 @@ class TestAdopt:
         # A full-history sync on an already-documented repo pays to describe commits these docs
         # already cover, so the suggested command is deliberately bounded.
         assert "specky sync --since" in text
+
+
+class TestVerify:
+    """`--verify`: the old tree was *rewritten* into the docs tree rather than imported, and the
+    report is every fact the old docs stated that no new doc states. Nothing is written."""
+
+    @pytest.fixture
+    def migrated(self, tmp_repo: Path) -> Path:
+        paths.reset_cache()
+        (tmp_repo / "specky.toml").write_text('[docs]\nroot = "_specs"\n')
+        write(
+            tmp_repo,
+            "old/matching/scoring.md",
+            "# Scoring\n\nA price within tolerance scores +1000, otherwise 500 less 5 per point.\n\n"
+            "We report `variance_pct` as well.\n",
+        )
+        write(
+            tmp_repo,
+            "old/GLOSSARY.md",
+            "# Glossary\n\n| Term | Definition |\n|---|---|\n| **Tolerance** | Thresholds. |\n"
+            "| **Regular entry** | A goods line. |\n",
+        )
+        write(tmp_repo, "old/FORMULAS.md", "# Formulas\n\n```\nratio_pct = gap / base × 100\n```\n")
+        write(
+            tmp_repo,
+            "_specs/matching/scoring.md",
+            "# Scoring\n\nPairs are scored on price and quantity.\n",
+        )
+        write(
+            tmp_repo,
+            "_specs/matching/variance.md",
+            "# Variance\n\nThe `variance_pct` is reported per match.\n",
+        )
+        write(
+            tmp_repo,
+            "_specs/GLOSSARY.md",
+            "# Glossary\n\n| Term | Definition |\n|---|---|\n| **Regular entry** | A goods line. |\n",
+        )
+        commit_all(tmp_repo)
+        yield tmp_repo
+        paths.reset_cache()
+
+    def verify(self, repo: Path) -> dict[str, adopt.VerifiedDoc]:
+        report = adopt.run_verify(repo, only=("old/**",))
+        return {doc.source: doc for doc in report.docs}
+
+    def test_pairs_by_destination_and_reports_missing_constants(self, migrated: Path):
+        doc = self.verify(migrated)["old/matching/scoring.md"]
+
+        assert doc.counterpart == "_specs/matching/scoring.md"
+        assert {f.key for f in doc.missing} >= {"1000", "500"}
+
+    def test_a_fact_another_new_doc_states_is_moved_not_missing(self, migrated: Path):
+        doc = self.verify(migrated)["old/matching/scoring.md"]
+
+        assert ("variance_pct", "_specs/matching/variance.md") in [(f.key, to) for f, to in doc.moved]
+        assert "variance_pct" not in {f.key for f in doc.missing}
+
+    def test_a_root_glossary_pairs_with_the_docs_root_glossary(self, migrated: Path):
+        doc = self.verify(migrated)["old/GLOSSARY.md"]
+
+        assert doc.counterpart == "_specs/GLOSSARY.md"
+        assert [f.key for f in doc.missing] == ["Tolerance"]
+
+    def test_a_doc_with_no_counterpart_is_checked_fact_by_fact(self, migrated: Path):
+        doc = self.verify(migrated)["old/FORMULAS.md"]
+
+        assert doc.counterpart is None
+        assert [f.kind for f in doc.missing] == ["formula"]
+
+    def test_origin_frontmatter_outranks_the_mapped_destination(self, migrated: Path):
+        write(
+            migrated,
+            "_specs/pricing/weights.md",
+            "---\norigin: old/matching/scoring.md\n---\n\n# Weights\n\nWithin tolerance: +1000; otherwise 500.\n",
+        )
+        commit_all(migrated, "move the scoring doc")
+
+        doc = self.verify(migrated)["old/matching/scoring.md"]
+
+        assert doc.counterpart == "_specs/pricing/weights.md"
+        assert not {"1000", "500"} & {f.key for f in doc.missing}
+
+    def test_writes_nothing(self, migrated: Path):
+        adopt.run_verify(migrated, only=("old/**",))
+
+        assert git(migrated, "status", "--porcelain") == ""
+
+    def test_report_lists_constants_in_full_and_names_the_clean_docs(self, migrated: Path):
+        text = "\n".join(adopt.verify_lines(adopt.run_verify(migrated, only=("old/**",))))
+
+        assert "## old/matching/scoring.md → _specs/matching/scoring.md" in text
+        assert "- number 1000" in text
+        assert "## old/FORMULAS.md → no counterpart" in text
+
+    def test_only_replaces_the_conventions(self, migrated: Path):
+        write(migrated, "docs/other.md", "# Other\n\nLimit 42.\n")
+        commit_all(migrated, "add a docs/ file")
+
+        assert "docs/other.md" not in self.verify(migrated)
+        assert "docs/other.md" in adopt.discover(migrated)

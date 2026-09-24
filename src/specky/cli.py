@@ -113,6 +113,20 @@ def _check(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _lint(args: argparse.Namespace) -> None:
+    import json
+
+    from specky.db import repo_root
+    from specky.lint import report_lines, resolve_paths, run_lint
+
+    root = repo_root()
+    only = resolve_paths(root, Path.cwd(), args.paths) if args.paths else None
+    report = run_lint(root, only=only)
+    print(json.dumps(report.as_dict(), indent=2) if args.json else "\n".join(report_lines(report)))
+    if args.strict and report.findings:
+        sys.exit(1)
+
+
 def _pr_comment(args: argparse.Namespace) -> None:
     from specky.db import repo_root
     from specky.prcomment import comment_markdown, run_pr_comment
@@ -163,8 +177,25 @@ def _export(args: argparse.Namespace) -> None:
 
 
 def _adopt(args: argparse.Namespace) -> None:
-    from specky.adopt import report_lines, run_adopt
+    import json
+
+    from specky.adopt import report_lines, run_adopt, run_verify, verify_lines
     from specky.db import repo_root
+
+    if args.verify:
+        verified = run_verify(
+            repo_root(),
+            domain=args.domain,
+            include=tuple(args.include),
+            exclude=tuple(args.exclude),
+            only=tuple(args.only),
+        )
+        print(
+            json.dumps(verified.as_dict(), indent=2) if args.json else "\n".join(verify_lines(verified))
+        )
+        return
+    if args.json:
+        raise ValueError("--json goes with --verify; an import prints a plain report")
 
     report = run_adopt(
         repo_root(),
@@ -174,6 +205,7 @@ def _adopt(args: argparse.Namespace) -> None:
         exclude=tuple(args.exclude),
         dry_run=args.dry_run,
         assume_yes=args.yes,
+        only=tuple(args.only),
     )
     # No `specky adopt:` prefix per line: the report's own first line carries it, and the rest is an
     # indented list plus the next-steps block, which a prefix on every line would make unreadable.
@@ -338,6 +370,17 @@ def _list_docs(args: argparse.Namespace) -> None:
 def _tags(args: argparse.Namespace) -> None:
     from specky import catalog
     from specky.db import repo_root
+
+    if args.write:
+        path, added = catalog.write_tag_registry(repo_root())
+        rel = path.relative_to(repo_root())
+        if added:
+            print(f"specky tags: added {len(added)} tag(s) to {rel}: {', '.join(added)}")
+            print("  Each new row's meaning names the docs using it — replace it with what the tag means,")
+            print("  and merge tags that name one concept before others start reusing both.")
+        else:
+            print(f"specky tags: every tag in use is already in {rel}")
+        return
 
     by_tag = catalog.list_tags(repo_root())
     if not by_tag:
@@ -528,6 +571,21 @@ def build_parser() -> argparse.ArgumentParser:
     export_cmd.add_argument(
         "--title", default="Documentation", help="Title on the cover and in the browser tab"
     )
+    lint_cmd = command(
+        "lint",
+        "Check the docs as a set: terms missing from the glossary, stray tags, numbers that disagree",
+        _lint,
+    )
+    lint_cmd.add_argument(
+        "paths",
+        nargs="*",
+        metavar="PATH",
+        help="Only report findings involving these docs (files or directories); default: all",
+    )
+    lint_cmd.add_argument("--json", action="store_true", help="Machine-readable output")
+    lint_cmd.add_argument(
+        "--strict", action="store_true", help="Exit 1 when there is any finding (default: advice only)"
+    )
     adopt_cmd = command(
         "adopt",
         "Import the repo's existing markdown (docs/, adr/, ARCHITECTURE.md) into the docs tree",
@@ -573,6 +631,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also adopt paths matching GLOB, e.g. 'wiki/**/*.md' (repeatable)",
     )
     adopt_cmd.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Consider only paths matching GLOB, instead of the docs/, adr/ … conventions, e.g. "
+        "'specs/**' (repeatable)",
+    )
+    adopt_cmd.add_argument(
         "--exclude",
         action="append",
         default=[],
@@ -582,6 +648,13 @@ def build_parser() -> argparse.ArgumentParser:
     adopt_cmd.add_argument(
         "--yes", action="store_true", help="Skip the confirmation for a large import"
     )
+    adopt_cmd.add_argument(
+        "--verify",
+        action="store_true",
+        help="Import nothing: report the facts (numbers, formulas, defined terms) each source doc "
+        "states that no doc in the docs tree states now — the review for a rewritten migration",
+    )
+    adopt_cmd.add_argument("--json", action="store_true", help="With --verify: machine-readable output")
     command("index", "Index specs/ and git log into SQLite", _index)
     command("search", "Keyword search over the index", _search).add_argument("query", nargs="?")
     command("render-html", "Render the static HTML doc site", _render_html)
@@ -729,7 +802,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     command("features", "List feature docs", _list_docs)
     command("workflows", "List workflow docs", _list_docs)
-    command("tags", "List tags and the docs carrying them", _tags)
+    command("tags", "List tags and the docs carrying them", _tags).add_argument(
+        "--write",
+        action="store_true",
+        help="Create or extend the TAGS.md registry with every tag in use (reads the docs, not the index)",
+    )
     command("graph", "Print the feature/workflow graph as Mermaid", _graph)
     command(
         "commit-info", "Show tags and related feature/workflow docs for a commit", _commit_info

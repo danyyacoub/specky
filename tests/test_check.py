@@ -618,3 +618,68 @@ def test_the_shape_note_never_fails_the_build(tmp_repo):
     assert report.as_dict()["misshapen"] == [
         {"doc_path": DOC, "missing": "no diagram and no `## Edge Cases` section"}
     ]
+
+
+# --- facts a doc stopped stating --------------------------------------------------------------
+
+SCORED = "# Billing — Refund Flow\n\nA refund above €500.00 needs approval; `refund_cap` holds it.\n"
+
+
+def test_a_doc_rewrite_that_drops_a_constant_is_named_but_fails_nothing(tmp_repo):
+    _commit(tmp_repo, "doc", {DOC: SCORED})
+    base = git(tmp_repo, "rev-parse", "HEAD").strip()
+    _commit(tmp_repo, "rewrite", {DOC: "# Billing — Refund Flow\n\nLarge refunds need approval.\n"})
+    run_index(tmp_repo)
+
+    report = run_check(tmp_repo, base=base)
+
+    assert report.violations == ()
+    (path, lost), = report.removed_facts
+    assert path == DOC
+    assert [f.key for f in lost] == ["500.00", "refund_cap"]  # constants first
+    text = "\n".join(report_lines(report))
+    assert f"{DOC} — 2: 500.00, `refund_cap`" in text
+    assert report.as_dict()["removed_facts"][0]["facts"][0]["constant"] is True
+
+
+def test_a_doc_that_keeps_its_facts_or_is_new_reports_nothing(tmp_repo):
+    _commit(tmp_repo, "doc", {DOC: SCORED})
+    base = git(tmp_repo, "rev-parse", "HEAD").strip()
+    _commit(
+        tmp_repo,
+        "reword and add",
+        {
+            DOC: SCORED + "\nRefunds over 500.00 go to finance (`refund_cap`).\n",
+            "specs/billing/invoices.md": "# Invoices\n\nNet 30.\n",
+        },
+    )
+    run_index(tmp_repo)
+
+    assert run_check(tmp_repo, base=base).removed_facts == ()
+
+
+def test_history_docs_are_never_compared(tmp_repo):
+    history = "specs/history/abcd1234.md"
+    _commit(tmp_repo, "doc", {history: "# Commit\n\nCap 500.00.\n"})
+    base = git(tmp_repo, "rev-parse", "HEAD").strip()
+    _commit(tmp_repo, "edit", {history: "# Commit\n\nNo cap.\n"})
+    run_index(tmp_repo)
+
+    assert run_check(tmp_repo, base=base).removed_facts == ()
+
+
+def test_lint_findings_on_the_docs_in_play_are_notes(tmp_repo):
+    tagged = "---\ntype: feature\ntags: [{}]\n---\n\n# {}\n\nEach **Price variance** is reported.\n"
+    _commit(tmp_repo, "docs", {"specs/billing/invoices.md": tagged.format("billing", "Invoices")})
+    base = git(tmp_repo, "rev-parse", "HEAD").strip()
+    _commit(tmp_repo, "doc", {DOC: tagged.format("refund-stuff", "Refunds")})
+    run_index(tmp_repo)
+
+    report = run_check(tmp_repo, base=base)
+
+    assert report.violations == ()
+    assert [t.term for t in report.lint_findings.undefined_terms] == ["Price variance"]
+    assert [(t.tag, t.problem) for t in report.lint_findings.tag_problems] == [("refund-stuff", "single")]
+    text = "\n".join(report_lines(report))
+    assert "Note: 1 term(s) used across docs that GLOSSARY.md doesn't define" in text
+    assert report.as_dict()["tag_problems"][0]["tag"] == "refund-stuff"

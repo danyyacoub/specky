@@ -6,7 +6,7 @@ tags: [rendering, documentation, search]
 # Rendering — Cross Doc Links
 
 ## What It Does
-Docs link to each other by repo path (like `../cli/check.md`), but the rendered viewer serves flat pages with no folders and no `.md` files. This feature resolves those in-body links at render time so they point at the page (or section) the target was actually rendered to, instead of 404ing.
+Docs link to each other by repo path (like `../cli/check.md`), but the rendered viewer serves flat pages with no folders and no `.md` files. This feature resolves those in-body links at render time so they point at the page (or section) the target was actually rendered to, instead of 404ing. Each viewer page also ends with a **Related** block: the doc's hand-written `related:` links, then the docs that share a tag with it — derived at render time, so nobody has to write those links into anyone's frontmatter.
 
 ## How It Works
 
@@ -16,6 +16,7 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 4. **Anchor headings** — Headings get ids so `#section` links have something to land on, with the content pane offset so the fixed titlebar doesn't cover them.
 5. **Run before the sanitizer (answers only)** — Spec Assistant answers resolve links before the sanitizer runs, so a decoded `javascript:` href is still caught.
 6. **Run after body rendering** — In both the viewer and `specky export`, heading ids and link resolution are applied after the doc body is rendered, so heading ids don't interfere with the workflow stepper.
+7. **List the related docs** — Under each viewer page, a Related block lists the doc's `related:` targets first, then every other classified doc sharing at least one of its tags, most shared tags first, then by title, capped at six, each labelled with the tags it shares. Wider than `specky graph`, which only draws a tag edge from a workflow to a feature: a reader on a feature page wants its sibling features too. Derived rather than written because `related:` is reserved for a link no tag explains, because an agent writing one doc can't safely edit thirty others to add backlinks, and because a derived list can't go stale — it's recomputed from the tags on every render.
 
 ## Outcomes
 
@@ -26,6 +27,9 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 | Link targets a file the output doesn't contain | Link is unwrapped, keeping only its text |
 | Answer link that isn't a `.md` path (a page name, an in-page anchor) | Kept as written; the sanitizer still vets it |
 | Answer link resolves to a `javascript:` href | Caught by the sanitizer that runs after resolution |
+| A doc shares a tag with other classified docs | Its Related block lists them after its `related:` links, labelled with the shared tags, at most six |
+| A doc is both a `related:` target and a tag sibling | Listed once, as the `related:` link |
+| History docs and untagged root docs | Never listed as tag siblings |
 
 ## Acceptance Tests
 
@@ -37,3 +41,6 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 | A doc links a file not included in the export (e.g. `specs/history/` without `--include-history`) | The export renders | The link is unwrapped, keeping only its text |
 | An answer links a page name or an in-page anchor | The answer is rendered | The link is kept as written |
 | An answer contains a `javascript%3A…` link | The answer is rendered | The sanitizer catches the decoded href after resolution |
+| A feature tagged `refunds` with no `related:`, and a workflow also tagged `refunds` | The viewer renders | The feature's Related block links the workflow, labelled `refunds` |
+| A workflow whose `related:` names a feature it also shares a tag with | The viewer renders | That feature appears once in its Related block, with no tag label |
+| A history doc and GLOSSARY.md beside tagged docs | The viewer renders | Neither appears in any Related block |

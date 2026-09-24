@@ -548,6 +548,20 @@ def test_an_existing_doc_is_updated_in_place_rather_than_twinned(tmp_repo, write
     assert meta["owner"] == "#payments", "a hand-written owner must survive a regeneration"
 
 
+def test_an_update_names_the_facts_it_dropped(tmp_repo, write_doc, capsys):
+    _billing_repo(tmp_repo)
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## What It Does\n\nCap 250.00 (`refund_cap`).\n",
+        {"type": "feature", "tags": ["billing"]},
+    )
+    provider = ToolProvider([[_READ], [_submit()]])
+
+    document.document(tmp_repo, "refunds", provider, assume_yes=True)
+
+    assert "removed 2 fact(s): 250.00, `refund_cap`" in capsys.readouterr().out
+
+
 def test_a_rerun_keeps_the_type_and_tags_the_doc_already_has(tmp_repo, write_doc):
     """A type is changed by hand, never by one run's guess — the rule the commit hook follows too
     (`generator.settled_type_and_tags`)."""

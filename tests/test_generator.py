@@ -445,6 +445,34 @@ def test_a_section_update_leaves_every_other_section_byte_identical(tmp_repo, wr
     assert "refund policy" in now["How It Works"]
 
 
+def test_an_update_that_drops_a_constant_says_so_but_still_lands(tmp_repo, write_doc):
+    """A threshold changing drops its old value legitimately, so this is reported, not refused —
+    and the note is where the hook's reader learns which facts went."""
+    how = _HOW + "\nRefunds above €500.00 need a second approver. " * 1
+    doc = write_doc(
+        "billing/refund-flow.md",
+        _BIG_DOC.replace(_HOW, how),
+        {"type": "feature", "tags": ["refunds"]},
+    )
+    new_how = _HOW + "\nLarge refunds need a second approver. "
+    provider = FakeProvider([_CLASSIFY, json.dumps({"sections": {"How It Works": new_how}})])
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert result.written
+    assert "500.00" not in doc.read_text()
+    assert result.note.endswith("— removed 1 fact(s): 500.00")
+
+
+def test_an_update_that_keeps_every_fact_adds_nothing_to_the_note(tmp_repo, write_doc):
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    new_how = _HOW + "\nAnd one more sentence."
+    provider = FakeProvider([_CLASSIFY, json.dumps({"sections": {"How It Works": new_how}})])
+
+    assert sync_feature_doc(tmp_repo, _commit(), provider).note == (
+        f"updated {doc.relative_to(tmp_repo)}"
+    )
+
+
 @pytest.mark.parametrize(
     "suffix",
     [

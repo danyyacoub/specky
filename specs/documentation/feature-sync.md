@@ -75,6 +75,7 @@ A refusal is printed once by the hook, into terminal output nobody scrolls back 
 | The provider nests other sections inside one section's value | Each nested section is lifted out and replaces its namesake in place | DeepSeek once answered a one-sentence change to `## What It Does` with the rest of the doc inside that value. Spliced as one section, every heading appeared twice, the untouched originals under the new copies |
 | The new body repeats a `##` heading the old doc didn't | Same refusal | Two copies of a section are two docs stacked. Nothing is lost, so the size checks pass it; a repeat the doc already had doesn't count, so it can still be updated past one |
 | The new body names a `--flag` this CLI doesn't accept | Same refusal | A confident sentence about an option that doesn't exist is the one defect a reader cannot spot by reading |
+| The update drops a number, formula or defined term the doc stated | It's written, and the hook's line says `— removed N fact(s): …`, constants first | A threshold the commit changed drops its old value legitimately, so this reports rather than refuses; `specky check` lists the same facts on the pull request, where a reviewer sees them |
 | A draft is sitting in `.specky/pending/` | `specky doctor` warns while it waits, and `specky pr-comment` carries a block for it | The refusal is printed once into terminal output nobody scrolls back to, and the draft is gitignored — so it is the one thing about the range a reviewer can't otherwise see |
 | The provider's answer isn't the `{"sections": ...}` shape | It is read as a whole replacement body, still held to every guard | The fallback is quiet and the near-misses are common — a trailing brace or an echoed frontmatter block shouldn't cost a paid-for run |
 | The doc's `MODULES.md` row already exists under some other heading | Nothing is added | That file is one humans edit too, and a second row for an indexed doc is a defect rather than a fix |
@@ -112,4 +113,6 @@ A refusal is printed once by the hook, into terminal output nobody scrolls back 
 | A repo with a draft in `.specky/pending/` | Run `specky pr-comment` | The comment carries a refused-draft block, even when the range changed no docs at all |
 | A repo with an empty `.specky/pending/` | Run `specky pr-comment` | No refused-draft block appears |
 | Several feature-affecting commits since the last sync | Run `specky sync` | Each affected doc is updated or refused individually; the run completes |
+| A doc stating "above €500.00"; the commit's update says "large refunds" | The hook updates the doc | It's written; the note ends `— removed 1 fact(s): 500.00` |
+| An update that keeps every fact | The hook updates the doc | The note is just `updated <path>` |
 | `specky.toml` missing, or the provider endpoint unreachable | A commit is made | The commit succeeds; doc generation is skipped; the user sees the error |

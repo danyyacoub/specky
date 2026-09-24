@@ -191,3 +191,89 @@ def to_mermaid(graph: dict) -> str:
         lines.append(f'  {node_id_by_path[edge["from"]]} {arrow} {node_id_by_path[edge["to"]]}')
 
     return "\n".join(lines)
+
+
+# --- the tag registry ----------------------------------------------------------------------------
+# Everything above reads the index. What follows reads the worktree, because its readers can't wait
+# for one: `specky lint` runs on docs an agent wrote a minute ago, and `specky tags --write` seeds a
+# registry on a repo that may never have been indexed.
+
+
+def docs_on_disk(repo_root: Path) -> list[tuple[str, dict, str]]:
+    """Every topic doc under the docs root as `(repo-relative path, frontmatter, body)`.
+
+    Topic docs only: `history/` is one generated doc per commit, and the root's own files
+    (GLOSSARY.md, MODULES.md, PRODUCT.md, TAGS.md) describe the tree rather than a feature — the same
+    split `generator.ExistingDocs` makes.
+    """
+    from specky import frontmatter
+
+    root = paths.docs_root(repo_root)
+    if not root.exists():
+        return []
+    history = paths.history_dir(repo_root)
+    docs = []
+    for path in sorted(root.rglob("*.md")):
+        if path.parent == root or history in path.parents:
+            continue
+        meta, body = frontmatter.parse(path.read_text(errors="replace"))
+        docs.append((path.relative_to(repo_root).as_posix(), meta, body))
+    return docs
+
+
+def doc_tags(meta: dict) -> list[str]:
+    tags = meta.get("tags")
+    return [t for t in tags if t] if isinstance(tags, list) else []
+
+
+def load_tag_registry(repo_root: Path) -> dict[str, str]:
+    """`TAGS.md`'s `| **tag** | meaning |` rows, or `{}` when the repo keeps no registry.
+
+    No registry means no enforcement anywhere — `lint` and `check` only flag a tag outside the
+    registry when there is one — so a repo opts in by creating the file, not by configuring specky.
+    """
+    return paths.read_term_table(paths.tags_registry(repo_root))
+
+
+def _usage(docs: list[str], root_prefix: str) -> str:
+    names = [d.removeprefix(root_prefix).removesuffix(".md") for d in docs]
+    shown = ", ".join(names[:3])
+    return f"Used by {shown}" + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+
+
+def write_tag_registry(repo_root: Path) -> tuple[Path, list[str]]:
+    """Create or extend `TAGS.md` with every tag in use that it doesn't list yet.
+
+    Additive like `generator.append_glossary_rows`, and for the same reason: it's a file people
+    curate. A new row's meaning is a placeholder naming the docs that use the tag — true, and
+    obviously not a definition, so the person reviewing the diff knows what to replace. The rows
+    this seeds are the tags as they are, sprawl included: the registry is where a human merges
+    `document-matching` into `matching`, and seeding it is what puts that list in front of them.
+    """
+    path = paths.tags_registry(repo_root)
+    known = {tag.lower() for tag in load_tag_registry(repo_root)}
+    in_use: dict[str, list[str]] = {}
+    for doc_path, meta, _ in docs_on_disk(repo_root):
+        for tag in doc_tags(meta):
+            in_use.setdefault(tag, []).append(doc_path)
+    root_prefix = paths.docs_prefix(repo_root)
+    added = [tag for tag in sorted(in_use) if tag.lower() not in known and "|" not in tag and "*" not in tag]
+    if not added:
+        return path, []
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"# {repo_root.name} — Tags\n\n"
+            "The tag vocabulary for the docs in this tree. A doc's `tags:` come from this list, so "
+            "docs about one concept share one tag and group together in search, the viewer and "
+            "`specky graph`. `specky lint` flags a tag that isn't here: reuse one of these, or add "
+            "a row when a genuinely new business concept needs its own.\n\n"
+            "| Tag | Meaning |\n|---|---|\n"
+        )
+    lines = path.read_text().splitlines()
+    last_row = max((i for i, line in enumerate(lines) if line.startswith("|")), default=len(lines) - 1)
+    lines[last_row + 1 : last_row + 1] = [
+        f"| **{tag}** | {_usage(in_use[tag], root_prefix)} |" for tag in added
+    ]
+    path.write_text("\n".join(lines).rstrip("\n") + "\n")
+    return path, added

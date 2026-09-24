@@ -55,6 +55,8 @@ you back here, because this skill is the better path. `--headless` launches the 
 Before reading code, load the canonical references so the doc stays consistent with the rest of `specs/`:
 - **`specs/PRODUCT.md`** — what this product is and who it is for; the product framing every doc is written against.
 - **`specs/GLOSSARY.md`** — shared term definitions. Reuse these exact terms and their meanings; do **not** invent a synonym for a concept that already has a glossary entry. If the domain introduces a genuinely new term that other specs will need, note it (see step 8).
+- **`specs/TAGS.md`**, if the repo keeps one — the tag vocabulary. Your doc's `tags:` come from it (see the frontmatter rules). It's a plain file so you can read it without running anything.
+- **The docs that share your tags** (`specs/MODULES.md` lists them; `grep -l` for the tag in `specs/` finds them). Read the parts that touch your subject before writing — see **One owner per rule** below.
 
 ### 4. Understand the functionality
 - Read the main service files, routers, and key components.
@@ -91,10 +93,18 @@ tags: [kebab-case-business-concept]
 ## {Outcomes / Statuses / Results}
 {Table showing possible outcomes and their meaning}
 
+## Constants & Invariants
+{Required whenever the code applies any — see Constants rules below. Every threshold, weight or score,
+formula, limit and precedence order, stated exactly: numbers verbatim, formulas in a code block.}
+
 ## Edge Cases
 {`type: workflow` only, and required there. Table: Situation | What happens | Why — every branch off
 the happy path: what is refused, what is skipped silently, what a partial run leaves behind. If there
 genuinely are none, say so in one line rather than omitting the section.}
+
+## Maintainer Notes
+{Optional — see Maintainer notes rules below. Who reads a field, implementations that must change
+together, operational steps tied to this feature.}
 
 ## Acceptance Tests
 {Scenario-based tests that pin down the expected behaviour. One row per scenario, Given/When/Then style.
@@ -118,8 +128,11 @@ GLOSSARY.md so a scenario is unambiguous.}
 **Frontmatter rules**:
 - `type`: `feature` for step 5's "Feature" or "Specific case" types, `workflow` for "Workflow".
 - `tags`: 1-3 kebab-case tags naming the business/domain concept (e.g. `billing`, `refunds`), not
-  implementation details. Run `specky tags` first and reuse an existing tag if one fits — tags are only
-  useful for search/grouping if they're shared across docs, not invented per-doc.
+  implementation details. Pick them from `specs/TAGS.md` when the repo has one; otherwise reuse a tag
+  other docs already carry (`specky tags` lists them, or `grep -h '^tags:' specs/*/*.md`). Tags are
+  only useful for search and grouping if they're shared: a tag on one doc groups nothing, and
+  `specky lint` flags it. If no existing tag fits, don't invent one silently — use the closest, and
+  propose the new tag in your summary (step 10) so a human can add it to `TAGS.md`.
 - `related` (optional): add `related: [domain/topic]` only when this doc is genuinely tied to another
   one that shares no tag — e.g. a workflow that calls into a feature from a different domain. Leave it
   out otherwise; shared tags already cover most links and show up in `specky graph`.
@@ -140,12 +153,48 @@ GLOSSARY.md so a scenario is unambiguous.}
 - Use the exact vocabulary from `GLOSSARY.md`, and state the formula inline when a `Then` is a computed number.
 - Prefer scenarios that map to (or already have) real tests in the codebase's test suite — link them when they exist.
 
+**Constants rules** (the `## Constants & Invariants` section):
+- Every number the code decides with belongs here, exactly as the code has it: thresholds and
+  tolerances, scoring weights, limits and caps, retry counts, time windows. Write `+1000 when the
+  price is within tolerance`, never "a high score".
+- Every formula, in a code block, with its variables named as the product names them:
+  `variance_pct = (Σ target − Σ source) / Σ source × 100`.
+- Every precedence or priority order: which field wins over which (`final_amount` over `total`
+  when a global discount exists), which source is preferred (PO over quote), how ties break.
+- These are WHAT the feature does, not implementation detail — "focus on what, not how" never
+  means dropping them. A doc without them reads fine and can't answer the question a reader came
+  with. If the code has none, leave the section out.
+- On an update, never remove one unless the code no longer applies it. `specky check` lists every
+  constant a doc stopped stating, and a reviewer will ask about each.
+
+**Maintainer notes rules** (the optional `## Maintainer Notes` section):
+- For what a maintainer changing this feature must know and a user never needs: which consumers
+  read a field (so a change there has a blast radius), implementations that must change in lockstep
+  (a Python function and its SQL twin), and operational steps tied to the feature (a runbook: the
+  DNS record, the queue, the bucket).
+- Implementation detail is allowed here and only here. Keep it to facts a maintainer acts on, not a
+  code walkthrough.
+- Infrastructure that isn't one feature's (a whole environment's setup) belongs in the repo's own
+  ops docs, not here — link to it.
+
+**One owner per rule**:
+- A rule — a tie-break, a trigger, a threshold, what a re-run regenerates — is stated in one doc,
+  the one whose subject it is. Before writing, check the docs that share your tags: if one already
+  states the rule, link to it (`see [Category comparison](../comparison/by-category.md#best-deal)`)
+  instead of restating it.
+- If you must restate it (a workflow walking through a feature's rule), copy its wording exactly.
+  Two docs paraphrasing one rule is how they come to disagree: agents writing docs in parallel
+  shipped three such contradictions in one migration, each doc individually correct-looking.
+
 **Style rules**:
 - Plain language, no jargon unless necessary.
 - Compact — no verbose explanations.
-- Focus on WHAT and WHY, not implementation details.
+- Focus on WHAT and WHY, not implementation details — except the constants, which are part of the
+  WHAT (Constants rules above), and the Maintainer Notes section.
 - Tables for structured information.
 - No code blocks unless showing a formula, threshold, or a diagram (see below).
+- Link to the doc that owns a concept you mention (a relative link: `../billing/refund-flow.md`)
+  rather than re-explaining it.
 - Understandable by non-technical stakeholders.
 
 **Diagram rules**:
@@ -175,7 +224,15 @@ Open `specs/MODULES.md` at the repo root and keep the index current. It is a set
 
 ### 8. Keep `GLOSSARY.md` in sync
 - If documenting the module surfaced a **new shared term** other specs will reuse, add it to `specs/GLOSSARY.md` in the right section (definition only, no implementation detail).
+- Every status, outcome or verdict name your doc uses (the first column of an Outcomes table:
+  "Price variance", "To control") and every bolded term is vocabulary. If another doc uses it too,
+  it needs a glossary row — add one.
 - If a term is domain-specific and unlikely to be reused, keep it in the doc only and note it in the summary.
+- Then run `specky lint <your doc>` if you can run commands. It lists terms used across docs that
+  the glossary doesn't define, tags outside the vocabulary, and numbers two docs sharing a tag
+  disagree on. Fix what it names that your doc caused: add the glossary row, pick a registered tag,
+  or reconcile the number with the doc that owns it (One owner per rule). It's advice — it doesn't
+  block anything — but each finding is one a reader would otherwise hit.
 - Downstream tooling (this plugin's indexer and HTML viewer) reads `MODULES.md` and `GLOSSARY.md` back out and treats them as the authority on the doc set's hierarchy and vocabulary, so both must stay accurate.
 
 ### 9. Handle updates
@@ -185,6 +242,8 @@ If documentation already exists:
 - Only update sections that are outdated or missing (including the Acceptance Tests section
   and, per the Diagram rules above, a missing or now-stale diagram).
 - Preserve any manually-added context that's still accurate.
+- Keep every constant, formula and precedence order the code still applies (Constants rules), and
+  every glossary term the doc used — a rewrite that states them less exactly has lost them.
 - Report what was updated and why.
 
 ### 10. Summary
@@ -192,4 +251,6 @@ Report:
 - Files created or updated (functional doc, `MODULES.md`, `GLOSSARY.md`).
 - Whether a new `MODULES.md` section was added, and where the doc was placed.
 - Whether any glossary term was added.
+- Any tag you needed that `TAGS.md` doesn't have, as a proposal — never add it silently.
+- What `specky lint` still reports for your doc, if you ran it.
 - Any areas that need manual review (e.g., complex business logic that needs stakeholder input).

@@ -240,6 +240,7 @@ the same set of refusals stated as guards, with the reasoning behind each one.
 | The doc repeats a `##` heading the existing one didn't | Refused and parked | A doc stacked on itself loses nothing, so no size check notices it |
 | The target is `authored: human` | `read_doc` says so while the model can still change course; going ahead anyway parks the draft | Unlike the commit path, this can't be checked up front — the model picks the target, so by the time we know, the doc has been written and paid for |
 | The doc names a `--flag` nothing in the repo accepts | Refused and parked | It is the one error class a machine can settle by itself |
+| An update stops stating a number, formula or defined term the doc had | Written, and the summary line names them — `removed N fact(s): …`, constants first | The code may have changed the value; the person who ran it is the one who knows, so it's said rather than refused |
 | A diagram's class suffix names no `classDef` | It is repaired in place and the repair is reported | The only diagram defect specky can fix outright, rather than hand back |
 | A diagram the renderer can't parse | Refused and parked | The viewer degrades it into a block of raw syntax, in the middle of a doc written for people who don't read syntax |
 | The diagram renderer isn't installed | No claim is made either way, and diagrams are written as submitted | "Nothing can be said" is not the same as "they are all fine", and treating it as the latter would flag every diagram on a machine without Node |
@@ -272,6 +273,7 @@ the same set of refusals stated as guards, with the reasoning behind each one.
 | An unparseable diagram is refused | A fenced block the renderer returns nothing for | `specky document` | Nothing is written; the draft is parked |
 | No renderer, no claim | The mermaid tool is not installed | `specky document` | Diagrams are written as submitted rather than all being refused |
 | A gutted section is refused | An existing doc with a long `## What It Does` | An update that shortens it | The doc on disk is unchanged and the draft is parked |
+| Dropped facts are named | An existing doc stating ``Cap 250.00 (`refund_cap`)`` | An update that states neither | The doc is written; the output says ``removed 2 fact(s): 250.00, `refund_cap` `` |
 | A human-authored doc is frozen | `authored: human` on the target | `specky document` | Left alone and reported, with the draft parked rather than discarded |
 | A parked draft carries no borrowed keys | A frozen doc with an `owner:` | The draft is parked | It has this run's `type`/`tags` only — the frozen doc's hand-written keys are its own |
 | An existing doc is updated, not twinned | `specs/billing/refund-flow.md` exists | `specky document "refunds"` | One file, updated; a hand-written `owner:` survives |

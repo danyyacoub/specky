@@ -50,7 +50,10 @@ Work through at most 5 commits unless the user asked for more. Older ones stay p
    commit with `impact: internal` usually belongs to none.
    - If it changes behaviour an existing doc describes, update that doc. Follow steps 2–9 of the
      `document-domain` skill (`skills/document-domain/SKILL.md`), touching only the sections the
-     commit made wrong or incomplete.
+     commit made wrong or incomplete. Its Constants rules matter most here: keep every threshold,
+     formula and precedence order the commit didn't change, and update the ones it did — `specky
+     check` names each constant a doc stopped stating. Take tags from `specs/TAGS.md` when the repo
+     has one, and state a rule another doc owns by linking to it (One owner per rule).
    - If it adds a feature no doc covers, write one the same way, including its `MODULES.md` row.
    - Otherwise leave the feature docs alone.
 4. **Record it.** Pass the JSON on stdin, and `--feature` with the repo-relative path of the doc
@@ -64,9 +67,16 @@ Work through at most 5 commits unless the user asked for more. Older ones stay p
 
 Never hand-write or edit anything under `specs/history/`. `record-commit` is the only writer.
 
-### 3. Commit the docs
+### 3. Lint what you wrote
+If you changed any feature doc, run `run_specky lint <those docs>`. Fix what it names that your
+change caused — a glossary row for a term other docs also use, a registered tag, a number that
+disagrees with the doc owning it — and mention anything left in the report. It's advice, and it
+never blocks the commit.
+
+### 4. Commit the docs
 Stage exactly what this run wrote: the history docs `record-commit` printed, any feature doc you
-changed, and `specs/MODULES.md` / `specs/GLOSSARY.md` if you changed them. Then commit:
+changed, and `specs/MODULES.md` / `specs/GLOSSARY.md` / `specs/TAGS.md` if you changed them. Then
+commit:
 
 ```bash
 git add <those paths>
@@ -76,6 +86,6 @@ git commit -m "docs: sync specky docs [skip specky]"
 That subject is specky's own marker. The hook recognizes it and doesn't document the docs commit.
 Leave any other uncommitted work alone.
 
-### 4. Report
+### 5. Report
 For each commit: its short sha, the headline you wrote, and the feature doc it linked to, if any.
 Also report which feature docs were created or updated, and how many commits are still pending.

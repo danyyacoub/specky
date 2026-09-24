@@ -8,9 +8,10 @@ violation is a code file whose covering doc no commit in the range updated.
 Fails by default — a doc gate that only warns is a doc gate nobody notices — with `--advisory`
 to print the identical report and exit 0, which is how a repo adopts this before it's clean.
 Everything else it reports (commits with no history doc, changed files with no doc at all, docs
-that had already fallen behind their code per staleness.py, docs with no `owner:` to ask, the
-coverage figure) is advice and never affects the exit code: those are states a repo grows into,
-not regressions a contributor introduced.
+that had already fallen behind their code per staleness.py, docs with no `owner:` to ask, facts a
+doc stopped stating, the coverage figure) is advice and never affects the exit code: those are
+states a repo grows into, or judgements only a human can make — not regressions a contributor
+introduced.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
 
-from specky import paths
+from specky import facts, lint, paths
 from specky.commit_doc import _AUTO_COMMIT_MARKER, _is_revision, history_doc_for
 from specky.db import connect
 from specky.paths import read_table as _read_table
@@ -145,6 +146,13 @@ class Report:
     # `generator.WORKFLOW_STYLE_INSTRUCTIONS`), as `(doc path, what's missing)`. Advice for the
     # same reason `unowned` is: the doc predates the template more often than a diff broke it.
     misshapen: tuple[tuple[str, str], ...] = ()
+    # Docs this range edited, each with the facts (`facts.py`) it stated at the fork point and no
+    # longer states, constants first. Advice: a changed threshold drops its old value legitimately,
+    # and only the person who changed it knows which this was.
+    removed_facts: tuple[tuple[str, tuple[facts.Fact, ...]], ...] = ()
+    # `specky lint` over the docs in play: glossary gaps, stray tags, numbers two docs disagree on.
+    # Advice for the reason all of lint is — see lint.py.
+    lint_findings: lint.LintReport | None = None
 
     @property
     def covered(self) -> int:
@@ -171,6 +179,18 @@ class Report:
             "stale_elsewhere": self.stale_elsewhere,
             "unowned": list(self.unowned),
             "misshapen": [{"doc_path": path, "missing": missing} for path, missing in self.misshapen],
+            "removed_facts": [
+                {
+                    "doc_path": path,
+                    "facts": [fact.as_dict() | {"constant": fact.constant} for fact in lost],
+                }
+                for path, lost in self.removed_facts
+            ],
+            **(
+                {k: v for k, v in self.lint_findings.as_dict().items() if k not in ("docs", "registry")}
+                if self.lint_findings
+                else {"undefined_terms": [], "tag_problems": [], "conflicts": []}
+            ),
             "coverage": {
                 "covered": self.covered,
                 "changed": len(self.code_files),
@@ -352,6 +372,39 @@ def _misshapen_workflows(repo_root: Path, docs: set[str]) -> dict[str, str]:
     return out
 
 
+def _removed_facts(
+    repo_root: Path, base: str, touched_docs: list[str]
+) -> dict[str, tuple[facts.Fact, ...]]:
+    """`{doc path: facts it stopped stating}` for each doc this range edited.
+
+    Compared at the fork point against HEAD — both from git, never the worktree, so CI and a laptop
+    agree — which makes it the one place a lost constant is caught whoever did the rewrite: the
+    commit hook (which also says so in its own output), `specky document`, an agent following the
+    `document-domain` skill, or a hand edit. A doc new in the range has nothing to lose, and a
+    deleted one isn't a rewrite, so both are skipped; so is `history/`, which is append-only.
+    """
+    if base in (EMPTY_TREE, "HEAD"):
+        return {}
+    try:
+        fork = _git(repo_root, "merge-base", base, "HEAD").strip() or base
+    except subprocess.CalledProcessError:
+        fork = base
+    history = paths.history_prefix(repo_root)
+    out: dict[str, tuple[facts.Fact, ...]] = {}
+    for doc in touched_docs:
+        if doc.startswith(history) or not doc.endswith(".md"):
+            continue
+        try:
+            before = _git(repo_root, "show", f"{fork}:{doc}")
+            after = _git(repo_root, "show", f"HEAD:{doc}")
+        except subprocess.CalledProcessError:
+            continue
+        lost = sorted(facts.dropped(before, after), key=lambda fact: not fact.constant)
+        if lost:
+            out[doc] = tuple(lost)
+    return out
+
+
 def run_check(repo_root: Path, base: str | None = None, since: str | None = None) -> Report:
     config = CheckConfig.load(repo_root)
     resolved = resolve_base(repo_root, base=base, since=since)
@@ -403,6 +456,9 @@ def run_check(repo_root: Path, base: str | None = None, since: str | None = None
         stale_elsewhere=len(stale) - len(covers_range),
         unowned=tuple(sorted(unowned & in_play)),
         misshapen=tuple(sorted(misshapen.items())),
+        removed_facts=tuple(sorted(_removed_facts(repo_root, resolved, touched_docs).items())),
+        # Same scope as `unowned` and `misshapen`: the docs this range is about.
+        lint_findings=lint.run_lint(repo_root, only=in_play) if in_play else None,
         uncovered=tuple(f for f in code_files if f not in covering),
         undocumented_commits=tuple(_undocumented_commits(repo_root, resolved)),
     )
@@ -460,6 +516,19 @@ def report_lines(report: Report) -> list[str]:
         ]
         if len(report.misshapen) > STALE_LIST_LIMIT:
             lines.append(f"  … and {len(report.misshapen) - STALE_LIST_LIMIT} more")
+    if report.removed_facts:
+        lines.append("")
+        lines.append(
+            f"Note: {len(report.removed_facts)} doc(s) this range edited no longer state facts they "
+            "used to — numbers, formulas, defined terms. Confirm each went on purpose (the code "
+            "changed it) rather than in a rewrite:"
+        )
+        for path, lost in report.removed_facts[:STALE_LIST_LIMIT]:
+            lines.append(f"  {path} — {len(lost)}: {facts.summary(list(lost))}")
+        if len(report.removed_facts) > STALE_LIST_LIMIT:
+            lines.append(f"  … and {len(report.removed_facts) - STALE_LIST_LIMIT} more")
+    if report.lint_findings:
+        lines += lint.section_lines(report.lint_findings, prefix="Note: ")
     if report.stale_elsewhere:
         lines.append("")
         lines.append(
