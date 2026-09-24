@@ -147,8 +147,8 @@ lasts is the blueprint, not this session. Don't run steps 3–6 for their own sa
 
 1. Ask which mode the user wants. **Read-only** (the default): Devin searches and hand-edits
    `specs/`, and `specky check` on the pull request is the gate. It needs no provider and no key.
-   **Write**: the git hook runs in the VM and documents Devin's commits, which needs a provider key
-   stored as a Devin secret.
+   **Write**: the git hook runs in the VM and documents Devin's commits, which needs a provider
+   credential stored as a Devin secret.
 2. Propose the blueprint from the specky repo's `integrations/devin/blueprint.yaml`, merged into
    the repo's own if there is one. It installs specky and runs `specky index` on every session.
    For write mode, the `maintenance` step also runs:
@@ -157,8 +157,10 @@ lasts is the blueprint, not this session. Don't run steps 3–6 for their own sa
      --model claude-haiku-4-5 --api-key-env ANTHROPIC_API_KEY --no-validate
    specky install-git-hook
    ```
-   Devin has no headless CLI specky can drive, so the provider is an API. Any OpenAI-compatible
-   endpoint works; the key's variable must match the secret's name.
+   Any OpenAI-compatible endpoint works; the key's variable must match the secret's name. To have
+   Devin itself write the docs instead, use `specky init --provider agent --agent devin` and install
+   Devin CLI in the blueprint (`curl -fsSL https://cli.devin.ai/install.sh | bash`), restoring its
+   `credentials.toml` from a secret: `integrations/devin/README.md` has the steps.
 3. Propose `.devin/mcp_config.json` and the `AGENTS.md` paragraph from the same directory.
 4. Say that syncing the blueprint is done in Devin's UI (Settings → the repo → Environment) and
    that it applies from the next session.

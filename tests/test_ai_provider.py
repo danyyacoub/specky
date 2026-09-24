@@ -81,6 +81,14 @@ def test_the_stdin_marker_stays_last():
     assert provider.command.endswith("--model gpt-5 -")
 
 
+def test_devin_reads_its_prompt_from_a_file():
+    """`devin -p` ignores stdin, so the prompt it's piped has to arrive through `--prompt-file`."""
+    provider = load_provider({"provider": "agent", "agent": "devin", "model": "swe"})
+    assert provider.command == (
+        "devin -p --prompt-file /dev/stdin --respect-workspace-trust false --model swe"
+    )
+
+
 def test_an_unknown_agent_is_a_config_error():
     with pytest.raises(ConfigError, match="isn't one specky knows"):
         load_provider({"provider": "agent", "agent": "hal9000"})

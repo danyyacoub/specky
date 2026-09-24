@@ -597,6 +597,12 @@ AGENTS: dict[str, AgentCLI] = {
     "opencode": AgentCLI("opencode", ("opencode", "run"), env=("OPENCODE",)),
     "kiro": AgentCLI("Kiro", ("kiro-cli", "chat", "--no-interactive")),
     "cursor": AgentCLI("Cursor Agent", ("cursor-agent", "-p")),
+    # `devin -p` ignores stdin, so the prompt comes in as a file. Print mode can't show the
+    # workspace-trust prompt and fails in an untrusted directory — a fresh clone, a Devin VM.
+    "devin": AgentCLI(
+        "Devin",
+        ("devin", "-p", "--prompt-file", "/dev/stdin", "--respect-workspace-trust", "false"),
+    ),
 }
 
 

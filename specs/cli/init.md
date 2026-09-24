@@ -11,7 +11,7 @@ authored: human
 `specky init` picks an AI provider, proves it works with one live call, and writes the result to
 `specky.toml`. It is the only command that writes that file, and it makes sure `specky.toml` is
 gitignored. The choices are the coding agent the developer already uses (Claude Code, Codex,
-Gemini CLI, opencode, Kiro or Cursor Agent), run headless on its own login with no API key, or an
+Gemini CLI, opencode, Kiro, Cursor Agent or Devin CLI), run headless on its own login with no API key, or an
 API: any OpenAI-compatible endpoint, or Claude on Amazon Bedrock with the machine's AWS credentials. For an agent the model is optional: named, it's pinned; left out, the agent
 keeps its own default. An API config names the *environment variable* holding the key, never a key.
 Either way, which provider a developer uses is per-machine.

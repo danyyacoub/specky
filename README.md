@@ -85,7 +85,7 @@ a PR's doc changes, and scaffold tests from a doc's acceptance-test table.
 1. **Docs live in your repo as markdown**: `specs/<domain>/<topic>.md` for features and workflows,
    and `specs/history/<sha>.md` for commits. You review and version them like code.
 2. **Writing calls your AI provider.** Either the coding agent you already use (Claude Code,
-   Codex, Gemini CLI, opencode, Kiro or Cursor Agent), on its default model or one you name, any
+   Codex, Gemini CLI, opencode, Kiro, Cursor Agent or Devin CLI), on its default model or one you name, any
    OpenAI-compatible endpoint, or Claude on Amazon Bedrock (install `specky[bedrock]`; credentials
    come from your AWS config). Only these commands call it: the commit hooks, `sync`,
    `document`, `tag` and the Spec Assistant. They send the diff, code or docs they are working on.
