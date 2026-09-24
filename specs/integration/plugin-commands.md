@@ -1,12 +1,7 @@
 ---
 type: feature
 tags: [configuration, cli]
-sources:
-  - commands/doctor.md
-  - commands/check.md
-  - commands/lint.md
-  - commands/verify-migration.md
-  - tests/test_packaging.py
+sources: [commands/doctor.md, commands/check.md, commands/lint.md, commands/verify-migration.md, tests/test_packaging.py]
 ---
 
 # Integration — Plugin Commands
@@ -20,7 +15,8 @@ fix for each `fail`, the doc a violation names, the constants a migration lost. 
 is one command instead of knowing which subcommands to chain and how to read their output.
 
 They live in `commands/` at the plugin root, next to the skills. Claude Code discovers them in
-every repo that has the plugin, under the same `/specky:` namespace as the skills.
+every repo that has the plugin, under the same `/specky:` namespace as the skills. opencode and
+Codex can copy the same files in as their own commands or prompts.
 
 ## How It Works
 
