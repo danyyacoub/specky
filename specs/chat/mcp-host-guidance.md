@@ -9,22 +9,25 @@ tags: [documentation, ai, cli]
 When an MCP host connects to the specky server, the server hands the host's model a short set of instructions telling it to check the repo's docs before reading source code for behaviour questions — the lookup written out inline, because those instructions are the one thing every host sees. For hosts that load skills, the plugin's `find-feature` and `explore-docs` skills carry the same lookup: `find-feature` for "what is this meant to do before I use it?", `explore-docs` for the broader how and why. Either way a question like "how do refunds work?" gets a cheaper, citable answer from the docs instead of a read through the code. This matters most for hosts like Claude Code that defer MCP tools and show the model only their names.
 
 ## How It Works
+
 1. **Connect**: the host connects to the specky MCP server.
 2. **Receive instructions**: the server sends its connect-time instructions, telling the model to check specky first for what a feature does, how a flow works or why it changed, to cite the doc, and to verify against the doc's `sources` before changing code on its word. Which instructions it sends is decided once, when the server starts: only a repo whose docs root holds markdown gets "check specky first". Anywhere else (no docs root, a docs root with no markdown, or not a git repo at all) it gets a short note that specky has nothing to answer from there, that its tools should be left alone unless the user asks about specky, and that `/specky:setup` sets a repo up.
-3. **Pick up the skill**: where the host loads skills, the model also has `find-feature` and `explore-docs` available; both spell out the lookup — search, read, the doc's behaviour ids, its history, and the sources check.
-4. **Explore the docs**: on a behaviour question, the model follows the skill: `search_docs`, then `read_doc`, then `doc_behaviours` for the doc's stable behaviour ids, then `search_history` or `commits_for_doc` for the why when asked.
-5. **Check against the code when it matters**: before an answer drives a code change, the model compares the doc's last commit against its sources' to catch a doc that may be stale.
-6. **Answer with citations**: the model leads with the short answer and the doc it came from, cites every doc path and behaviour id the answer rests on, and says what it verified in code.
-7. **Tool names stay real**: a test pins every tool name the instructions and the lookup skills mention to a tool that actually exists.
+3. **Tools declared read-only**: every tool is registered with `ToolAnnotations(readOnlyHint=True, openWorldHint=False)`, because they only read the docs tree, the index or git. Clients that gate tools by mode (plan mode, read-only agents) can still call them.
+4. **Pick up the skill**: where the host loads skills, the model also has `find-feature` and `explore-docs` available; both spell out the lookup — search, read, the doc's behaviour ids, its history, and the sources check.
+5. **Explore the docs**: on a behaviour question, the model follows the skill: `search_docs`, then `read_doc`, then `doc_behaviours` for the doc's stable behaviour ids, then `search_history` or `commits_for_doc` for the why when asked.
+6. **Check against the code when it matters**: before an answer drives a code change, the model compares the doc's last commit against its sources' to catch a doc that may be stale.
+7. **Answer with citations**: the model leads with the short answer and the doc it came from, cites every doc path and behaviour id the answer rests on, and says what it verified in code.
+8. **Tool names stay real**: a test pins every tool name the instructions and the lookup skills mention to a tool that actually exists.
 
 ```mermaid
 flowchart TD
     A[Host connects to specky MCP server] --> B[Server sends connect-time instructions]
-    B --> C[Model picks up find-feature / explore-docs skills]
-    C --> D[Explore the docs: search, read, behaviour ids, history]
-    D --> E[Check doc against code when it matters]
-    E --> F[Answer with citations]
-    F --> G[Test pins mentioned tool names to real tools]
+    B --> C[Tools declared read-only via annotations]
+    C --> D[Model picks up find-feature / explore-docs skills]
+    D --> E[Explore the docs: search, read, behaviour ids, history]
+    E --> F[Check doc against code when it matters]
+    F --> G[Answer with citations]
+    G --> H[Test pins mentioned tool names to real tools]
 ```
 
 ## Outcomes
