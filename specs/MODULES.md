@@ -52,6 +52,7 @@ command that calls a model goes through this layer.
 | Doc | Purpose |
 |---|---|
 | [ai/provider-cost-controls.md](ai/provider-cost-controls.md) | Prompt prefix caching, batched requests, and per-task model routing |
+| [ai/skill-handoff.md](ai/skill-handoff.md) | Hand off commit and document work from an in-session agent to its own skills instead of launching a headless copy, with opt-out via [ai] skill_handoff |
 
 ## Docs
 
