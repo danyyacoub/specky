@@ -40,6 +40,7 @@ sequenceDiagram
 | Handoff disabled by config | `[ai] skill_handoff = false` turned the feature off; specky behaves as before. |
 
 ## Edge Cases
+
 | Situation | What happens | Why |
 |---|---|---|
 | Commit is made from a terminal or CI | Nothing is handed off; specky documents the commit as before. | The hook only hands off when the commit came from inside the agent's session. |
@@ -51,6 +52,7 @@ sequenceDiagram
 | The hook's stdout would normally never reach the agent | The handoff line is returned as hook `additionalContext` instead. | Plain hook stdout doesn't reach the agent. |
 
 ## Acceptance Tests
+
 | Given | When | Then |
 |---|---|---|
 | `provider = "agent"` and a commit made inside that agent's session | The git hook fires | specky prints `specky: commits to document: …` and leaves the commits pending for the `document-commits` skill. |
