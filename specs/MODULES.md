@@ -101,3 +101,9 @@ command that calls a model goes through this layer.
 | Doc | Purpose |
 |---|---|
 | [catalog/feature-graph.md](catalog/feature-graph.md) | List, tag and link classified feature/workflow docs, and emit the feature/workflow graph as Mermaid |
+
+## Diagnostics
+
+| Doc | Purpose |
+|---|---|
+| [diagnostics/provider-command-errors.md](diagnostics/provider-command-errors.md) | Surface the underlying stderr when an agent CLI provider command fails, and let doctor detect a logged-out Devin CLI |
