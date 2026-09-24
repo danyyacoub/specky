@@ -181,13 +181,30 @@ def test_a_provider_command_that_isnt_installed_fails(in_repo):
 
 
 @pytest.mark.parametrize(
-    ("status_output", "expected"), [("Not logged in.\n", "fail"), ("Logged in as a@b.c\n", "ok")]
+    ("status_output", "environ", "expected"),
+    [
+        ("Not logged in.\n", {}, "fail"),
+        ("Logged in as a@b.c\n", {}, "ok"),
+        (
+            "Not logged in.\n",
+            {"VSCODE_IPC_HOOK": "/Users/x/Library/Application Support/Devin/1.12-main.sock"},
+            "warn",
+        ),
+    ],
 )
-def test_the_devin_agent_checks_devin_cli_is_logged_in(in_repo, monkeypatch, status_output, expected):
+def test_the_devin_agent_checks_devin_cli_is_logged_in(
+    in_repo, monkeypatch, status_output, environ, expected
+):
     """Devin CLI's login is separate from Devin Desktop's, and a logged-out `devin -p` fails every
-    call with nothing but `Login canceled`."""
+    call with nothing but `Login canceled`. Inside a Devin session it only warns — the session's
+    own commits hand off to the skills and never launch `devin -p`."""
     _write_config(in_repo, '[ai]\nprovider = "agent"\nagent = "devin"\n')
     monkeypatch.setattr(doctor.shutil, "which", lambda exe: f"/bin/{exe}")
+    # A run inside a real Devin Desktop session carries the marker already — clear it so the
+    # "outside a session" cases aren't polluted by the machine the suite happens to run on.
+    monkeypatch.delenv("VSCODE_IPC_HOOK", raising=False)
+    for var, value in environ.items():
+        monkeypatch.setenv(var, value)
     real_run = doctor._run
 
     def fake_run(args, cwd=None):

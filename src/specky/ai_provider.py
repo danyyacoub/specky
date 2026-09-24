@@ -593,8 +593,9 @@ class AgentCLI:
     head: tuple[str, ...]
     model_flag: str = "--model"
     tail: tuple[str, ...] = ()
-    # Env vars the agent sets for the commands it runs, so specky launched from inside a session
-    # (the setup skill, a terminal tab) can tell which agent that is.
+    # Session markers: env vars the agent sets for the commands it runs, so specky launched from
+    # inside a session (the setup skill, a terminal tab, a git hook) can tell which agent that
+    # is. `VAR` matches on presence; `VAR=substring` also requires the value to contain it.
     env: tuple[str, ...] = ()
 
     @property
@@ -617,9 +618,14 @@ AGENTS: dict[str, AgentCLI] = {
     "cursor": AgentCLI("Cursor Agent", ("cursor-agent", "-p")),
     # `devin -p` ignores stdin, so the prompt comes in as a file. Print mode can't show the
     # workspace-trust prompt and fails in an untrusted directory — a fresh clone, a Devin VM.
+    # Devin sets no variable of its own, but Devin Desktop is a VS Code fork whose shells
+    # inherit `VSCODE_IPC_HOOK` pointing into the app's data directory —
+    # `…/Application Support/Devin/…` where VS Code's says Code and Windsurf's says Windsurf —
+    # so the socket's path is the marker.
     "devin": AgentCLI(
         "Devin",
         ("devin", "-p", "--prompt-file", "/dev/stdin", "--respect-workspace-trust", "false"),
+        env=("VSCODE_IPC_HOOK=/Devin/",),
     ),
 }
 
@@ -642,15 +648,23 @@ def in_agent_session(name: str, environ: Mapping[str, str] | None = None) -> boo
     """Whether this process runs inside a session of agent `name`, by the env that agent sets.
 
     A git hook inherits the env of the shell that ran `git commit`, so a commit an agent makes
-    carries its marker into `specky commit-doc`. An agent that sets none (Kiro, Cursor, Devin)
+    carries its marker into `specky commit-doc`. An agent with no marker at all (Kiro, Cursor)
     never matches.
     """
     environ = os.environ if environ is None else environ
     agent = AGENTS.get(name)
     if agent is None:
         return False
+
+    def marked(spec: str) -> bool:
+        var, sep, want = spec.partition("=")
+        value = environ.get(var)
+        return bool(value) if not sep else bool(value) and want in value
+
     marker = environ.get("AI_AGENT", "").lower()
-    return any(environ.get(var) for var in agent.env) or bool(marker and marker.startswith(name))
+    return any(marked(spec) for spec in agent.env) or bool(
+        marker and marker.startswith(name)
+    )
 
 
 def skill_handoff(config: Mapping, environ: Mapping[str, str] | None = None) -> bool:

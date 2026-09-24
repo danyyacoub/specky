@@ -33,7 +33,10 @@ def _outside_any_agent_session(monkeypatch):
     agent sets would make every `provider = "agent"` test hand its work off to a skill."""
     from specky.ai_provider import AGENTS
 
-    for name in {"AI_AGENT", *(var for agent in AGENTS.values() for var in agent.env)}:
+    for name in {
+        "AI_AGENT",
+        *(spec.partition("=")[0] for agent in AGENTS.values() for spec in agent.env),
+    }:
         monkeypatch.delenv(name, raising=False)
 
 

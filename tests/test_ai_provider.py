@@ -133,10 +133,31 @@ def test_a_session_is_recognised_by_the_agents_own_marker():
     assert not ai_provider.in_agent_session("nope", {"CLAUDECODE": "1"})
 
 
+def test_devin_is_recognised_by_its_desktop_socket_path():
+    """Devin sets no marker of its own; its Desktop shells all carry a `VSCODE_IPC_HOOK` into the
+    app's data directory, and the `/Devin/` in that path is what sets it apart from VS Code and
+    Windsurf shells."""
+    devin = {"VSCODE_IPC_HOOK": "/Users/x/Library/Application Support/Devin/1.12-main.sock"}
+    assert ai_provider.in_agent_session("devin", devin)
+    assert not ai_provider.in_agent_session(
+        "devin", {"VSCODE_IPC_HOOK": "/Users/x/Library/Application Support/Code/1.12-main.sock"}
+    ), "a VS Code shell"
+    assert not ai_provider.in_agent_session(
+        "devin",
+        {"VSCODE_IPC_HOOK": "/Users/x/Library/Application Support/Windsurf/1.12-main.sock"},
+    ), "a Windsurf shell"
+    assert not ai_provider.in_agent_session("devin", {}), "no variable at all"
+
+
 @pytest.mark.parametrize(
     "config, environ, expected",
     [
         ({"provider": "agent", "agent": "claude"}, {"CLAUDECODE": "1"}, True),
+        (
+            {"provider": "agent", "agent": "devin"},
+            {"VSCODE_IPC_HOOK": "/Users/x/Library/Application Support/Devin/1.12-main.sock"},
+            True,
+        ),
         ({"provider": "agent", "agent": "claude"}, {}, False),
         ({"provider": "agent", "agent": "codex"}, {"CLAUDECODE": "1"}, False),
         ({"provider": "agent", "agent": "claude", "skill_handoff": "false"}, {"CLAUDECODE": "1"}, False),

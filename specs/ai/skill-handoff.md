@@ -44,7 +44,8 @@ sequenceDiagram
 |---|---|---|
 | Commit is made from a terminal or CI | Nothing is handed off; specky documents the commit as before. | The hook only hands off when the commit came from inside the agent's session. |
 | Provider is not `agent` (Anthropic, Bedrock, OpenAI-compatible, `command`) | Nothing changes; the provider documents the commit as before. | Handoff is specific to `provider = "agent"`. |
-| Agent sets no session marker (Kiro, Cursor, Devin) | The commit is documented by specky as before. | Handoff depends on the agent's session env markers, which those agents don't set. |
+| Agent sets no session marker (Kiro, Cursor) | The commit is documented by specky as before. | Handoff depends on the agent's session env markers, which those agents don't set. |
+| Commit is made from a Devin Desktop session | Handoff fires like it does for the other agents. | Devin sets no marker of its own, but every Desktop shell inherits `VSCODE_IPC_HOOK` pointing into the app's data directory — `…/Application Support/Devin/…` where VS Code's says Code and Windsurf's says Windsurf — so that path is the marker. |
 | `[ai] skill_handoff = false` | Handoff is skipped; specky documents the commits itself. | This is the explicit opt-out. |
 | `specky document` is run inside the agent's session | The agent is pointed at the `document-domain` skill instead of a headless run. `--headless` restores the old behaviour. | The session agent already has the repo in context. |
 | The hook's stdout would normally never reach the agent | The handoff line is returned as hook `additionalContext` instead. | Plain hook stdout doesn't reach the agent. |
@@ -58,5 +59,7 @@ sequenceDiagram
 | `provider = "agent"` and `specky document` runs inside the session | The command runs | The agent is pointed at the `document-domain` skill; `--headless` restores the old headless behaviour. |
 | Provider is Anthropic, Bedrock, OpenAI-compatible, or `command` | A commit is made | Nothing is handed off; specky documents the commit as before. |
 | A commit is made from a terminal or CI | The hook fires | No handoff; specky documents the commit as before. |
-| The agent sets no session marker (Kiro, Cursor, Devin) | A commit is made | No handoff; specky documents the commit as before. |
+| The agent sets no session marker (Kiro, Cursor) | A commit is made | No handoff; specky documents the commit as before. |
+| `provider = "agent"`, `agent = "devin"`, and `VSCODE_IPC_HOOK` points into `…/Devin/…` | A commit is made | specky hands the commits off to the `document-commits` skill. |
+| `VSCODE_IPC_HOOK` points into VS Code's or Windsurf's data directory | specky checks for a Devin session | It is not treated as a Devin session. |
 | `[ai] skill_handoff = false` | A commit is made inside an `agent` session | Handoff is skipped and specky documents the commits itself. |

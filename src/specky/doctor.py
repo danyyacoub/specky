@@ -251,9 +251,22 @@ def _config(repo_root: Path) -> list[Check]:
 def _devin_login_check() -> Check:
     """Devin CLI keeps its own login, separate from Devin Desktop's: installed-but-logged-out is
     the common state, and `devin -p` then fails every call with only `Login canceled`. Local, no
-    network: `devin auth status` reads the stored credentials."""
+    network: `devin auth status` reads the stored credentials.
+
+    Inside a Devin session the logged-out state only warns instead of failing: commits the
+    session agent makes hand off to its skills without touching the CLI at all, so the login is
+    only needed for commits made from a terminal or CI."""
     status = _run(["devin", "auth", "status"])
     if "not logged in" in (status.stdout + status.stderr).lower():
+        from specky.ai_provider import in_agent_session
+
+        if in_agent_session("devin"):
+            return Check(
+                "config",
+                WARN,
+                "Devin CLI is not logged in — session commits hand off to the skills, "
+                "but terminal/CI commits need `devin auth login`",
+            )
         return Check("config", FAIL, "Devin CLI is not logged in — run `devin auth login`")
     return Check("config", OK, "Devin CLI is logged in")
 

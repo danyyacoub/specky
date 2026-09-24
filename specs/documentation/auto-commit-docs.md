@@ -97,8 +97,8 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
 
    **Handed to the session agent instead.** When `[ai] provider = "agent"` and the commit came from
    inside that same agent's session, no provider is called. The fire can tell from the env markers
-   the agent sets (`CLAUDECODE`, `CODEX_SANDBOX`, `GEMINI_CLI`, `OPENCODE`, `AI_AGENT`), which a git
-   hook inherits from the shell that ran `git commit`. The fire prints
+   the agent sets (`CLAUDECODE`, `CODEX_SANDBOX`, `GEMINI_CLI`, `OPENCODE`, `AI_AGENT`, and for Devin
+   Desktop a `VSCODE_IPC_HOOK` under `…/Devin/…`), which a git hook inherits from the shell that ran `git commit`. The fire prints
    `specky: commits to document: N (<shas>) — run the document-commits skill`, and the commits stay
    pending. The agent then documents them with the `document-commits` skill, which already has the
    repo in context, instead of a headless copy of itself starting cold. The skill uses two helpers:
@@ -109,7 +109,7 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    Claude Code's `PostToolUse` hook lifts the handoff line into the agent's context. On other hosts
    it shows up in the `git commit` output. The headless path still runs in these cases:
    - any other provider;
-   - an agent that sets no marker (Kiro, Cursor, Devin);
+   - an agent that sets no marker (Kiro, Cursor);
    - a commit made outside a session (a terminal, a GUI client, CI);
    - `[ai] skill_handoff = false`.
 
