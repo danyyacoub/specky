@@ -39,7 +39,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Sequence
 
 from specky import frontmatter, paths
-from specky.ai_provider import ConfigError, Provider, load_provider_from_toml, supports_batch
+from specky.ai_provider import (
+    HANDOFF_MARKER,
+    ConfigError,
+    Provider,
+    load_provider_from_toml,
+    read_ai_config,
+    skill_handoff,
+    supports_batch,
+)
 from specky.db import connect, repo_root as _repo_root
 from specky.lock import LockBusy, exclusive
 
@@ -500,6 +508,39 @@ def pending_commits(
         if wanted:
             pending.append((sha, subject))
     return pending[:limit] if limit else pending
+
+
+def handoff_line(todo: Sequence[tuple[str, str]]) -> str:
+    """What `main()` prints instead of documenting, when the session agent will do it.
+
+    Starts with `HANDOFF_MARKER`, which the Claude Code hook looks for. Every other host sees the
+    line in the output of the `git commit` its agent ran, which is the same place it lands.
+    """
+    shas = ", ".join(sha[:7] for sha, _ in todo)
+    return (
+        f"{HANDOFF_MARKER}: {len(todo)} ({shas}) — run the document-commits skill to write "
+        "their history docs in this session"
+    )
+
+
+def record_commit(
+    repo_root: Path, sha: str, reply: str, feature: str | None = None
+) -> Path:
+    """Write the history doc for `sha` from a micro-doc reply someone else wrote.
+
+    The `document-commits` skill's half of `_sync_one`: the session agent writes the reply and any
+    feature doc itself, and this records it exactly as a provider's reply would have been — same
+    parse, same file, same index rows.
+    """
+    commit = _commit_info(sha, with_diff=False)
+    doc = parse_micro_doc(reply)
+    if feature:
+        doc.features = [feature]
+    path = write_history_file(repo_root, commit, doc)
+    record_micro_doc(repo_root, commit, doc.text())
+    if feature:
+        record_commit_link(repo_root, commit.sha, feature)
+    return path
 
 
 def _is_legacy(doc: Path | None) -> bool:
@@ -1044,6 +1085,13 @@ def _head_subject(repo_root: Path) -> str:
     ).stdout.strip()
 
 
+def _hands_off(repo_root: Path) -> bool:
+    try:
+        return skill_handoff(read_ai_config(repo_root / "specky.toml"))
+    except ConfigError:
+        return False  # no provider either; the provider load below says so
+
+
 def main(rewritten: bool = False) -> None:
     """Hook entry point for post-commit, post-merge and post-rewrite alike.
 
@@ -1092,6 +1140,12 @@ def main(rewritten: bool = False) -> None:
             return  # nothing to document and nothing owed: don't even take the lock
 
         provider = None
+        if todo and _hands_off(repo_root):
+            # The agent that made this commit is still there to document it, with the repo in
+            # context and its own tools. Launching a headless copy of that same agent would only
+            # redo that work worse, so the commits stay pending for its skill instead.
+            print(handoff_line(todo))
+            todo = []
         if todo:
             try:
                 provider = load_provider_from_toml(repo_root / "specky.toml", "commit-doc")

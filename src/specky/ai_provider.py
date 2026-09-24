@@ -632,11 +632,43 @@ def current_agent(environ: Mapping[str, str] | None = None) -> str | None:
     """
     environ = os.environ if environ is None else environ
     installed = [name for name, agent in AGENTS.items() if shutil.which(agent.executable)]
-    marker = environ.get("AI_AGENT", "").lower()
     for name in installed:
-        if any(environ.get(var) for var in AGENTS[name].env) or (marker and marker.startswith(name)):
+        if in_agent_session(name, environ):
             return name
     return installed[0] if installed else None
+
+
+def in_agent_session(name: str, environ: Mapping[str, str] | None = None) -> bool:
+    """Whether this process runs inside a session of agent `name`, by the env that agent sets.
+
+    A git hook inherits the env of the shell that ran `git commit`, so a commit an agent makes
+    carries its marker into `specky commit-doc`. An agent that sets none (Kiro, Cursor, Devin)
+    never matches.
+    """
+    environ = os.environ if environ is None else environ
+    agent = AGENTS.get(name)
+    if agent is None:
+        return False
+    marker = environ.get("AI_AGENT", "").lower()
+    return any(environ.get(var) for var in agent.env) or bool(marker and marker.startswith(name))
+
+
+def skill_handoff(config: Mapping, environ: Mapping[str, str] | None = None) -> bool:
+    """Whether specky should leave this work to the session agent's skills instead of launching a
+    headless copy of that same agent.
+
+    Only `provider = "agent"`, only from inside that agent's own session, and only while
+    `[ai] skill_handoff` isn't turned off. Every other provider, and the agent outside a session
+    (a terminal commit, a rebase, CI), keeps the headless path.
+    """
+    if config.get("provider") != "agent" or not _flag(config, "skill_handoff", True):
+        return False
+    return in_agent_session(str(config.get("agent", "")), environ)
+
+
+# The first words of the line `commit-doc` prints when it hands commits to the session agent.
+# The Claude Code hook looks for it to lift the line into the agent's context.
+HANDOFF_MARKER = "specky: commits to document"
 
 
 def agent_command(name: str, model: str = "") -> str:

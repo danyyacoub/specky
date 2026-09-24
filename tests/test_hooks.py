@@ -278,6 +278,35 @@ class TestPluginHook:
         assert not marker.exists()
 
 
+    def test_hands_the_handoff_line_to_claude_as_context(self, tmp_repo: Path, tmp_path: Path):
+        bin_dir = tmp_path / "handoff-bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "specky"
+        stub.write_text(
+            "#!/bin/sh\n"
+            'echo "specky commit-doc: something else"\n'
+            'echo "specky: commits to document: 1 (abc1234) — run the document-commits skill"\n'
+        )
+        stub.chmod(0o755)
+        (tmp_repo / "specky.toml").write_text("[ai]\n")
+
+        result = self._fire(tmp_repo, 'git commit -m "x"', f"{bin_dir}:/usr/bin:/bin")
+
+        payload = json.loads(result.stdout)["hookSpecificOutput"]
+        assert payload["hookEventName"] == "PostToolUse"
+        assert payload["additionalContext"].startswith("specky: commits to document: 1 (abc1234)")
+
+    def test_prints_nothing_when_commit_doc_did_the_work_itself(
+        self, tmp_repo: Path, stub_on_path
+    ):
+        _marker, path_value = stub_on_path
+        (tmp_repo / "specky.toml").write_text("[ai]\n")
+
+        result = self._fire(tmp_repo, 'git commit -m "x"', path_value)
+
+        assert result.stdout == ""
+
+
 class TestCatchUp:
     def test_a_fire_documents_the_commits_earlier_fires_missed(self, in_repo: Path, monkeypatch):
         """The core of the reconciliation change.
@@ -780,3 +809,86 @@ class TestARenameIsCommitted:
 
         monkeypatch.setattr(commit_doc, "exclusive", refuse)
         commit_doc.main()
+
+
+class TestSkillHandoff:
+    """`provider = "agent"` inside that agent's own session: the commits wait for its skill."""
+
+    @pytest.fixture
+    def agent_repo(self, in_repo: Path) -> Path:
+        (in_repo / "specky.toml").write_text('[ai]\nprovider = "agent"\nagent = "claude"\n')
+        return in_repo
+
+    def test_in_session_nothing_is_launched_and_the_commits_stay_pending(
+        self, agent_repo: Path, monkeypatch, capsys
+    ):
+        def no_provider(*_args, **_kwargs):
+            raise AssertionError("a headless agent was launched from inside its own session")
+
+        monkeypatch.setattr(commit_doc, "load_provider_from_toml", no_provider)
+        monkeypatch.setenv("CLAUDECODE", "1")
+        sha = _commit(agent_repo, "real work")
+
+        commit_doc.main()
+
+        out = capsys.readouterr().out
+        # Two: the fixture's initial commit is undocumented too.
+        assert out.startswith("specky: commits to document: 2 (")
+        assert sha[:7] in out and "document-commits skill" in out
+        assert sha[:8] not in _history(agent_repo)
+        assert sha in [pending for pending, _ in commit_doc.pending_commits(agent_repo)]
+
+    def test_outside_a_session_the_agent_is_still_launched(
+        self, agent_repo: Path, monkeypatch, capsys
+    ):
+        _use_provider(monkeypatch, RoutingProvider())
+        sha = _commit(agent_repo, "from a terminal")
+
+        commit_doc.main()
+
+        assert sha[:8] in _history(agent_repo)
+        assert "commits to document" not in capsys.readouterr().out
+
+    def test_turning_it_off_keeps_the_headless_path(self, in_repo: Path, monkeypatch):
+        (in_repo / "specky.toml").write_text(
+            '[ai]\nprovider = "agent"\nagent = "claude"\nskill_handoff = false\n'
+        )
+        _use_provider(monkeypatch, RoutingProvider())
+        monkeypatch.setenv("CLAUDECODE", "1")
+        sha = _commit(in_repo, "real work")
+
+        commit_doc.main()
+
+        assert sha[:8] in _history(in_repo)
+
+    def test_an_api_provider_never_hands_off(self, in_repo: Path, monkeypatch):
+        (in_repo / "specky.toml").write_text('[ai]\nprovider = "bedrock"\nmodel = "m"\n')
+        _use_provider(monkeypatch, RoutingProvider())
+        monkeypatch.setenv("CLAUDECODE", "1")
+        sha = _commit(in_repo, "real work")
+
+        commit_doc.main()
+
+        assert sha[:8] in _history(in_repo)
+
+    def test_record_commit_writes_what_a_provider_reply_would_have(self, in_repo: Path):
+        sha = _commit(in_repo, "add refunds")
+        reply = json.dumps(
+            {
+                "headline": "Refunds can be issued from the order page",
+                "impact": "feature",
+                "what_changed": "Orders get a Refund button.",
+                "why": "",
+            }
+        )
+
+        path = commit_doc.record_commit(in_repo, sha[:7], reply, feature="specs/billing/refunds.md")
+
+        recorded = commit_doc.read_history(path.read_text())
+        assert recorded is not None
+        full_sha, doc = recorded
+        assert full_sha == sha
+        assert doc.headline == "Refunds can be issued from the order page"
+        assert doc.impact == "feature"
+        assert doc.features == ["specs/billing/refunds.md"]
+        assert sha not in [pending for pending, _ in commit_doc.pending_commits(in_repo)]

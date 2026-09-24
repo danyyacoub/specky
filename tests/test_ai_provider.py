@@ -125,6 +125,32 @@ def test_a_running_agent_that_isnt_on_path_is_skipped(monkeypatch):
     assert ai_provider.current_agent({"CLAUDECODE": "1"}) is None
 
 
+def test_a_session_is_recognised_by_the_agents_own_marker():
+    assert ai_provider.in_agent_session("claude", {"CLAUDECODE": "1"})
+    assert ai_provider.in_agent_session("codex", {"AI_AGENT": "codex_0-9_agent"})
+    assert not ai_provider.in_agent_session("claude", {"OPENCODE": "1"}), "another agent's session"
+    assert not ai_provider.in_agent_session("kiro", {"CLAUDECODE": "1"}), "kiro sets no marker"
+    assert not ai_provider.in_agent_session("nope", {"CLAUDECODE": "1"})
+
+
+@pytest.mark.parametrize(
+    "config, environ, expected",
+    [
+        ({"provider": "agent", "agent": "claude"}, {"CLAUDECODE": "1"}, True),
+        ({"provider": "agent", "agent": "claude"}, {}, False),
+        ({"provider": "agent", "agent": "codex"}, {"CLAUDECODE": "1"}, False),
+        ({"provider": "agent", "agent": "claude", "skill_handoff": "false"}, {"CLAUDECODE": "1"}, False),
+        ({"provider": "agent", "agent": "claude", "skill_handoff": False}, {"CLAUDECODE": "1"}, False),
+        ({"provider": "bedrock", "model": "m"}, {"CLAUDECODE": "1"}, False),
+        ({"provider": "anthropic"}, {"CLAUDECODE": "1"}, False),
+        ({"provider": "openai-compatible"}, {"CLAUDECODE": "1"}, False),
+        ({"provider": "command", "command": "claude -p"}, {"CLAUDECODE": "1"}, False),
+    ],
+)
+def test_only_the_agent_provider_inside_its_own_session_hands_off(config, environ, expected):
+    assert ai_provider.skill_handoff(config, environ) is expected
+
+
 def _ai_toml(tmp_path, body='provider = "agent"\nagent = "claude"\nmodel = "opus"\n'):
     path = tmp_path / "specky.toml"
     path.write_text("[ai]\n" + body)

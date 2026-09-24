@@ -47,6 +47,7 @@ def test_there_are_skills():
         "setup",
         "find-feature",
         "document-domain",
+        "document-commits",
         "explore-docs",
         "launch-viewer",
     }
@@ -77,7 +78,7 @@ def test_no_skill_pins_its_own_model(skill: Path):
 def test_the_doc_skills_read_their_model_from_specky_toml():
     # setup asks and writes it; launch-viewer starts a server that has to outlive any subagent, so
     # it stays on the session's model.
-    for name in ("find-feature", "explore-docs", "document-domain", "setup"):
+    for name in ("find-feature", "explore-docs", "document-domain", "document-commits", "setup"):
         assert "`[skills]`" in (ROOT / "skills" / name / "SKILL.md").read_text(), name
 
 

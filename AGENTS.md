@@ -49,6 +49,13 @@ that's always accurate, this file isn't. Full behavior docs are indexed at
 - `Provider.generate(prompt, *, prefix, task)` — `prefix` is the stable half of a prompt (sent as a
   cached system block), `task` picks the per-task model. A new prompt gets a `prefix` only if it is
   byte-identical across calls; anything per-call leaking in makes every call a cache miss.
+- `provider = "agent"` from inside that agent's own session hands off instead of launching it
+  headless. `skill_handoff()` in `ai_provider.py` decides, from the env markers in `AGENTS`.
+  - `commit-doc` prints `specky: commits to document: …` and leaves the commits pending for the
+    `document-commits` skill, which uses `specky pending --json` and `specky record-commit`.
+  - `specky document` points at the `document-domain` skill.
+  - Every other provider, and the agent outside a session, is unchanged. `[ai] skill_handoff =
+    false` turns it off.
 - `--batch` is Anthropic-only and asynchronous. Never reachable from a git hook, by design.
 - `specky commit-doc [--rewritten]` is hook-only — not for manual use
   ([documentation/auto-commit-docs.md](specs/documentation/auto-commit-docs.md)).

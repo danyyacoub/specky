@@ -95,6 +95,24 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    belongs to. If classification fails, the entry is still written, just without the link, so a
    commit is never left undocumented because its feature doc couldn't be worked out.
 
+   **Handed to the session agent instead.** When `[ai] provider = "agent"` and the commit came from
+   inside that same agent's session, no provider is called. The fire can tell from the env markers
+   the agent sets (`CLAUDECODE`, `CODEX_SANDBOX`, `GEMINI_CLI`, `OPENCODE`, `AI_AGENT`), which a git
+   hook inherits from the shell that ran `git commit`. The fire prints
+   `specky: commits to document: N (<shas>) — run the document-commits skill`, and the commits stay
+   pending. The agent then documents them with the `document-commits` skill, which already has the
+   repo in context, instead of a headless copy of itself starting cold. The skill uses two helpers:
+   - `specky pending --json` lists the commits, along with the same micro-doc rules a provider gets.
+   - `specky record-commit <sha> [--feature <doc>]` writes the history entry from the agent's JSON.
+   The skill commits the result under the same `docs: sync specky docs [skip specky]` marker.
+
+   Claude Code's `PostToolUse` hook lifts the handoff line into the agent's context. On other hosts
+   it shows up in the `git commit` output. The headless path still runs in these cases:
+   - any other provider;
+   - an agent that sets no marker (Kiro, Cursor, Devin);
+   - a commit made outside a session (a terminal, a GUI client, CI);
+   - `[ai] skill_handoff = false`.
+
 5. **Follow rewrites instead of re-paying for them** — `post-rewrite` reads `<old-sha> <new-sha>`
    pairs on stdin and *renames* each old history doc onto the new sha, rewriting its `sha:`
    frontmatter and metadata block and repointing its index rows. The whole entry — headline,
@@ -207,6 +225,12 @@ flowchart TD
 | A repo with no `specky.toml` and `specky` on PATH | The plugin's `PostToolUse` hook gets a `git commit` Bash call | It exits 0 with no output, `specky` is never run, and no `.specky/` is created |
 | The same repo after `specky init` | The plugin hook gets `git add -A && git commit -m x` | `specky commit-doc` runs once |
 | A repo with `specky.toml` | The plugin hook gets `git status` | `specky` is never run |
+| `[ai] provider = "agent"`, `agent = "claude"`, and `CLAUDECODE` set | A hook fires with pending commits | No provider is loaded, the output starts `specky: commits to document:` and names the document-commits skill, and the commits stay pending |
+| The same config with no agent marker in the env | A hook fires | The agent is launched headless and the history docs are written, as before |
+| The same config with `skill_handoff = false` | A hook fires from inside the session | The agent is launched headless |
+| `provider = "bedrock"` (or any provider but `agent`) with `CLAUDECODE` set | A hook fires | The provider is called; nothing is handed off |
+| `specky commit-doc` prints the handoff line | The plugin hook gets a `git commit` Bash call | It prints a `PostToolUse` JSON whose `additionalContext` is that line |
+| A pending commit | `specky record-commit <sha> --feature specs/x/y.md` gets the micro-doc JSON on stdin | The history doc has that headline, impact and `features:`, and the commit is no longer pending |
 | A directory that isn't a git repo | The plugin hook gets a `git commit` Bash call | It exits 0 without running `specky` |
 | The provider raises on load | A hook fires | `failed, commit is unaffected` is printed and the commit stands |
 | A human's half-written doc is uncommitted in the docs root | A hook fires and writes docs | The draft is not in the doc-sync commit and still has its uncommitted edits |

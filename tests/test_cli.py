@@ -130,3 +130,67 @@ def test_version_flag_prints_the_package_version(capsys):
 
     assert exit_info.value.code == 0
     assert capsys.readouterr().out.strip() == f"specky {__version__}"
+
+
+def test_pending_json_carries_the_providers_own_rules(tmp_repo, monkeypatch, capsys):
+    import json
+
+    from specky.commit_doc import MICRO_DOC_PREFIX
+
+    monkeypatch.chdir(tmp_repo)
+    _run(["pending", "--json"])
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["rules"] == MICRO_DOC_PREFIX
+    assert [c["subject"] for c in out["commits"]] == ["initial commit"]
+
+
+def test_record_commit_reads_the_micro_doc_from_stdin(tmp_repo, monkeypatch, capsys):
+    import io
+    import json
+
+    monkeypatch.chdir(tmp_repo)
+    reply = {"headline": "Repo starts", "impact": "internal", "what_changed": "", "why": ""}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(reply)))
+
+    _run(["record-commit", "HEAD"])
+
+    assert "wrote" in capsys.readouterr().out
+    _run(["pending"])
+    assert "nothing to document" in capsys.readouterr().out
+
+
+def _agent_toml(repo, extra=""):
+    (repo / "specky.toml").write_text(f'[ai]\nprovider = "agent"\nagent = "claude"\n{extra}')
+
+
+def test_document_in_its_agents_session_points_at_the_skill(tmp_repo, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_repo)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    _agent_toml(tmp_repo)
+    monkeypatch.setattr(
+        "specky.ai_provider.load_provider_from_toml",
+        lambda *_a, **_k: pytest.fail("launched a headless agent from inside its own session"),
+    )
+
+    _run(["document", "the", "refund", "flow"])
+
+    assert 'document-domain skill for "the refund flow"' in capsys.readouterr().out
+
+
+def test_document_headless_launches_the_agent_anyway(tmp_repo, monkeypatch):
+    monkeypatch.chdir(tmp_repo)
+    monkeypatch.setenv("CLAUDECODE", "1")
+    _agent_toml(tmp_repo)
+    launched = []
+
+    def fake_load(*_args, **_kwargs):
+        launched.append(True)
+        raise SystemExit(0)
+
+    monkeypatch.setattr("specky.ai_provider.load_provider_from_toml", fake_load)
+
+    with pytest.raises(SystemExit):
+        _run(["document", "--headless", "the", "refund", "flow"])
+
+    assert launched

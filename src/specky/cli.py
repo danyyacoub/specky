@@ -201,11 +201,57 @@ def _commit_doc(args: argparse.Namespace) -> None:
     commit_doc_main(rewritten=args.rewritten)  # never raises by design — see its docstring
 
 
+def _pending(args: argparse.Namespace) -> None:
+    import json
+
+    from specky.commit_doc import HOOK_CATCHUP_DEPTH, MICRO_DOC_PREFIX, pending_commits
+    from specky.db import repo_root
+
+    commits = pending_commits(repo_root(), depth=args.depth or HOOK_CATCHUP_DEPTH)
+    if args.json:
+        # `rules` is the provider's own instruction, so the skill writes the reply a provider
+        # would have written, from the one copy of it.
+        print(
+            json.dumps(
+                {
+                    "commits": [{"sha": sha, "subject": subject} for sha, subject in commits],
+                    "rules": MICRO_DOC_PREFIX,
+                },
+                indent=2,
+            )
+        )
+        return
+    if not commits:
+        print("specky pending: nothing to document")
+    for sha, subject in commits:
+        print(f"{sha[:7]}  {subject}")
+
+
+def _record_commit(args: argparse.Namespace) -> None:
+    from specky.commit_doc import record_commit
+    from specky.db import repo_root
+
+    reply = sys.stdin.read()
+    if not reply.strip():
+        raise SystemExit("specky record-commit: expected the micro-doc JSON on stdin")
+    path = record_commit(repo_root(), args.sha, reply, feature=args.feature)
+    print(f"specky record-commit: wrote {path}")
+
+
 def _install_git_hook(args: argparse.Namespace) -> None:
     from specky.commit_doc import install_git_hook
 
     for path in install_git_hook():
         print(f"Installed {path}")
+
+
+def _hands_off(root) -> bool:
+    from specky.ai_provider import ConfigError, read_ai_config, skill_handoff
+
+    try:
+        return skill_handoff(read_ai_config(root / "specky.toml"))
+    except ConfigError:
+        return False
 
 
 def _document(args: argparse.Namespace) -> None:
@@ -215,6 +261,15 @@ def _document(args: argparse.Namespace) -> None:
     from specky.lock import LockBusy, exclusive
 
     root = repo_root()
+    if not (args.headless or args.dry_run) and _hands_off(root):
+        # The agent that ran this is the better author: it has the repo in context and its own
+        # tools, where the headless copy of it this would launch gets neither.
+        request = " ".join(args.request)
+        print(
+            f'specky document: run the document-domain skill for "{request}" in this session '
+            "instead of launching a headless agent (pass --headless to launch one anyway)"
+        )
+        return
     provider = load_provider_from_toml(root / "specky.toml", "document")
     try:
         # The lock belongs to the entry point rather than to `document()`: `flock(LOCK_EX|LOCK_NB)`
@@ -556,6 +611,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Read `<old-sha> <new-sha>` pairs on stdin and rename the history docs they "
         "invalidated (the post-rewrite hook's contract — an amend or a rebase)",
     )
+    pending_cmd = command(
+        "pending",
+        "List the commits still waiting for a history doc (what the document-commits skill works through)",
+        _pending,
+    )
+    pending_cmd.add_argument(
+        "--depth",
+        type=int,
+        metavar="N",
+        help="Look at the newest N commits (default: the same window a hook fire looks at)",
+    )
+    pending_cmd.add_argument(
+        "--json", action="store_true", help="Machine-readable, with the micro-doc rules"
+    )
+    record_cmd = command(
+        "record-commit",
+        "Write a commit's history doc from micro-doc JSON on stdin (used by the document-commits skill)",
+        _record_commit,
+    )
+    record_cmd.add_argument("sha", help="The commit the history doc is for")
+    record_cmd.add_argument(
+        "--feature",
+        metavar="PATH",
+        help="The feature doc this commit belongs to, repo-relative (e.g. specs/cli/sync.md)",
+    )
     command(
         "install-git-hook",
         "Install the post-commit, post-merge and post-rewrite doc hooks",
@@ -601,6 +681,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     document_cmd.add_argument(
         "--yes", action="store_true", help="Skip the confirmation before generating"
+    )
+    document_cmd.add_argument(
+        "--headless",
+        action="store_true",
+        help="Launch the configured agent even from inside its own session, instead of leaving "
+        "the doc to the document-domain skill",
     )
     sync_cmd = command(
         "sync",

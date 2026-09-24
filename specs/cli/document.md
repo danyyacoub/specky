@@ -162,6 +162,7 @@ The conversation needs a tool channel, which not every provider has.
 | `anthropic` | The full path — specky offers the tools and sees every file opened |
 | `openai-compatible` | The same, where the endpoint supports tool calling. One that doesn't is reported as a config error naming the lever, not an HTTP failure |
 | `command` | No tool channel at all. Degrades to a single call: the same prompt and the same guards, minus the one that checks a file was read. It warns on every run |
+| `agent` | Runs as `command` with the agent's headless command line. Exception: run from inside that agent's own session (its env marker is set), nothing is launched. The command prints `run the document-domain skill for "<request>" in this session` and exits 0, because the session agent has the repo in context and real tools. `--headless` (or `[ai] skill_handoff = false`) launches the agent anyway. `--dry-run` is unaffected |
 
 The `command` degradation is worth being precise about, because the command is often an agent that
 plainly does have tools — `claude -p` can read and grep. They are simply invisible to specky, which
@@ -249,6 +250,7 @@ the same set of refusals stated as guards, with the reasoning behind each one.
 | The provider has no tool channel (`provider = "command"`) | It degrades to one call, with a warning, and `sources:` is taken on trust | The command is often an agent with perfectly good tools of its own — they are just invisible to specky, which can neither offer them nor see what was opened |
 | `--dry-run` | The prompt is printed and nothing is called | There is no discovery step to pay for, so a preview has no reason to cost anything |
 | Anything is written | It is left uncommitted | A generated doc is exactly the change somebody should read in `git status` first |
+| `provider = "agent"`, run from inside that agent's session | No agent is launched; the output names the document-domain skill and the request | The agent that ran the command is the better author: it has the repo in context and its own tools, where the headless copy has neither |
 
 ## Acceptance Tests
 
@@ -297,3 +299,5 @@ the same set of refusals stated as guards, with the reasoning behind each one.
 | An empty repo calls nothing | No tracked source | `specky document` | It says so and stops |
 | A provider without tools degrades | `provider = "command"` | `specky document` | One call, the same guards minus the read check, and a warning |
 | An unparseable degraded answer is refused | A command returning prose | `specky document` | Nothing is written and it says why |
+| Handed to the session's skill | `[ai] provider = "agent"`, `agent = "claude"`, `CLAUDECODE` set | `specky document the refund flow` | No provider is loaded; the output says to run the document-domain skill for "the refund flow" |
+| `--headless` overrides it | The same | `specky document --headless the refund flow` | The provider is loaded as usual |

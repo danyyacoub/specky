@@ -1,7 +1,7 @@
 # Codex integration
 
 specky needs two things from any agent: the MCP server (read-only queries over the index) and its
-skills (`setup`, `find-feature`, `explore-docs`, `document-domain`). Everything else — the git hook, `specky index`, `render-html`, `serve` — is plain CLI
+skills (`setup`, `find-feature`, `explore-docs`, `document-domain`, `document-commits`). Everything else — the git hook, `specky index`, `render-html`, `serve` — is plain CLI
 and identical everywhere.
 
 Codex discovers skills at `.agents/skills/<name>/SKILL.md` — **not** `.codex/skills/`. That path is
@@ -34,7 +34,7 @@ Codex skill frontmatter carries `name` and `description` only, and the shared sk
 else, so copy them in as they are:
 
 ```bash
-for s in setup find-feature explore-docs document-domain; do
+for s in setup find-feature explore-docs document-domain document-commits; do
   mkdir -p .agents/skills/$s
   curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/skills/$s/SKILL.md" \
     -o .agents/skills/$s/SKILL.md

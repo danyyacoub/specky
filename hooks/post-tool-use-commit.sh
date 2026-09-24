@@ -18,7 +18,16 @@ case "$INPUT" in
   *"git commit"*)
     root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
     [ -f "$root/specky.toml" ] || exit 0
-    command -v specky >/dev/null 2>&1 && specky commit-doc || true
+    command -v specky >/dev/null 2>&1 || exit 0
+    OUT=$(specky commit-doc 2>&1) || true
+    # With `provider = "agent"`, a commit made from this session is left for this session's agent
+    # to document (the document-commits skill) instead of a headless `claude -p`. A plain hook's
+    # stdout never reaches Claude, so the handoff line goes back as additionalContext.
+    LINE=$(printf '%s\n' "$OUT" | grep '^specky: commits to document' | head -n 1)
+    if [ -n "$LINE" ]; then
+      LINE=$(printf '%s' "$LINE" | sed 's/\\/\\\\/g; s/"/\\"/g')
+      printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"%s"}}\n' "$LINE"
+    fi
     ;;
 esac
 exit 0

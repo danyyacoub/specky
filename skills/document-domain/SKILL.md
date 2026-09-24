@@ -34,7 +34,9 @@ terms, applying the same rules below. It needs `[ai]` pointed at a provider with
 
 Follow the steps below when you are the agent doing the work — you have the repo in context and
 your own tools, which is usually the better doc. Either way the output is the same shape, and
-`specky document` is the right answer when someone wants it done in CI or without an agent.
+`specky document` is the right answer when someone wants it done in CI or without an agent. With
+`[ai] provider = "agent"`, running it from inside that agent's session launches nothing and sends
+you back here, because this skill is the better path. `--headless` launches the agent anyway.
 
 ## Steps
 

@@ -8,6 +8,17 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 ## [Unreleased]
 
 ### Added
+- **The session agent writes its own docs.** With `provider = "agent"`, specky no longer starts a
+  headless copy of the agent from inside that agent's session:
+  - A commit made there is left for the new `document-commits` skill. The skill writes the history
+    doc and updates the feature doc with the repo already in context, using two new commands:
+    `specky pending --json` and `specky record-commit`.
+  - `specky document` points at the `document-domain` skill instead. `--headless` restores the old
+    behaviour.
+
+  Commits from a terminal or CI, every API provider (Anthropic, Bedrock, OpenAI-compatible,
+  `command`), and agents that set no session marker (Kiro, Cursor, Devin) work as before. Set
+  `[ai] skill_handoff = false` to opt out.
 - **`find-feature` skill.** Before an agent calls into a feature, it asks the docs what that feature
   is *meant* to do and answers with the doc path and its behaviour ids (`STEP-n`, `OUT-n`, `EDGE-n`,
   `AT-n`) — without reading source. `explore-docs` keeps the broader "how does X work?" and "why did

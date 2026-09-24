@@ -48,11 +48,15 @@ is already set up and go to the report.
 ### 3. Choose the AI provider
 Ask the user which provider specky should call. Give them these three choices:
 
-1. **The coding agent they're using** (recommended). Needs no API key: it runs headless on their
-   existing login (`claude -p`, `codex exec`, `gemini -p`, `opencode run`, …). Ask whether they
-   want a specific model; leave it out to keep the agent's own default. The trade-off is that
-   `specky document` degrades to a single call without specky's code-reading tools. Commit docs
-   and the viewer work the same.
+1. **The coding agent they're using** (recommended). Needs no API key.
+   - **Inside the agent's session:** specky doesn't launch anything. Commits made there are left for
+     the agent's `document-commits` skill, and `specky document` points at the `document-domain`
+     skill, so the agent writes the docs itself with the repo already in context.
+   - **Outside a session** (a terminal commit, CI): it runs the agent headless on their existing
+     login (`claude -p`, `codex exec`, `gemini -p`, `opencode run`, …). There, `specky document`
+     falls back to a single call without specky's code-reading tools.
+
+   Ask whether they want a specific model; leave it out to keep the agent's own default.
    ```bash
    specky init --provider agent                 # the agent's own default model
    specky init --provider agent --model opus    # or pin one

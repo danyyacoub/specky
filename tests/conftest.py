@@ -27,6 +27,16 @@ def _no_ai_env_overrides(monkeypatch):
         monkeypatch.delenv(name)
 
 
+@pytest.fixture(autouse=True)
+def _outside_any_agent_session(monkeypatch):
+    """The suite runs as often from an agent's terminal as from a plain one. The env markers that
+    agent sets would make every `provider = "agent"` test hand its work off to a skill."""
+    from specky.ai_provider import AGENTS
+
+    for name in {"AI_AGENT", *(var for agent in AGENTS.values() for var in agent.env)}:
+        monkeypatch.delenv(name, raising=False)
+
+
 class FakeProvider:
     """Returns canned replies in order, and records every prompt it was given.
 
