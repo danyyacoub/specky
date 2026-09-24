@@ -10,7 +10,7 @@ Spec docs get metadata frontmatter (`type`, `tags`, `related`). Every commit is 
 
 ## How It Works
 
-1. **Frontmatter structure**: Each spec doc starts with YAML declaring `type` (feature or workflow), `tags` (1-3 kebab-case business/domain concepts, not implementation details), and optionally `related` (hand-authored cross-links to other docs).
+1. **Frontmatter structure**: Each spec doc starts with YAML declaring `type` (feature or workflow), `tags` (1-3 kebab-case business/domain concepts, not implementation details), and optionally `related` (hand-authored cross-links to other docs). List values may be written inline (`tags: [billing, refunds]`) or as a YAML block list (`sources:` followed by `  - api/x.py` lines); both forms are read back as lists, so an agent that writes one style doesn't lose the doc's `type` and `tags` with it.
 
 2. **Tag vocabulary**: Tags are deliberately shared across docs for the same business concept (e.g., `billing`, `refunds`). Run `specky tags` first and reuse an existing tag if one fits — tags only work for search and grouping if they're consistent across docs.
 
