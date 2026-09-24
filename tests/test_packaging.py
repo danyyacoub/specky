@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PLUGIN_JSON = ROOT / ".claude-plugin" / "plugin.json"
 MARKETPLACE_JSON = ROOT / ".claude-plugin" / "marketplace.json"
 SKILLS = sorted((ROOT / "skills").glob("*/SKILL.md"))
+COMMANDS = sorted((ROOT / "commands").glob("*.md"))
 
 
 def test_plugin_version_matches_the_package():
@@ -96,3 +97,47 @@ def test_hook_commands_exist_and_are_executable():
         path = ROOT / command.replace("${CLAUDE_PLUGIN_ROOT}/", "")
         assert path.is_file(), command
         assert os.access(path, os.X_OK), f"{command} is not executable"
+
+
+# --- slash commands ----------------------------------------------------------------------------
+# `commands/*.md` become `/specky:<name>` in every repo with the plugin, beside the skills — which
+# share the namespace, so a command named like a skill would hide one of the two.
+
+
+def test_there_are_commands_for_the_cli_workflows():
+    assert {path.stem for path in COMMANDS} >= {"doctor", "check", "lint", "verify-migration", "search"}
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=lambda path: path.stem)
+def test_every_command_has_a_description(command: Path):
+    assert _frontmatter(command).get("description", "").strip()
+
+
+def test_no_command_shadows_a_skill():
+    assert not {path.stem for path in COMMANDS} & {path.parent.name for path in SKILLS}
+
+
+def _subcommands() -> set[str]:
+    from specky.cli import build_parser
+
+    parser = build_parser()
+    (action,) = [a for a in parser._actions if a.dest == "command"]
+    return set(action.choices)
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=lambda path: path.stem)
+def test_every_specky_subcommand_a_command_runs_exists(command: Path):
+    """A renamed subcommand would leave a command telling the agent to run something that errors,
+    in every repo with the plugin. Checked in code spans and fenced lines, where commands are run."""
+    text = command.read_text()
+    code = "\n".join(re.findall(r"`([^`\n]+)`", text) + re.findall(r"```bash\n(.*?)```", text, re.S))
+    named = set(re.findall(r"(?<![\w-])specky ([a-z][a-z-]+)", code))
+    assert named, "a command that runs no specky subcommand"
+    assert named <= _subcommands(), named - _subcommands()
+
+
+@pytest.mark.parametrize("command", COMMANDS, ids=lambda path: path.stem)
+def test_arguments_are_never_shell_expanded(command: Path):
+    """`$ARGUMENTS` is replaced as text before the agent reads the command, so `${ARGUMENTS:+…}`
+    arrives as `${whatever-the-user-typed:+…}` — a bash syntax error, or worse."""
+    assert "${ARGUMENTS" not in command.read_text()

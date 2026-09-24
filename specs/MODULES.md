@@ -12,6 +12,8 @@ is meant to do before you use it) in
 behaviour questions from the docs before reading code) in
 [skills/explore-docs/SKILL.md](../skills/explore-docs/SKILL.md), and `launch-viewer` (build and open
 the viewer from Claude Code) in [skills/launch-viewer/SKILL.md](../skills/launch-viewer/SKILL.md).
+The plugin also ships a slash command per CLI workflow (`/specky:doctor`, `/specky:check`,
+`/specky:lint`, …), documented in [integration/plugin-commands.md](integration/plugin-commands.md).
 `find-feature`, `document-domain` and `explore-docs` run on the session's model unless
 `[skills] model` in `specky.toml` names another (`setup` asks), in which case they hand their work
 to a subagent on it. That value names a Claude Code model, so the other hosts pin a tier through a
@@ -23,9 +25,9 @@ per-host agent templated under [integrations/](../integrations/).
 |---|---|
 | [documentation/domain-documentation-workflow.md](documentation/domain-documentation-workflow.md) | Workflow for generating and maintaining functional documentation for code domains |
 | [documentation/auto-commit-docs.md](documentation/auto-commit-docs.md) | Reconcile the history-doc backlog on every git hook fire, so a commit is documented however it landed |
-| [documentation/doc-adoption.md](documentation/doc-adoption.md) | Import a repo's existing markdown into the docs tree, and configure where that tree lives |
+| [documentation/doc-adoption.md](documentation/doc-adoption.md) | Import a repo's existing markdown into the docs tree, verify a rewritten migration lost no facts, and configure where that tree lives |
 | [documentation/feature-sync.md](documentation/feature-sync.md) | Automatically generate and update feature/workflow documentation on each commit |
-| [documentation/feature-classification-and-tags.md](documentation/feature-classification-and-tags.md) | Classify and tag features and workflows for search and discovery |
+| [documentation/feature-classification-and-tags.md](documentation/feature-classification-and-tags.md) | Classify and tag features and workflows for search and discovery, with an optional TAGS.md tag registry |
 | [documentation/auto-doc-commit.md](documentation/auto-doc-commit.md) | Automatically commit generated history and feature docs as a follow-up commit instead of leaving them uncommitted |
 | [documentation/stale-doc-detection.md](documentation/stale-doc-detection.md) | Detect and flag documentation that lags behind the code it covers, with viewer badges and check warnings |
 | [documentation/doc-ownership.md](documentation/doc-ownership.md) | Add optional owner field to docs so readers know who to ask about them |
@@ -35,7 +37,8 @@ per-host agent templated under [integrations/](../integrations/).
 
 | Doc | Purpose |
 |---|---|
-| [cli/check.md](cli/check.md) | Fail CI when changed code has a doc describing it that the range didn't update |
+| [cli/check.md](cli/check.md) | Fail CI when changed code has a doc describing it that the range didn't update; note facts a doc stopped stating |
+| [cli/lint.md](cli/lint.md) | Check the docs as a set: terms missing from the glossary, stray tags, numbers two docs disagree on |
 | [cli/doctor.md](cli/doctor.md) | Diagnose a specky installation — toolchain, config, hook, index, site, doc backlog |
 | [cli/sync.md](cli/sync.md) | Backfill micro-documentation for commits that don't yet have one (idempotent resync) |
 | [cli/cost.md](cli/cost.md) | Report provider call statistics, cache hit rate, and character usage |
@@ -96,6 +99,7 @@ command that calls a model goes through this layer.
 | [integration/codex-setup.md](integration/codex-setup.md) | Connect specky to Codex manually — MCP server config, skills in .agents/skills, and the optional specky-lookup subagent. |
 | [integration/bedrock-provider.md](integration/bedrock-provider.md) | Run specky on Claude via Amazon Bedrock with existing AWS credentials, no Anthropic key |
 | [integration/devin-provider.md](integration/devin-provider.md) | Drive Devin CLI as a headless agent provider, including on Devin VMs and fresh clones |
+| [integration/plugin-commands.md](integration/plugin-commands.md) | A `/specky:<name>` slash command per CLI workflow that runs it and explains the result, asking before cost or change |
 
 ## Catalog
 

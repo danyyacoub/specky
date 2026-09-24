@@ -49,6 +49,24 @@ done
 `find-feature` answers "what is this meant to do before I use it?", `explore-docs` answers behaviour
 questions from the docs before reading code, and `document-domain` writes the docs themselves.
 
+## Commands
+
+The plugin's slash commands (`/specky:doctor`, `/specky:check`, `/specky:lint`, …) each wrap one
+`specky` CLI workflow: they run it, explain the output, and ask before anything that costs AI calls,
+moves files or posts. opencode reads commands from `.opencode/commands/`, and its `$ARGUMENTS` works
+the same way, so they copy in as they are. They're prefixed `specky-` here, since opencode has no
+plugin namespace:
+
+```bash
+mkdir -p .opencode/commands
+for c in doctor check lint verify-migration adopt index search tags graph sync pr-comment cost tests export setup-diagrams; do
+  curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/commands/$c.md" \
+    -o .opencode/commands/specky-$c.md
+done
+```
+
+opencode ignores the `allowed-tools` line, which is Claude Code's. `specky` has to be on PATH.
+
 ## Cheap model for lookups
 
 A skill can't carry a model on opencode — unknown frontmatter fields are ignored, and there is no

@@ -37,7 +37,16 @@ no key, stay on that side; don't invent a config.
 that's always accurate, this file isn't. Full behavior docs are indexed at
 [specs/MODULES.md](specs/MODULES.md). Gotchas `--help` won't tell you:
 
-- `specky check` needs `specky index` to have run first.
+- `specky check` needs `specky index` to have run first. `specky lint` doesn't: it reads the
+  worktree, so it sees uncommitted docs, and `check` runs it over the docs in play.
+- `facts.py` is the one fact extractor (numbers, formulas, glossary definitions, named fields). Used
+  by `check`'s removed-facts advice, the hook's and `document`'s "removed N fact(s)" notes, and
+  `adopt --verify`. It reports and never refuses: a changed threshold drops its old value legitimately.
+- `TAGS.md` in the docs root is an optional tag registry, read with `paths.read_term_table`, the
+  same parser as `GLOSSARY.md`. No registry means no tag enforcement anywhere.
+- `commands/*.md` are the plugin's `/specky:<name>` slash commands. They share the namespace with
+  `skills/`, so a command must never take a skill's name. `tests/test_packaging.py` checks that, and
+  that every `specky <sub>` a command runs exists.
 - `specky document "<feature>"` is the only command that reads source code, and the only one that
   gives a model tools (`src/specky/tools.py`) instead of a single assembled prompt. Everything else
   reads git. A repo needs no setup pass before it is useful — docs are added one feature at a time.
@@ -80,7 +89,7 @@ Invariants the code relies on:
 - `ai_provider.load_provider_from_toml()` is the only way to construct a `Provider`.
 - `html_render.py`: the site must work over `file://` with no build step. Mermaid fences render to
   SVG at `render-html` time via `vendor/mermaid-render/` (resolved by `mermaid_tool.py`). Without
-  `specky setup-diagrams` they stay plain text.
+  `specky setup-diagrams` they stay plain text, and `specky doctor` fails once any doc has one.
 - `answer_render.sanitize_fragment()` is the trust boundary for model-authored markup. It runs
   before the diagram step.
 - `check`'s file→doc map is derived from git history, not `.specky/`, so CI computes the same map

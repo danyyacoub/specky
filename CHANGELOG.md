@@ -8,6 +8,44 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 ## [Unreleased]
 
 ### Added
+- **`specky lint`** checks the docs as a set, offline, on the worktree:
+  - terms several docs use that `GLOSSARY.md` doesn't define (bold terms and Outcomes/Status table
+    labels);
+  - tags outside the new `TAGS.md` registry, or carried by one doc only when there's no registry;
+  - numbers two docs sharing a tag attach to the same name differently.
+
+  `specky check` reports the same findings for the docs a pull request is about. Advice only;
+  `--strict` exits 1.
+- **Dropped facts are reported.** A doc update that stops stating a number, formula or glossary
+  definition now says so:
+  - the commit hook's and `specky document`'s line ends `— removed N fact(s): …`;
+  - `specky check` lists each doc's removed facts, constants first, however the rewrite happened
+    (hook, `document`, an agent's skill, or by hand).
+
+  Reported, never refused: a threshold the code changed drops its old value legitimately.
+- **`specky adopt --verify`** reviews a migration that *rewrote* an old docs tree instead of importing
+  it. For each old doc it reports every number, formula and defined term that no new doc states,
+  looking across the whole tree before calling anything missing. Pairing uses `origin:` first, then
+  root GLOSSARY/PRODUCT/MODULES files with their counterparts, then the import mapping. It makes no
+  AI call and writes nothing. `--only GLOB` (also for a normal import) replaces the docs/adr
+  conventions with one tree.
+- **Tag registry.** `TAGS.md` in the docs root lists the tags docs may carry, in a file an agent can
+  read without running anything. `specky tags --write` seeds or extends it. With one, the classifier
+  and `specky document` are offered only its tags.
+- **`## Constants & Invariants` and `## Maintainer Notes`** in the doc templates, in the generator, in
+  `specky document` and in the `document-domain` skill:
+  - thresholds, weights, formulas and precedence orders are stated verbatim, where "focus on WHAT"
+    used to summarise them away;
+  - field consumers, lockstep implementations and runbook steps get a home.
+
+  The skills also gain "one owner per rule" (link to the doc that states a rule rather than
+  restating it), read tags from `TAGS.md`, and run `specky lint` on what they wrote.
+- **Slash commands.** The plugin ships `/specky:doctor`, `/specky:check`, `/specky:lint`,
+  `/specky:verify-migration`, `/specky:search`, `/specky:sync` and nine more, one per CLI workflow.
+  Each runs its command and explains the result, and asks before anything that costs AI calls,
+  moves files or posts. opencode and Codex can copy them in.
+- **Tag siblings in the viewer.** Each page's Related block lists the docs sharing a tag with it,
+  after its `related:` links. The list is derived at render time, so nobody has to write backlinks.
 - **The session agent writes its own docs.** With `provider = "agent"`, specky no longer starts a
   headless copy of the agent from inside that agent's session:
   - A commit made there is left for the new `document-commits` skill. The skill writes the history
@@ -29,6 +67,11 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
   run on the session's model. `/specky:setup` asks. The value names a Claude Code model, so Codex,
   opencode and Kiro each get a per-host agent (or command) under `integrations/` that pins one of
   theirs.
+
+### Changed
+- **`specky doctor` fails when docs have diagrams and the mermaid renderer is missing.** Without the
+  renderer, the viewer shows diagrams as text and the check that a new diagram parses is off. With no
+  diagrams yet it still only warns. The `setup` skill now installs the renderer when Node is present.
 
 ## [0.1.0] - 2026-09-22
 

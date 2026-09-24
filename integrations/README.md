@@ -17,8 +17,8 @@ specky index              # the MCP server answers from this index
 
 ## Claude Code
 
-Claude Code is the main target. The plugin bundles the MCP server and the skills, so no manual wiring
-is needed:
+Claude Code is the main target. The plugin bundles the MCP server, the skills and the slash commands,
+so no manual wiring is needed:
 
 ```bash
 claude plugin marketplace add danyyacoub/specky
@@ -26,7 +26,9 @@ claude plugin install specky@specky
 ```
 
 Then run `/specky:setup` in the repo. It does the three `specky` commands above for you. To run the
-skills on a lower-cost model, set `[skills] model = "haiku"` in `specky.toml`.
+skills on a lower-cost model, set `[skills] model = "haiku"` in `specky.toml`. Every other CLI
+workflow has its own command — `/specky:doctor`, `/specky:check`, `/specky:lint` and so on — that
+runs it and explains the result.
 
 ## Other agents
 
@@ -43,6 +45,13 @@ specky" runs the steps above for you, as `/specky:setup` does in Claude Code.
 
 The MCP server command is always `specky-mcp` with no arguments. The skills come from
 [`skills/`](../skills/), and each guide gives a one-line loop that copies them in.
+
+The plugin also ships a slash command per CLI workflow (`/specky:doctor`, `/specky:check`,
+`/specky:lint`, `/specky:verify-migration`, … — [`commands/`](../commands/)), each running one
+`specky` command and explaining what it printed. opencode and Codex take them as commands and
+custom prompts ([opencode](opencode/README.md#commands), [Codex](codex/README.md#commands)). Kiro
+and Devin have no slash commands: ask the agent to run the `specky` command directly, which is all
+a command does.
 
 Devin works differently from the others. It runs in a throwaway VM and opens a pull request, so its
 guide also covers a blueprint and whether Devin should write docs itself or only read them.

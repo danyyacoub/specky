@@ -57,14 +57,19 @@ To share it with your team, deploy it on a server with a login and its own model
 ### A CI gate against doc drift
 
 `specky check` fails a PR that changes code without updating the doc that describes it. It runs
-offline and needs no API key.
+offline and needs no API key. It also lists every number, formula or glossary term a doc in the PR
+stopped stating, so a rewrite can't quietly drop a threshold. `specky lint` checks the docs as a
+set: terms the glossary doesn't define, tags outside the vocabulary, and numbers two docs disagree
+on.
 
 ![specky check failing a branch that skipped its doc update][shot-check]
 
 ### Docs your agent reads first
 
 An MCP server and skills let Claude Code and other agents answer "what does X do?" from the docs
-before reading code.
+before reading code. The Claude Code plugin also has a slash command for each CLI workflow, such as
+`/specky:check`, `/specky:lint`, `/specky:doctor` and `/specky:verify-migration`. Each one runs the
+command and explains the result.
 
 ![Claude Code answering from specky's docs][shot-agent]
 
@@ -77,8 +82,9 @@ agents have their own way to do this; see [agent setup][agents]. For the CLI and
 `[ai] <task>_model` sends each kind of call (commit summaries, classification, doc writing, tags,
 chat) to its own model.
 
-specky can also import existing docs (`specky adopt`), export them to PDF or Confluence, summarise
-a PR's doc changes, and scaffold tests from a doc's acceptance-test table.
+specky can also import existing docs (`specky adopt`), or check that a rewritten migration lost no
+facts (`specky adopt --verify`). It can export docs to PDF or Confluence, summarise a PR's doc
+changes, and scaffold tests from a doc's acceptance-test table.
 
 ## How it works
 

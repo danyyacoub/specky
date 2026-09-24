@@ -45,6 +45,24 @@ done
 "how does X work?" and "why did it change?" questions; `document-domain` writes and updates the docs
 themselves.
 
+## Commands
+
+The plugin's slash commands each wrap one `specky` CLI workflow — `doctor`, `check`, `lint`,
+`verify-migration` and the rest — running it, explaining the output, and asking before anything
+that costs AI calls, moves files or posts. Codex runs them as custom prompts, which live per user in
+`~/.codex/prompts/` and take `$ARGUMENTS` the same way:
+
+```bash
+mkdir -p ~/.codex/prompts
+for c in doctor check lint verify-migration adopt index search tags graph sync pr-comment cost tests export setup-diagrams; do
+  curl -fsSL "https://raw.githubusercontent.com/danyyacoub/specky/main/commands/$c.md" \
+    -o ~/.codex/prompts/specky-$c.md
+done
+```
+
+Then `/prompts:specky-check` and so on. Codex ignores the `allowed-tools` line, which is Claude
+Code's. `specky` has to be on PATH.
+
 ## Cheap model for lookups
 
 A Codex skill can't carry a model and can't be bound to a subagent, so the skill file is not where a
