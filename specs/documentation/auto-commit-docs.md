@@ -219,7 +219,10 @@ flowchart TD
 | **Nothing committed** | The regeneration is byte-for-byte identical to what's on disk | No commit is created; HEAD is unchanged |
 | **Second run skipped** | Another specky run holds `.specky/run.lock` | Prints and exits 0; nothing is written; the backlog stays pending |
 | **Hook skipped** | `specky install-git-hook` not yet run | Commits proceed normally; no summary generated |
-| **Plugin hook inert** | Claude commits in a repo with no `specky.toml` | The plugin's `PostToolUse` hook exits at once: no output, no `specky` call, no `.specky/` created |
+| **Hook mode applied** | `specky install-git-hook --on commit\|merge\|none` runs | The hooks for that mode are written, specky's own hooks outside it are removed, a foreign hook is never touched, and the mode is recorded as `specky.hooks` in the local git config |
+| **Doc commits per merge** | Hooks installed with `--on merge` | Only `post-merge` fires; every commit the merge or pull brought in is documented in one doc commit |
+| **Doc commits left to CI** | Hooks installed with `--on none` | No hook fires; commits are documented by `specky sync` or the CI job |
+| **Plugin hook inert** | Claude commits in a repo with no `specky.toml`, or under `--on merge`/`--on none` | The plugin's `PostToolUse` hook exits at once: no output, no `specky` call, no `.specky/` created |
 | **Hook opted out** | `SPECKY_DISABLE_HOOK` is set to anything but `0`/`false`/`no`/`off`/empty | The fire prints one line naming the variable and returns before building a provider; nothing is written, nothing is spent |
 | **Generation fails** | AI provider misconfigured or unreachable | Commit succeeds; summary is skipped; the reason is printed |
 | **Hook not overwritten** | A `post-commit`/`post-merge`/`post-rewrite` from another tool exists | `install-git-hook` installs none of the three and says which file blocked it |
