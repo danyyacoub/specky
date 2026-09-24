@@ -45,3 +45,22 @@ def test_prose_lines_without_colon_are_not_frontmatter():
     meta, body = frontmatter.parse(text)
     assert meta == {}
     assert body == text
+
+
+def test_a_yaml_block_list_is_read_as_a_list():
+    """Agents write `sources:` as a block list as often as inline; the whole block used to be
+    dropped, losing the doc's `type` and `tags` with it."""
+    text = "---\ntype: feature\ntags: [discounts]\nsources:\n  - api/a.py\n  - 'api/b.py'\nowner:\n---\n\n# Body\n"
+    meta, body = frontmatter.parse(text)
+    assert meta == {
+        "type": "feature",
+        "tags": ["discounts"],
+        "sources": ["api/a.py", "api/b.py"],
+        "owner": "",
+    }
+    assert body == "# Body\n"
+
+
+def test_a_list_item_with_no_key_above_it_is_not_frontmatter():
+    text = "---\n- not a key\n---\nbody\n"
+    assert frontmatter.parse(text) == ({}, text)

@@ -17,6 +17,9 @@ _LIST_VALUE = re.compile(r"^\[(.*)\]$")
 # thematic break from being read as frontmatter — otherwise the next `---` in the file closes
 # a block that never opened, and the prose between them is swallowed into `meta`.
 _META_LINE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:")
+# An item of a YAML block list (`sources:` then `  - api/x.py` lines). Agents write lists this
+# way as often as inline, and a block the parser can't read loses the doc's whole frontmatter.
+_BLOCK_ITEM = re.compile(r"^\s+-\s+(.*)$|^-\s+(.*)$")
 
 
 def parse(text: str) -> tuple[dict[str, str | list[str]], str]:
@@ -27,18 +30,37 @@ def parse(text: str) -> tuple[dict[str, str | list[str]], str]:
         return {}, text
 
     lines = [line for line in match.group(1).splitlines() if line.strip()]
-    if not lines or not all(_META_LINE.match(line) for line in lines):
+    if not lines or not _META_LINE.match(lines[0]):
         return {}, text
 
     meta: dict[str, str | list[str]] = {}
+    block_key: str | None = None  # the key whose `- item` lines are being read
+    opened: set[str] = set()  # keys with no inline value, which may or may not get items
     for line in lines:
+        item = _BLOCK_ITEM.match(line)
+        if item and block_key is not None:
+            value = (item.group(1) or item.group(2) or "").strip().strip("'\"")
+            if value:
+                meta[block_key].append(value)  # type: ignore[union-attr]
+            continue
+        if not _META_LINE.match(line):
+            return {}, text
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
+        block_key = None
         list_match = _LIST_VALUE.match(value)
         if list_match:
             meta[key] = [v.strip() for v in list_match.group(1).split(",") if v.strip()]
+        elif not value:
+            meta[key] = []
+            block_key = key
+            opened.add(key)
         else:
             meta[key] = value
+    # A bare `key:` with no items under it was a scalar left empty, not a list.
+    for key in opened:
+        if meta[key] == []:
+            meta[key] = ""
     return meta, match.group(2)
 
 
