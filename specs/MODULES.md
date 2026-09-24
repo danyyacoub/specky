@@ -94,6 +94,7 @@ command that calls a model goes through this layer.
 | [integration/skill-model-selection.md](integration/skill-model-selection.md) | Let users pick the model specky's doc lookup and authoring skills run on, per host, via [skills] model or a pinned subagent. |
 | [integration/codex-setup.md](integration/codex-setup.md) | Connect specky to Codex manually — MCP server config, skills in .agents/skills, and the optional specky-lookup subagent. |
 | [integration/bedrock-provider.md](integration/bedrock-provider.md) | Run specky on Claude via Amazon Bedrock with existing AWS credentials, no Anthropic key |
+| [integration/devin-provider.md](integration/devin-provider.md) | Drive Devin CLI as a headless agent provider, including on Devin VMs and fresh clones |
 
 ## Catalog
 
