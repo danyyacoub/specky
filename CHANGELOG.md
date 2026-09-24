@@ -8,6 +8,10 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 ## [Unreleased]
 
 ### Added
+- **`specky install-git-hook --on commit|merge|none`** picks when the doc commits land: after each
+  commit (the default, unchanged), once per local merge or pull, or never, leaving it to `specky
+  sync` or CI. Every commit is still documented. Re-running switches modes, and `specky doctor` and
+  the Claude Code plugin's commit trigger respect the chosen one.
 - **`specky lint`** checks the docs as a set, offline, on the worktree:
   - terms several docs use that `GLOSSARY.md` doesn't define (bold terms and Outcomes/Status table
     labels);

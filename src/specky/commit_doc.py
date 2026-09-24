@@ -81,6 +81,22 @@ HOOKS = {
 
 HOOK_MARKER = "specky commit-doc"
 
+# Which of `HOOKS` each `install-git-hook --on` mode installs. `commit` is every one, and a doc
+# commit follows each commit. `merge` is for a team that wants one doc commit per merged branch
+# rather than one per commit: `post-merge` alone, because `post-rewrite` fires on every amend and
+# would bring the per-commit doc commits straight back — the price is that a rebase orphans a
+# history doc it would otherwise have renamed, which `specky sync` or the CI job reconciles.
+# `none` leaves documenting to CI.
+HOOK_MODES: dict[str, tuple[str, ...]] = {
+    "commit": tuple(HOOKS),
+    "merge": ("post-merge",),
+    "none": (),
+}
+
+# The mode is recorded in the repo's local git config, so `specky doctor` can tell a hook left out
+# on purpose from one that's missing.
+HOOK_MODE_CONFIG = "specky.hooks"
+
 # Set this in the environment and every hook fire returns immediately. Uninstalling the hook is the
 # better answer when you control the hooks directory — but you often don't: a repo that commits its
 # own hooks and points `core.hooksPath` at them (the husky-shaped setup) hands specky's hooks to
@@ -1199,8 +1215,25 @@ def hooks_dir(repo_root: Path) -> Path:
     return _git_path(repo_root, "hooks")
 
 
-def install_git_hook() -> list[Path]:
-    """Install every hook in `HOOKS`, all of them calling `specky commit-doc`.
+def hook_mode(repo_root: Path) -> str:
+    """The `--on` mode `install-git-hook` last recorded, `commit` when none was (or it's unknown)."""
+    mode = subprocess.run(
+        ["git", "config", "--get", HOOK_MODE_CONFIG], cwd=repo_root, capture_output=True, text=True
+    ).stdout.strip()
+    return mode if mode in HOOK_MODES else "commit"
+
+
+def install_git_hook(on: str = "commit") -> list[Path]:
+    """Install the hooks `on` asks for (see `HOOK_MODES`), all of them calling `specky commit-doc`.
+
+    Returns the hooks written. Switching to a mode with fewer hooks removes specky's own hooks
+    outside it — see `set_hook_mode` for the removed ones too.
+    """
+    return set_hook_mode(on)[0]
+
+
+def set_hook_mode(on: str) -> tuple[list[Path], list[Path]]:
+    """Install the hooks `on` asks for and remove specky's hooks it doesn't; `(written, removed)`.
 
     Three hooks because one isn't enough: `post-commit` is invoked by `git commit` only, so
     without `post-merge` and `post-rewrite` a `git pull` or a rebase produces no fire at all.
@@ -1209,17 +1242,20 @@ def install_git_hook() -> list[Path]:
 
     A pre-existing hook specky didn't write is never overwritten, and one foreign hook stops the
     whole install rather than leaving half the set in place: a partial install is the state that's
-    hardest to reason about later.
+    hardest to reason about later. A hook specky didn't write is never removed either: a mode that
+    leaves it out only takes back what specky put there.
     """
+    if on not in HOOK_MODES:
+        raise ValueError(f"unknown hook mode {on!r} (expected {'/'.join(HOOK_MODES)})")
+    wanted = HOOK_MODES[on]
     repo_root = _repo_root()
     target = hooks_dir(repo_root)
     target.mkdir(parents=True, exist_ok=True)
 
-    foreign = [
-        path
-        for name in HOOKS
-        if (path := target / name).exists() and HOOK_MARKER not in path.read_text()
-    ]
+    def ours(path: Path) -> bool:
+        return path.is_file() and HOOK_MARKER in path.read_text()
+
+    foreign = [path for name in wanted if (path := target / name).exists() and not ours(path)]
     if foreign:
         raise RuntimeError(
             f"{', '.join(str(p) for p in foreign)} already exist(s) and wasn't installed by specky "
@@ -1231,9 +1267,15 @@ def install_git_hook() -> list[Path]:
     # absolute path to fall back on when it runs from a PATH that lacks it.
     specky = shutil.which("specky") or sys.argv[0]
     written = []
-    for name, args in HOOKS.items():
+    for name in wanted:
         path = target / name
-        path.write_text(_HOOK_BODY.format(args=args, specky=specky))
+        path.write_text(_HOOK_BODY.format(args=HOOKS[name], specky=specky))
         path.chmod(0o755)
         written.append(path)
-    return written
+    removed = []
+    for name in HOOKS:
+        if name not in wanted and ours(path := target / name):
+            path.unlink()
+            removed.append(path)
+    subprocess.run(["git", "config", HOOK_MODE_CONFIG, on], cwd=repo_root, check=True)
+    return written, removed

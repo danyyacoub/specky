@@ -55,7 +55,10 @@ never been set up and can be dropped into CI as-is. Exit 1 means something needs
    needs a human to merge the two. A hook that isn't executable is also a `fail`, because git skips
    it without a word, which looks exactly like specky being broken. `SPECKY_DISABLE_HOOK` set in the
    environment is reported first, as a `warn`, because it makes every row under it moot — all three
-   hooks can be installed and correct and still document nothing.
+   hooks can be installed and correct and still document nothing. Only the hooks the recorded
+   `install-git-hook --on` mode installs are expected (`specky.hooks` in the local git config,
+   `commit` when unset): under `merge` only `post-merge` is checked, and under `none` the section is
+   a single `[ok]` saying commits are left to `specky sync` or CI.
 6. **Index** — Open `.specky/index.db` read-only, report doc and commit counts, and `warn` if
    `journal_mode` isn't `wal` (that's the reason a commit landing during `specky serve` could hit a
    locked database). A file that's missing its tables is a `fail` pointing at `specky index`.
@@ -124,6 +127,8 @@ flowchart TD
 | Credential env var is set | `[ok]` saying it is set — the value is never printed, in any mode |
 | A foreign `post-commit` hook is installed | `[fail]`, since `install-git-hook` won't overwrite it |
 | specky's hook is installed but not executable | `[fail]` — git silently never runs it |
+| Hooks installed with `--on merge` | One `[ok]` row for `post-merge`; the other two aren't missing, they were left out |
+| Hooks turned off with `--on none` | One `[ok]` row saying commits are documented by `specky sync` or CI |
 | `SPECKY_DISABLE_HOOK` is set | `[warn]` first in the hook section — every fire returns without documenting anything |
 | The repo is a shallow clone | `[warn]` naming `git fetch --unshallow`; the checks below it can only see the commits that were cloned |
 | Index exists but has no tables | `[fail]` pointing at `specky index`; exit 1 |

@@ -23,7 +23,14 @@ from pathlib import Path
 import pytest
 
 from specky import commit_doc, paths
-from specky.commit_doc import HOOK_MARKER, HOOKS, hooks_dir, install_git_hook
+from specky.commit_doc import (
+    HOOK_MARKER,
+    HOOKS,
+    hook_mode,
+    hooks_dir,
+    install_git_hook,
+    set_hook_mode,
+)
 from specky.lock import exclusive
 
 from conftest import RoutingProvider, git
@@ -150,6 +157,52 @@ class TestInstall:
         assert [p.name for p in install_git_hook()] == list(HOOKS)
 
 
+class TestHookModes:
+    """`install-git-hook --on`: when the doc commits happen, not whether commits get documented."""
+
+    def test_merge_installs_post_merge_alone(self, in_repo: Path):
+        # post-rewrite fires on every amend, which would bring back a doc commit per commit.
+        assert [p.name for p in install_git_hook("merge")] == ["post-merge"]
+        assert hook_mode(in_repo) == "merge"
+
+    def test_switching_down_removes_speckys_own_hooks(self, in_repo: Path):
+        install_git_hook()
+
+        written, removed = set_hook_mode("merge")
+
+        hooks = in_repo / ".git/hooks"
+        assert [p.name for p in removed] == ["post-commit", "post-rewrite"]
+        assert not (hooks / "post-commit").exists()
+        assert (hooks / "post-merge").exists()
+
+    def test_none_removes_them_all_and_is_recorded(self, in_repo: Path):
+        install_git_hook()
+
+        written, removed = set_hook_mode("none")
+
+        assert written == []
+        assert [p.name for p in removed] == list(HOOKS)
+        assert hook_mode(in_repo) == "none"
+
+    def test_a_foreign_hook_outside_the_mode_is_left_alone(self, in_repo: Path):
+        hooks = in_repo / ".git/hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "post-commit").write_text("#!/bin/sh\nmake lint\n")
+
+        set_hook_mode("merge")
+
+        assert "make lint" in (hooks / "post-commit").read_text()
+
+    def test_switching_back_up_reinstalls_everything(self, in_repo: Path):
+        set_hook_mode("none")
+        assert [p.name for p in install_git_hook()] == list(HOOKS)
+        assert hook_mode(in_repo) == "commit"
+
+    def test_an_unknown_mode_is_refused(self, in_repo: Path):
+        with pytest.raises(ValueError, match="unknown hook mode"):
+            set_hook_mode("push")
+
+
 class TestHookScript:
     """The installed shell script, run the way git runs it."""
 
@@ -258,6 +311,18 @@ class TestPluginHook:
 
         assert result.returncode == 0
         assert marker.read_text().strip() == "commit-doc"
+
+    @pytest.mark.parametrize("mode", ["merge", "none"])
+    def test_steps_aside_when_the_repo_opted_out_of_per_commit_docs(
+        self, tmp_repo: Path, stub_on_path, mode: str
+    ):
+        marker, path_value = stub_on_path
+        (tmp_repo / "specky.toml").write_text("[ai]\n")
+        git(tmp_repo, "config", "specky.hooks", mode)
+
+        self._fire(tmp_repo, 'git commit -m "x"', path_value)
+
+        assert not marker.exists()
 
     def test_ignores_bash_calls_that_are_not_commits(self, tmp_repo: Path, stub_on_path):
         marker, path_value = stub_on_path

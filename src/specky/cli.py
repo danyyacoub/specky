@@ -271,10 +271,15 @@ def _record_commit(args: argparse.Namespace) -> None:
 
 
 def _install_git_hook(args: argparse.Namespace) -> None:
-    from specky.commit_doc import install_git_hook
+    from specky.commit_doc import set_hook_mode
 
-    for path in install_git_hook():
+    written, removed = set_hook_mode(args.on)
+    for path in written:
         print(f"Installed {path}")
+    for path in removed:
+        print(f"Removed {path}")
+    if args.on == "none":
+        print("No doc hooks — commits are documented by `specky sync` or the CI job")
 
 
 def _hands_off(root) -> bool:
@@ -713,6 +718,12 @@ def build_parser() -> argparse.ArgumentParser:
         "install-git-hook",
         "Install the post-commit, post-merge and post-rewrite doc hooks",
         _install_git_hook,
+    ).add_argument(
+        "--on",
+        choices=["commit", "merge", "none"],
+        default="commit",
+        help="When docs are written: after every commit (default), after a merge or pull only — "
+        "one doc commit per merged branch — or never, leaving it to CI. Re-run to switch",
     )
     document_cmd = command(
         "document",

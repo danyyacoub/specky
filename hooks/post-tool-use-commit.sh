@@ -18,6 +18,10 @@ case "$INPUT" in
   *"git commit"*)
     root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
     [ -f "$root/specky.toml" ] || exit 0
+    # `install-git-hook --on merge|none` chose not to document per commit; this trigger mirrors
+    # post-commit, so it steps aside with it.
+    mode=$(git -C "$root" config --get specky.hooks 2>/dev/null)
+    [ -z "$mode" ] || [ "$mode" = commit ] || exit 0
     command -v specky >/dev/null 2>&1 || exit 0
     OUT=$(specky commit-doc 2>&1) || true
     # With `provider = "agent"`, a commit made from this session is left for this session's agent

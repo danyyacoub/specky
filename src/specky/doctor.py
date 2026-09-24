@@ -37,10 +37,11 @@ from specky import mermaid_tool, paths
 from specky.commit_doc import (
     DISABLE_HOOK_ENV,
     HOOK_MARKER,
-    HOOKS,
+    HOOK_MODES,
     _AUTO_COMMIT_MARKER,
     history_doc_for,
     hook_disabled,
+    hook_mode,
     hooks_dir,
 )
 from specky.generator import PENDING_DIR
@@ -384,10 +385,24 @@ def _git_hook(repo_root: Path) -> list[Check]:
     install: a repo set up before `post-merge`/`post-rewrite` existed has a working post-commit
     hook and still misses every merge and every rebase. That's a `warn` naming the fix, while a
     hook file specky didn't write stays a `fail` — `install-git-hook` won't overwrite one.
+
+    Only the hooks the recorded `--on` mode installs are expected: a `merge` or `none` repo left
+    the rest out on purpose.
     """
     hooks_path = hooks_dir(repo_root)
+    mode = hook_mode(repo_root)
+    expected = HOOK_MODES[mode]
     checks = []
     missing = []
+    if not expected:
+        return [
+            Check(
+                "git hook",
+                OK,
+                "doc hooks off (`install-git-hook --on none`) — commits are documented by "
+                "`specky sync` or CI",
+            )
+        ]
     if hook_disabled():
         # First, because it makes every row under it moot: the hooks can all be installed and
         # correct and still document nothing.
@@ -399,7 +414,7 @@ def _git_hook(repo_root: Path) -> list[Check]:
                 "without documenting anything",
             )
         )
-    for name in HOOKS:
+    for name in expected:
         hook = hooks_path / name
         if not hook.is_file():
             missing.append(name)
@@ -420,12 +435,13 @@ def _git_hook(repo_root: Path) -> list[Check]:
             checks.append(Check("git hook", OK, f"{name} hook installed at {hook}"))
 
     if missing:
-        installed = len(HOOKS) - len(missing)
+        installed = len(expected) - len(missing)
         checks.append(
             Check(
                 "git hook",
                 WARN,
-                f"{', '.join(missing)} hook(s) not installed — run `specky install-git-hook`"
+                f"{', '.join(missing)} hook(s) not installed — run `specky install-git-hook"
+                + ("`" if mode == "commit" else f" --on {mode}`")
                 + (
                     ", so commits that arrive by merge, pull, rebase or amend go undocumented"
                     if installed

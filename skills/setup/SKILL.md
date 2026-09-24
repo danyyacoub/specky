@@ -119,6 +119,11 @@ go-ahead, then:
 specky install-git-hook
 ```
 
+If the user finds a doc commit per commit too noisy, `--on merge` writes them once per local
+merge or pull, and `--on none` leaves them to `specky sync` or a CI job. A team that merges pull
+requests on GitHub is better served by `none` plus CI than by `merge`, since its only local merge
+is a `git pull` onto a shared branch.
+
 If it refuses because a hook it didn't write is already there (husky, lefthook, pre-commit), don't
 overwrite anything. Relay the line from the error that says what to add to the existing hook by
 hand.

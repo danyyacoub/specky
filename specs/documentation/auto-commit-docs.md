@@ -78,6 +78,28 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    hands specky's to every clone, and a cloud coding agent's throwaway VM wants its commits in the
    pull request it opens rather than in a doc-sync commit nobody asked for.
 
+   `--on` picks *when* the docs are written, not whether: every mode still documents every commit,
+   because each fire reconciles the backlog. What it changes is how many `docs: sync specky docs`
+   commits the log carries.
+
+   | `--on` | Hooks installed | Doc commits land |
+   |---|---|---|
+   | `commit` (default) | `post-commit`, `post-merge`, `post-rewrite` | After each commit |
+   | `merge` | `post-merge` | Once per local merge or pull, covering every commit it brought in |
+   | `none` | none | Never locally; `specky sync` or the CI job writes them |
+
+   `merge` leaves `post-rewrite` out because it fires on every `git commit --amend`, which would bring
+   the per-commit doc commits straight back. The cost is that a rebase no longer renames the history
+   docs it invalidates; the orphans are reconciled by `specky sync` or CI. `merge` fits a team that
+   merges locally. A team merging pull requests on the forge only ever runs `post-merge` on a
+   `git pull`, which puts the doc commit on a shared branch, outside any review. For that team `none`
+   plus a CI job on the pull request is the better fit.
+
+   Re-running with another mode removes specky's own hooks outside it and never touches a hook specky
+   didn't write. The mode is recorded as `specky.hooks` in the repo's local git config. `specky doctor`
+   reads it, so hooks left out on purpose aren't reported as missing. The plugin's `PostToolUse`
+   trigger reads it too, and does nothing under `merge` or `none`.
+
 3. **Find `specky` even from a login-less shell** — The installed script tries `specky` on `PATH`,
    then falls back to the absolute path of the `specky` that installed it. GUI git clients
    (IntelliJ, Fork, Tower) run hooks with a PATH that often has no `~/.local/bin` in it, and the

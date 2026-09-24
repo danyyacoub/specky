@@ -311,6 +311,29 @@ def test_a_half_installed_set_warns_about_the_missing_hooks(in_repo):
     assert "install-git-hook" in checks[1].detail
 
 
+def test_merge_mode_expects_post_merge_only(in_repo):
+    """`--on merge` leaves post-commit and post-rewrite out on purpose; that isn't a partial install."""
+    install_git_hook("merge")
+    checks = _by_section(doctor.run_checks())["git hook"]
+    assert [c.status for c in checks] == [doctor.OK]
+    assert "post-merge" in checks[0].detail
+
+
+def test_merge_mode_missing_its_hook_names_the_mode_in_the_fix(in_repo):
+    install_git_hook("merge")
+    (in_repo / ".git" / "hooks" / "post-merge").unlink()
+    checks = _by_section(doctor.run_checks())["git hook"]
+    assert [c.status for c in checks] == [doctor.WARN]
+    assert "install-git-hook --on merge" in checks[0].detail
+
+
+def test_hooks_turned_off_on_purpose_pass(in_repo):
+    install_git_hook("none")
+    checks = _by_section(doctor.run_checks())["git hook"]
+    assert [c.status for c in checks] == [doctor.OK]
+    assert "--on none" in checks[0].detail
+
+
 def test_hooks_disabled_by_the_environment_are_reported_first(in_repo, monkeypatch):
     """Otherwise this is the report where everything is `ok` and no docs exist: three correctly
     installed hooks, each returning immediately."""
