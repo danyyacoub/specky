@@ -66,6 +66,7 @@ flowchart TD
 | `--since REV\|DATE` | Only sync commits after the given revision or date (e.g., `--since main`, `--since 2024-01-01`); also lifts the 10-commit default cap |
 | `--limit N` | Only sync the N most recent commits; also lifts the 10-commit default cap |
 | `--all-branches` | Document commits on every ref, not just HEAD — more commits, so more AI calls; also lifts the 10-commit default cap |
+| `--commit` | Commit the docs it wrote as one `docs: sync specky docs [skip specky]` commit, the way a hook fire commits them — for a repo with the hooks off |
 | `--dry-run` | Preview what would be documented without calling the AI provider |
 | `--yes` | Skip confirmation prompt for backlogs over 25 commits (required if stdin is not a tty) — does *not* lift the 10-commit default cap by itself |
 | `--refresh-history` | Work on *documented* commits instead: rewrite each history doc still in the legacy one-paragraph shape as a headline, an impact, What changed and Why ([documentation/auto-commit-docs.md](../documentation/auto-commit-docs.md)). Same range flags and confirmation; one AI call per doc; feature docs are not reclassified |
@@ -84,7 +85,8 @@ flowchart TD
 | Two commits share the same 8 hex digits | The second one is written as `<sha12>.md`; the first one's doc is left intact |
 | A commit is older than the hooks' 20-commit window | No hook fire will ever reach it; `sync` documents it, which is why `doctor` and the hook output both point here |
 | A hook fire (or another `sync`) already holds the writer lock | Prints that another specky run is writing docs and exits 0; nothing is written |
-| Docs are written | They are left uncommitted in the working tree — unlike a hook fire, `sync` makes no doc-sync commit |
+| Docs are written without `--commit` | They are left uncommitted in the working tree — unlike a hook fire, `sync` makes no doc-sync commit |
+| Docs are written with `--commit` | They are committed as one `docs: sync specky docs [skip specky]` commit, staged by path: only the docs this run wrote, plus `MODULES.md` when the run changed it |
 | Provider configuration is missing or invalid | Exits with error message; no docs are written |
 | Provider call fails (API error, network issue, etc.) | Exits with error; partially written docs remain on disk |
 | `--refresh-history` supplied | Only commits whose history doc has no headline are picked; each is rewritten in place, keeping its filename and its `features:` link (or, for a doc that never had one, the link this machine's index recorded) |
@@ -103,7 +105,8 @@ flowchart TD
 | A commit is older than the hooks' 20-commit window | No hook fire will ever reach it | The hook is bounded because it spends money inside a git hook; `sync` is the command with no such bound, which is why `doctor` points here |
 | The commit is one of specky's own `[skip specky]` doc syncs | It is skipped | Documenting the doc commit would document the documentation, forever |
 | The provider fails partway through | The run exits with the error and the docs already written stay on disk | They are correct; discarding them would mean paying for them twice |
-| Docs are written | They are left uncommitted | Unlike a hook fire, a `sync` may have touched hundreds of files — that is a diff somebody should read before it lands |
+| Docs are written without `--commit` | They are left uncommitted | Unlike a hook fire, a `sync` may have touched hundreds of files — that is a diff somebody should read before it lands |
+| Docs are written with `--commit` | One marker commit lands the run's docs, staged by path | With the hooks off, a developer documents a shared branch now and then; the result should be committed the way a hook fire would have committed it |
 | `--refresh-history` on a doc that is already structured | It is skipped | A refresh is for the legacy shape; a structured doc may have been hand-edited, and a second pass would pay to undo that |
 | `--refresh-history` makes no classification call | Feature docs stay as they are | The refresh is about how a commit is described, not about which doc it belongs to — that was decided when it was first documented |
 
@@ -128,4 +131,5 @@ flowchart TD
 | Beyond the hook window | A repo with 30 undocumented commits, the hooks installed | A hook fires, then `specky sync --since <old rev>` runs | The hook documents 5 and reports the rest; `sync` documents everything still missing back to the given revision |
 | Another writer holds the lock | A hook fire is in progress | Run `specky sync` | It prints that another specky run is writing docs and exits 0; no files are written and the backlog is unchanged |
 | Sync leaves the commit to the human | Repo with 2 undocumented commits | Run `specky sync` | The docs exist on disk and `git status` shows them as new; HEAD is the same sha as before the run |
+| Sync lands one doc commit | Repo with the hooks off and 2 undocumented commits on a branch | Run `specky sync --commit` | The docs are written and committed as one `docs: sync specky docs [skip specky]` commit; HEAD moves by one commit and the working tree is clean |
 | Refresh rewrites legacy docs only | One commit with a legacy doc linked to a feature, one with a structured doc | Run `specky sync --refresh-history` | The legacy doc gains a headline and keeps its `features:`; the structured one is untouched; exactly one provider call is made |
