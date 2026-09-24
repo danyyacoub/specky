@@ -17,6 +17,7 @@ from urllib.parse import unquote, urlparse
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
 
 from specky import __version__, catalog, doc_tools, paths, spec_draft
 from specky.chat_server import EXPLORE_FORMAT
@@ -158,47 +159,51 @@ mcp = MCPServer(
     website_url="https://github.com/danyyacoub/specky",
 )
 
+# Every tool only reads the docs tree, the index or git. Saying so lets clients that gate
+# tools by mode (plan mode, read-only agents) still call them.
+READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 
-@mcp.tool()
+
+@mcp.tool(annotations=READ_ONLY)
 def ping() -> str:
     """Health-check tool used to verify the specky MCP server is wired up correctly."""
     return "pong"
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_features(ctx: Context) -> list[dict]:
     """List all feature docs (path, title, domain, tags). Requires `specky index` to have
     run at least once."""
     return catalog.list_features(await _repo(ctx))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_workflows(ctx: Context) -> list[dict]:
     """List all workflow docs (path, title, domain, tags). Requires `specky index` to have
     run at least once."""
     return catalog.list_workflows(await _repo(ctx))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_tags(ctx: Context) -> dict[str, list[dict]]:
     """Every tag in use, mapped to the docs carrying it."""
     return catalog.list_tags(await _repo(ctx))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def get_graph(ctx: Context) -> dict:
     """The feature/workflow graph as {nodes, edges} — an edge connects a workflow to a
     feature sharing a tag, or follows a doc's hand-authored `related` reference."""
     return catalog.build_graph(await _repo(ctx))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def commit_info(sha: str, ctx: Context) -> dict:
     """Tags and feature/workflow docs linked to a single commit."""
     return catalog.commit_info(await _repo(ctx), sha)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def commits_for_doc(doc_path: str, ctx: Context) -> list[dict]:
     """Commits linked to a given feature/workflow doc (path relative to the repo root,
     e.g. 'specs/billing/refund-flow.md'), most recent first — each with its history doc's one-line
@@ -210,14 +215,14 @@ async def commits_for_doc(doc_path: str, ctx: Context) -> list[dict]:
 # --- the Spec Assistant's docs tools --------------------------------------------------------------
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def list_domains(ctx: Context) -> list[dict]:
     """Every domain (folder) of the docs tree with the docs in it: path, title, type (feature |
     workflow) and one-line purpose. Read off disk, so it is current even before `specky index`."""
     return doc_tools.list_domains(await _repo(ctx))
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def search_docs(
     ctx: Context,
     query: str,
@@ -229,14 +234,14 @@ async def search_docs(
     return doc_tools.search_docs(await _repo(ctx), query, domain or None, limit)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def read_doc(path: str, ctx: Context) -> str:
     """One doc's full text, frontmatter included — e.g. 'specs/chat/local-rag-server.md'. Only
     paths inside the docs tree are readable."""
     return doc_tools.read_doc(await _repo(ctx), path)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def doc_behaviours(path: str, ctx: Context) -> list[dict]:
     """The behaviours one doc states, each with a stable id: STEP-n (How It Works), OUT-n
     (Outcomes), EDGE-n (Edge Cases), AT-n (Acceptance Tests). Each row is {id, section, text,
@@ -244,14 +249,14 @@ async def doc_behaviours(path: str, ctx: Context) -> list[dict]:
     return doc_tools.doc_behaviours(await _repo(ctx), path)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 async def search_history(query: str, ctx: Context) -> list[dict]:
     """Commits whose message or summary matches `query` — what used to be true, and why it
     changed. Requires `specky index`."""
     return doc_tools.search_history(await _repo(ctx), query)
 
 
-@mcp.tool()
+@mcp.tool(annotations=READ_ONLY)
 def render_acceptance_table(rows: list[dict]) -> str:
     """Approved acceptance-test rows ({scenario, given, when, then}) as the markdown table a doc's
     `## Acceptance Tests` section carries — the exact table the Spec Assistant splices into its own
