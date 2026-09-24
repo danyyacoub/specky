@@ -1,11 +1,7 @@
 ---
 type: feature
 tags: [cli, ci]
-sources:
-  - src/specky/lint.py
-  - src/specky/facts.py
-  - src/specky/catalog.py
-  - src/specky/cli.py
+sources: [src/specky/lint.py, src/specky/facts.py, src/specky/catalog.py, src/specky/cli.py]
 ---
 
 # Cli — Lint
@@ -19,26 +15,28 @@ kinds of drift:
 - **numbers** that two docs about the same thing attach to the same name differently.
 
 A single agent writing one careful doc can't see any of the three. The drift sits between that doc
-and the thirty it didn't open. One agent-run migration shipped all three kinds:
+and the thirty it didn't open. One agent-run migration kept every heading while dropping scoring
+weights, formulas and two dozen glossary terms, and shipped all three kinds:
 - *Price variance* and *To control* used across docs with no glossary row;
 - fifteen tags carried by one doc each;
 - a threshold stated two ways.
 
 It's offline, and it reads the docs as they are on disk, uncommitted edits included, so an agent can
-run it on the doc it just wrote. It needs no index. Everything it reports is advice.
+run it on the doc it just wrote, as the `document-commits` skill does after it writes. It needs no
+index. Everything it reports is advice, and it never blocks a commit.
 [`specky check`](check.md) runs the same checks over the docs a pull request is about.
 
 ## How It Works
 
 1. **Load the docs** — every topic doc under the docs root, read from the worktree. `history/` and
-   the root's own files (GLOSSARY.md, MODULES.md, PRODUCT.md, TAGS.md) are skipped: they describe
-   the tree, not a feature. Paths given on the command line (files or directories) narrow which
-   docs findings may involve. Every doc is still read, because a term is shared or a number
-   conflicts only in comparison with the rest.
+the root's own files (GLOSSARY.md, MODULES.md, PRODUCT.md, TAGS.md) are skipped: they describe
+the tree, not a feature. Paths given on the command line (files or directories) narrow which
+docs findings may involve. Every doc is still read, because a term is shared or a number
+conflicts only in comparison with the rest.
 2. **Undefined terms** — collect what each doc uses *as a name*: bold terms that read like names
-   rather than emphasis, and the first column of any table under an Outcomes, Status, Result,
-   Classification, Diagnostic, Verdict or State heading. Those status names ("Price variance",
-   "To control") are never bolded, so this is the only way to see them. Report a term when:
+rather than emphasis, and the first column of any table under an Outcomes, Status, Result,
+Classification, Diagnostic, Verdict or State heading. Those status names ("Price variance",
+"To control") are never bolded, so this is the only way to see them. Report a term when:
    - `GLOSSARY.md` has no row for it, compared case- and plural-insensitively, with a row like
      "Tolerance (price)" also covering "Tolerance";
    - and at least two docs share it. A **bold phrase** is the author marking a term, so any doc
@@ -53,19 +51,21 @@ run it on the doc it just wrote. It needs no index. Everything it reports is adv
    - a code-shaped status (`COMPLIANT`) the glossary mentions anywhere, since it's a value of a
      defined term.
 3. **Tags** — with a `TAGS.md` registry, report every tag outside it. Without one, report every tag
-   only one doc carries: it groups nothing.
+only one doc carries: it groups nothing. `document-domain` picks tags from `TAGS.md` when the repo
+has one, and proposes a new tag rather than inventing one silently, so a stray tag here means a doc
+skipped that step.
 4. **Conflicting numbers** — pair each significant number in prose and table rows with the nearest
-   name within 40 characters, before or after it. A name is a glossary term, or a backticked
-   identifier shaped like a quantity: a snake_case or dotted field, or an ALL_CAPS constant. A flag
-   (`--yes`) or a command names an option, and two docs giving `--yes` different numbers were
-   describing two commands. Code blocks and example sections (Acceptance Tests) are skipped.
+name within 40 characters, before or after it. A name is a glossary term, or a backticked
+identifier shaped like a quantity: a snake_case or dotted field, or an ALL_CAPS constant. A flag
+(`--yes`) or a command names an option, and two docs giving `--yes` different numbers were
+describing two commands. Code blocks and example sections (Acceptance Tests) are skipped.
 
    For two docs that share a tag and state the same name, report the name when they have *nothing*
-   in common. Agreement is loose on purpose: either doc's claimed value appearing anywhere on the
-   other's lines about that name counts. "…or 50 (DPGF)" agrees with "DPGF over 30 PDF pages, or
-   more than 50 pages in total", even though that 50 sits too far from "DPGF" to be claimed for it.
+in common. Agreement is loose on purpose: either doc's claimed value appearing anywhere on the
+other's lines about that name counts. "…or 50 (DPGF)" agrees with "DPGF over 30 PDF pages, or
+more than 50 pages in total", even though that 50 sits too far from "DPGF" to be claimed for it.
 5. **Report** — each kind as a block, fifteen items at a time, with every item in `--json`. It exits
-   0, or 1 with `--strict` when there's any finding.
+0, or 1 with `--strict` when there's any finding.
 
 ## Flags
 
