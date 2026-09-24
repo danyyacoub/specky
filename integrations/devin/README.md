@@ -63,6 +63,18 @@ Claude Code's [.mcp.json](../../.mcp.json) points at. It speaks stdio and answer
 `.specky/index.db`, which is why the blueprint's `maintenance` step runs `specky index`: without
 that file every tool returns nothing, and Devin has no way to tell "no docs match" from "no index".
 
+Devin Desktop starts MCP servers from your home directory, not the project, so `git rev-parse` in
+`specky-mcp` finds no repo. The server then asks the host for its workspace folders (MCP roots),
+and a `SPECKY_REPO_ROOT` env var overrides both. The path differs per machine, so set it in the
+gitignored `.devin/mcp_config.local.json`:
+
+```json
+{ "mcpServers": { "specky": { "command": "specky-mcp", "args": [],
+  "env": { "SPECKY_REPO_ROOT": "/absolute/path/to/the/repo" } } } }
+```
+
+Without either, every tool but `ping` returns an error naming `SPECKY_REPO_ROOT`.
+
 Tools exposed, all read-only: `list_domains`, `search_docs`, `read_doc`, `doc_behaviours`,
 `search_history` (the docs and their history); `list_features`, `list_workflows`, `list_tags`,
 `get_graph`, `commit_info`, `commits_for_doc` (the feature/workflow catalog);
@@ -173,10 +185,16 @@ Only the delta from above.
 
    `specky init` is an interview, and a blueprint step has no terminal — without flags, `input()`
    raises `EOFError` a question or two in, after some answers have been given and before anything
-   is written. Naming `--provider` answers it up front. It's an OpenAI-compatible API because
-   Devin has no headless CLI specky can run as its `agent` provider; Anthropic's endpoint is shown,
-   and DeepSeek, OpenRouter or any other works the same. `--no-validate` skips the live provider
-   call, which a snapshot build shouldn't pay for.
+   is written. Naming `--provider` answers it up front. Anthropic's endpoint is shown, and
+   DeepSeek, OpenRouter or any other OpenAI-compatible API works the same. `--no-validate` skips
+   the live provider call, which a snapshot build shouldn't pay for.
+
+   To have Devin write the docs itself, use Devin CLI as the `agent` provider instead
+   (`provider = "agent"`, `agent = "devin"`; specky runs `devin -p --prompt-file /dev/stdin`).
+   Install it in `initialize` with `curl -fsSL https://cli.devin.ai/install.sh | bash`, and log it
+   in during `maintenance` by writing a secret holding the contents of a logged-in machine's
+   `~/.local/share/devin/credentials.toml` back to that path. Use a bot account: anyone with the
+   file can act as it. Commit `specky.toml` in that case, so developers' hooks use Devin too.
 3. Expect doc commits in Devin's branches, and tell your reviewers. They carry the
    `docs: sync specky docs [skip specky]` subject, so the hook, the docs-sync workflow and
    `specky check` all recognise them and leave them alone.

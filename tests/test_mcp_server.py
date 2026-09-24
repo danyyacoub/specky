@@ -44,4 +44,4 @@ def test_a_repo_with_no_docs_root_is_told_to_leave_the_tools_alone(tmp_path: Pat
 
 
 def test_outside_a_git_repo(tmp_path: Path):
-    assert mcp_server.instructions_for(None) == mcp_server.NO_DOCS_INSTRUCTIONS
+    assert mcp_server.instructions_for(None) == mcp_server.UNKNOWN_REPO_INSTRUCTIONS

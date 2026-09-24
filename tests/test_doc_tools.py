@@ -2,6 +2,7 @@ import asyncio
 import re
 from pathlib import Path
 
+import anyio
 import pytest
 
 from specky import doc_tools, mcp_server
@@ -257,11 +258,15 @@ def test_a_bad_argument_is_reported_not_raised(docs_repo):
 
 def test_the_mcp_tools_are_the_same_functions(docs_repo, monkeypatch):
     monkeypatch.setattr(mcp_server, "repo_root", lambda: docs_repo)
+    ctx = None  # unused: the cwd names the repo, so the host's roots are never asked for
 
-    assert mcp_server.list_domains() == list_domains(docs_repo)
-    assert mcp_server.doc_behaviours("specs/chat/panel.md")[0]["id"] == "STEP-1"
-    assert mcp_server.search_docs("refund")[0]["path"] == "specs/billing/refund-flow.md"
-    assert mcp_server.read_doc("chat/panel.md").startswith("---")
+    def call(tool, *args):
+        return anyio.run(lambda: tool(*args))
+
+    assert call(mcp_server.list_domains, ctx) == list_domains(docs_repo)
+    assert call(mcp_server.doc_behaviours, "specs/chat/panel.md", ctx)[0]["id"] == "STEP-1"
+    assert call(mcp_server.search_docs, ctx, "refund")[0]["path"] == "specs/billing/refund-flow.md"
+    assert call(mcp_server.read_doc, "chat/panel.md", ctx).startswith("---")
     table = mcp_server.render_acceptance_table(
         [{"scenario": "Open", "given": "closed", "when": "click", "then": "opens | fast"}]
     )

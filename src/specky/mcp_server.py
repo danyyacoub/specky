@@ -9,10 +9,14 @@ those workflows out, built from the same rule text the panel's prompts are (`spe
 two can't drift.
 """
 
+import os
 import subprocess
+import warnings
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from specky import __version__, catalog, doc_tools, paths, spec_draft
 from specky.chat_server import EXPLORE_FORMAT
@@ -43,6 +47,17 @@ NO_DOCS_INSTRUCTIONS = (
 )
 
 
+# Some hosts start their MCP servers from a directory that isn't the project — Devin Desktop starts
+# them from the user's home, before any session has picked a workspace. Which repo the tools answer
+# for is then only known per call (see `_repo`), so the model is told what to do either way.
+UNKNOWN_REPO_INSTRUCTIONS = (
+    "specky answers questions from a repo's functional docs and git history. If the workspace "
+    "has specky docs (a specky.toml, or a specs/<domain>/<topic>.md tree), check it first for "
+    "behaviour questions: search_docs then read_doc, citing the doc path. Otherwise leave these "
+    "tools alone."
+)
+
+
 def instructions_for(root: Path | None) -> str:
     """The instructions for a server started in `root` (None: not inside a git repo).
 
@@ -50,18 +65,88 @@ def instructions_for(root: Path | None) -> str:
     somebody else's tree, not specky's.
     """
     if root is None:
-        return NO_DOCS_INSTRUCTIONS
+        return UNKNOWN_REPO_INSTRUCTIONS
     docs = paths.docs_root(root)
     if docs.is_dir() and next(docs.rglob("*.md"), None) is not None:
         return INSTRUCTIONS
     return NO_DOCS_INSTRUCTIONS
 
 
-def _startup_root() -> Path | None:
+def _git_root(start: Path | None = None) -> Path | None:
+    """The top of the git repo containing `start` (default: the cwd), or None."""
     try:
-        return repo_root()
+        if start is None:
+            return repo_root()
+        result = subprocess.run(
+            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return Path(result.stdout.strip())
     except (subprocess.CalledProcessError, OSError):
         return None
+
+
+def _startup_root() -> Path | None:
+    override = os.environ.get("SPECKY_REPO_ROOT")
+    return _git_root(Path(override)) if override else _git_root()
+
+
+class RepoNotFound(ToolError):
+    """A `ToolError`, so its message reaches the model instead of the SDK's generic one."""
+
+
+async def _client_roots(ctx: Context) -> list[Path]:
+    """The workspace folders the host says it has open, as local paths. [] if it won't say."""
+    session = ctx.session
+    caps = session.client_capabilities
+    if caps is None or caps.roots is None:
+        return []
+    try:
+        with warnings.catch_warnings():
+            # Deprecated in the 2026-07-28 spec, still what today's hosts answer.
+            warnings.simplefilter("ignore")
+            result = await session.list_roots()
+    except Exception:
+        return []
+    found = []
+    for root in result.roots:
+        uri = urlparse(str(root.uri))
+        if uri.scheme == "file":
+            found.append(Path(unquote(uri.path)))
+    return found
+
+
+async def _repo(ctx: Context) -> Path:
+    """The repo a tool call answers for.
+
+    `SPECKY_REPO_ROOT` wins, for a host that can only pass env. Then the cwd, which is right
+    wherever the host starts its servers in the project (Claude Code, Codex, Kiro). Then the
+    workspace roots the host reports — the only signal left when it starts them somewhere else.
+    Resolved per call rather than once, since one server process can outlive a workspace switch.
+    """
+    override = os.environ.get("SPECKY_REPO_ROOT")
+    if override:
+        root = _git_root(Path(override).expanduser())
+        if root is None:
+            raise RepoNotFound(f"SPECKY_REPO_ROOT={override} is not inside a git repo")
+        return root
+    root = _git_root()
+    if root is not None:
+        return root
+    candidates = [r for r in map(_git_root, await _client_roots(ctx)) if r is not None]
+    # A multi-root workspace: prefer the repo that actually has specky set up.
+    for candidate in candidates:
+        if (candidate / "specky.toml").exists() or paths.docs_root(candidate).is_dir():
+            return candidate
+    if candidates:
+        return candidates[0]
+    raise RepoNotFound(
+        f"specky-mcp was started outside a git repo (cwd: {Path.cwd()}) and the host reported no "
+        "workspace folder that is one. Set SPECKY_REPO_ROOT to the repo's path in this server's "
+        "`env`, or start the host from inside the repo."
+    )
 
 
 mcp = MCPServer(
@@ -81,86 +166,89 @@ def ping() -> str:
 
 
 @mcp.tool()
-def list_features() -> list[dict]:
+async def list_features(ctx: Context) -> list[dict]:
     """List all feature docs (path, title, domain, tags). Requires `specky index` to have
     run at least once."""
-    return catalog.list_features(repo_root())
+    return catalog.list_features(await _repo(ctx))
 
 
 @mcp.tool()
-def list_workflows() -> list[dict]:
+async def list_workflows(ctx: Context) -> list[dict]:
     """List all workflow docs (path, title, domain, tags). Requires `specky index` to have
     run at least once."""
-    return catalog.list_workflows(repo_root())
+    return catalog.list_workflows(await _repo(ctx))
 
 
 @mcp.tool()
-def list_tags() -> dict[str, list[dict]]:
+async def list_tags(ctx: Context) -> dict[str, list[dict]]:
     """Every tag in use, mapped to the docs carrying it."""
-    return catalog.list_tags(repo_root())
+    return catalog.list_tags(await _repo(ctx))
 
 
 @mcp.tool()
-def get_graph() -> dict:
+async def get_graph(ctx: Context) -> dict:
     """The feature/workflow graph as {nodes, edges} — an edge connects a workflow to a
     feature sharing a tag, or follows a doc's hand-authored `related` reference."""
-    return catalog.build_graph(repo_root())
+    return catalog.build_graph(await _repo(ctx))
 
 
 @mcp.tool()
-def commit_info(sha: str) -> dict:
+async def commit_info(sha: str, ctx: Context) -> dict:
     """Tags and feature/workflow docs linked to a single commit."""
-    return catalog.commit_info(repo_root(), sha)
+    return catalog.commit_info(await _repo(ctx), sha)
 
 
 @mcp.tool()
-def commits_for_doc(doc_path: str) -> list[dict]:
+async def commits_for_doc(doc_path: str, ctx: Context) -> list[dict]:
     """Commits linked to a given feature/workflow doc (path relative to the repo root,
     e.g. 'specs/billing/refund-flow.md'), most recent first — each with its history doc's one-line
     `headline`, its `impact` (feature | improvement | fix | internal) and `history_path`, read
     those with read_doc for what changed and why."""
-    return catalog.commits_for_doc(repo_root(), doc_path)
+    return catalog.commits_for_doc(await _repo(ctx), doc_path)
 
 
 # --- the Spec Assistant's docs tools --------------------------------------------------------------
 
 
 @mcp.tool()
-def list_domains() -> list[dict]:
+async def list_domains(ctx: Context) -> list[dict]:
     """Every domain (folder) of the docs tree with the docs in it: path, title, type (feature |
     workflow) and one-line purpose. Read off disk, so it is current even before `specky index`."""
-    return doc_tools.list_domains(repo_root())
+    return doc_tools.list_domains(await _repo(ctx))
 
 
 @mcp.tool()
-def search_docs(
-    query: str, domain: str = "", limit: int = doc_tools.SEARCH_LIMIT_DEFAULT
+async def search_docs(
+    ctx: Context,
+    query: str,
+    domain: str = "",
+    limit: int = doc_tools.SEARCH_LIMIT_DEFAULT,
 ) -> list[dict]:
     """Full-text search over the docs (history docs excluded), ranked the way the Spec Assistant
     ranks them. Pass `domain` to search one folder only. Requires `specky index`."""
-    return doc_tools.search_docs(repo_root(), query, domain or None, limit)
+    return doc_tools.search_docs(await _repo(ctx), query, domain or None, limit)
 
 
 @mcp.tool()
-def read_doc(path: str) -> str:
+async def read_doc(path: str, ctx: Context) -> str:
     """One doc's full text, frontmatter included — e.g. 'specs/chat/local-rag-server.md'. Only
     paths inside the docs tree are readable."""
-    return doc_tools.read_doc(repo_root(), path)
+    return doc_tools.read_doc(await _repo(ctx), path)
 
 
 @mcp.tool()
-def doc_behaviours(path: str) -> list[dict]:
+async def doc_behaviours(path: str, ctx: Context) -> list[dict]:
     """The behaviours one doc states, each with a stable id: STEP-n (How It Works), OUT-n
     (Outcomes), EDGE-n (Edge Cases), AT-n (Acceptance Tests). Each row is {id, section, text,
     fields}. Use the ids to say exactly which promise a change alters."""
-    return doc_tools.doc_behaviours(repo_root(), path)
+    return doc_tools.doc_behaviours(await _repo(ctx), path)
 
 
 @mcp.tool()
-def search_history(query: str) -> list[dict]:
+async def search_history(query: str, ctx: Context) -> list[dict]:
     """Commits whose message or summary matches `query` — what used to be true, and why it
     changed. Requires `specky index`."""
-    return doc_tools.search_history(repo_root(), query)
+    return doc_tools.search_history(await _repo(ctx), query)
 
 
 @mcp.tool()
