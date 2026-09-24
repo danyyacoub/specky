@@ -205,6 +205,30 @@ def test_an_explicit_range_flag_overrides_the_default_depth(in_repo, monkeypatch
     assert len(_history(in_repo)) == len(shas) + 1
 
 
+def test_commit_lands_the_run_as_one_marker_commit(in_repo, monkeypatch):
+    """The hooks-off workflow: document the branch now and then, one doc commit per run."""
+    shas = [_commit(in_repo, f"commit {i}") for i in range(3)]
+    (in_repo / "draft.md").write_text("someone's unrelated work")
+    _use_provider(monkeypatch, RoutingProvider())
+
+    commit_doc.sync(commit=True)
+
+    assert git(in_repo, "log", "-1", "--format=%s").strip() == commit_doc._AUTO_COMMIT_MARKER
+    committed = git(in_repo, "show", "--name-only", "--format=", "HEAD").split()
+    assert {f"specs/history/{sha[:8]}.md" for sha in shas} <= set(committed)
+    assert "draft.md" not in committed
+    assert git(in_repo, "rev-list", "--count", f"{shas[-1]}..HEAD").strip() == "1"
+
+
+def test_without_commit_the_docs_stay_uncommitted(in_repo, monkeypatch):
+    head = _commit(in_repo, "commit")
+    _use_provider(monkeypatch, RoutingProvider())
+
+    commit_doc.sync()
+
+    assert git(in_repo, "rev-parse", "HEAD").strip() == head
+
+
 # --- spending money on purpose ------------------------------------------------------------
 
 

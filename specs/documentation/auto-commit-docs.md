@@ -86,7 +86,7 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    |---|---|---|
    | `commit` (default) | `post-commit`, `post-merge`, `post-rewrite` | After each commit |
    | `merge` | `post-merge` | Once per local merge or pull, covering every commit it brought in |
-   | `none` | none | Never locally; `specky sync` or the CI job writes them |
+   | `none` | none | When someone runs `specky sync --commit`, or the CI job does |
 
    `merge` leaves `post-rewrite` out because it fires on every `git commit --amend`, which would bring
    the per-commit doc commits straight back. The cost is that a rebase no longer renames the history

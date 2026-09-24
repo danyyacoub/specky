@@ -715,6 +715,7 @@ def sync(
     all_branches: bool = False,
     batch: bool = False,
     refresh_history: bool = False,
+    commit: bool = False,
 ) -> list[Path]:
     """Generate a micro-doc + feature/workflow doc update for every commit that doesn't have a
     history entry yet. Idempotent for the history log — safe to re-run any time (e.g. after
@@ -737,6 +738,10 @@ def sync(
     the legacy one-paragraph shape into the structured one (see `MicroDoc`), over the same range
     flags. One micro-doc call per doc and nothing else — the feature docs are not reclassified, and
     the doc keeps the `features:` link it already has.
+
+    `commit` commits what the run wrote as one marker commit, the way a hook fire does. It's how a
+    repo with the hooks off (`install-git-hook --on none`) documents a branch now and then: one doc
+    commit per run instead of one per commit.
     """
     repo_root = _repo_root()
     depth = None if (since or limit or all_branches) else SYNC_DEFAULT_DEPTH
@@ -766,9 +771,15 @@ def sync(
 
     try:
         with exclusive(repo_root):
+            modules = paths.modules_index(repo_root)
+            modules_before = _contents(modules)
             written = _write_docs(
                 repo_root, pending, provider, label_prefix="", batch=batch, refresh=refresh_history
             )
+            if commit:
+                # MODULES.md only when this run changed it, as in `main()`: it's edited by hand too.
+                staged = written + ([modules] if _contents(modules) != modules_before else [])
+                _commit_doc_updates(repo_root, staged)
     except LockBusy as exc:
         print(f"specky sync: {exc}")
         return []

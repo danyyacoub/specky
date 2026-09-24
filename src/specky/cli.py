@@ -341,6 +341,7 @@ def _sync(args: argparse.Namespace) -> None:
         all_branches=args.all_branches,
         batch=args.batch,
         refresh_history=args.refresh_history,
+        commit=args.commit,
     )
 
 
@@ -799,6 +800,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-branches",
         action="store_true",
         help="Document commits on every ref, not just HEAD (more commits, so more AI calls)",
+    )
+    sync_cmd.add_argument(
+        "--commit",
+        action="store_true",
+        help="Commit the docs it wrote as one `docs: sync specky docs` commit, as the hooks do",
     )
     sync_cmd.add_argument(
         "--refresh-history",

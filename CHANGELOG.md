@@ -12,6 +12,9 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
   commit (the default, unchanged), once per local merge or pull, or never, leaving it to `specky
   sync` or CI. Every commit is still documented. Re-running switches modes, and `specky doctor` and
   the Claude Code plugin's commit trigger respect the chosen one.
+- **`specky sync --commit`** commits what the run wrote as one `docs: sync specky docs` commit.
+  With the hooks off, running it on a branch now and then documents the newest 10 commits in a
+  single doc commit.
 - **`specky lint`** checks the docs as a set, offline, on the worktree:
   - terms several docs use that `GLOSSARY.md` doesn't define (bold terms and Outcomes/Status table
     labels);

@@ -13,7 +13,9 @@ Bare `specky sync` — no `--since`, `--limit`, or `--all-branches` — only ins
 
 `sync` and the git hooks are the same backlog pass over the same list of undocumented commits (see [documentation/auto-commit-docs.md](../documentation/auto-commit-docs.md)); the only difference is how much of it each one is allowed to do. A hook fire inspects the newest 20 commits and documents at most 5 of them, because it is spending money inside a git hook. `sync`'s own default window is smaller (10) but liftable — pass a range flag and it walks the whole history if you ask it to — which makes it the command for the two things a hook deliberately won't do: an explicit backfill of a repo's entire history, and any commit older than the hook's window. That's why the hook's own output points at it, and why `specky doctor` names it when it finds a backlog.
 
-Unlike a hook fire, `sync` never commits what it writes. The docs are left in the working tree for you to read and commit yourself, which is what you want for a run that may have touched hundreds of files.
+By default `sync` doesn't commit what it writes. The docs are left in the working tree for you to read and commit yourself, which is what you want for a run that may have touched hundreds of files.
+
+`--commit` commits them as one `docs: sync specky docs [skip specky]` commit, staged by path the way a hook fire stages them: only the docs this run wrote, plus `MODULES.md` when the run changed it. It's for a repo with the hooks off (`install-git-hook --on none`): instead of a doc commit after every commit, a developer runs `specky sync --commit` on a shared branch now and then. That documents the branch's newest 10 commits in one commit.
 
 ## How It Works
 
@@ -24,7 +26,7 @@ Unlike a hook fire, `sync` never commits what it writes. The docs are left in th
 5. **Confirm if needed** — For backlogs over 25 commits, require explicit user confirmation (via `--yes` or tty prompt). Refuse to prompt if stdin is not a tty. Bare `sync` can never trigger this on its own — its 10-commit cap is well under the threshold — so it's only reachable once a range flag surfaces a bigger backlog.
 6. **Take the writer lock** — A non-blocking `flock` on `.specky/run.lock`, shared with the hooks. A hook firing partway through a long `sync` would otherwise pick the same pending commit and write the same file twice. If the lock is already held, `sync` says so and exits 0 without writing.
 7. **Generate and save** — For each missing commit, fetch its metadata, generate a micro-doc using your configured AI provider, write the file to `specs/history/` (under the configured docs root — see [documentation/doc-adoption.md](../documentation/doc-adoption.md)), and record it in the index database. Commit summaries are fetched four at a time for efficiency; classification and file writes remain serial and in commit order to prevent duplicate docs.
-8. **Report results** — Print per-commit progress and final summary. The written files are left uncommitted.
+8. **Report results** — Print per-commit progress and final summary. The written files are left uncommitted, unless `--commit` was given: then they're committed as one marker commit while the lock is still held.
 
 ```mermaid
 flowchart TD
