@@ -32,6 +32,7 @@ per-host agent templated under [integrations/](../integrations/).
 | [documentation/stale-doc-detection.md](documentation/stale-doc-detection.md) | Detect and flag documentation that lags behind the code it covers, with viewer badges and check warnings |
 | [documentation/doc-ownership.md](documentation/doc-ownership.md) | Add optional owner field to docs so readers know who to ask about them |
 | [documentation/acceptance-test-scaffolding.md](documentation/acceptance-test-scaffolding.md) | Generate pytest test scaffolds from Given/When/Then acceptance test tables in documentation |
+| [documentation/history-consolidation.md](documentation/history-consolidation.md) | Fold a branch's recent commits into a single history entry that each new commit rewrites to describe the whole change, with window, long-lived branch, and opt-out controls. |
 
 ## Cli
 
