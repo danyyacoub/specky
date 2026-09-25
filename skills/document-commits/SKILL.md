@@ -5,8 +5,9 @@ description: Write specky's history docs for the commits it reports as pending, 
 
 # Document Commits
 Document the commits specky is waiting on, in this session, instead of specky launching a headless
-copy of this agent to do it. Each commit gets a history doc (`specs/history/<sha>.md`); a commit
-that changes a documented feature also gets that feature doc updated.
+copy of this agent to do it. Each commit goes into a history entry under `specs/history/`. A
+branch's recent commits share one entry, and each commit rewrites it to describe the whole change.
+A commit that changes a documented feature also gets that feature doc updated.
 
 specky hands this over only when `[ai] provider = "agent"` and the commit came from inside that
 agent's own session. Everywhere else (a terminal commit, CI, an API provider) its git hook still
@@ -33,8 +34,17 @@ run_specky() { if command -v specky >/dev/null 2>&1; then specky "$@"; else uv r
 run_specky pending --json
 ```
 `commits` lists the commits to document, oldest first. `rules` is the exact instruction specky
-gives a provider for a history entry. Follow it to the letter. If `commits` is empty, say so and
-stop.
+gives a provider for a history entry, and `rules_extend` the one for a commit joining an entry
+that already exists. Follow them to the letter. If `commits` is empty, say so and stop.
+
+Each commit's `extends` says which entry it joins:
+- `null`: it gets its own entry. Write the JSON for this commit alone, following `rules`.
+- a path such as `specs/history/feat-x.md`: it joins that entry. Read the entry first.
+- a sha: it joins the entry recorded for that earlier commit in this list. Read the path
+  `record-commit` printed for it.
+
+For a commit that joins an entry, follow `rules_extend`: the JSON describes the whole change,
+the entry so far plus this commit. It is not a description of this commit alone.
 
 Work through at most 5 commits unless the user asked for more. Older ones stay pending, and
 `specky sync` catches up a long backlog.
@@ -44,7 +54,9 @@ Work through at most 5 commits unless the user asked for more. Older ones stay p
    change behaviour are enough.
 2. **Write the micro-doc** as the JSON object `rules` asks for, with keys `headline`, `impact`,
    `what_changed` and `why`. Describe what the product does differently, in its users' terms.
-   Leave `why` empty when neither the commit message nor the diff states a motivation.
+   Leave `why` empty when neither the commit message nor the diff states a motivation. If the
+   commit joins an entry (`extends` isn't `null`), write it for the whole change, as
+   `rules_extend` says.
 3. **Find the feature it belongs to**, if any. Check `specs/MODULES.md`, then run `search_docs` (or
    `run_specky search "<terms>"`) with the commands, settings or screens the commit changed. A
    commit with `impact: internal` usually belongs to none.
@@ -63,7 +75,8 @@ Work through at most 5 commits unless the user asked for more. Older ones stay p
    {"headline": "...", "impact": "...", "what_changed": "...", "why": "..."}
    JSON
    ```
-   It writes the history doc, indexes it and prints its path.
+   It writes the history entry, or extends the one this commit joins, then indexes it and prints
+   its path.
 
 Never hand-write or edit anything under `specs/history/`. `record-commit` is the only writer.
 
@@ -74,17 +87,18 @@ disagrees with the doc owning it — and mention anything left in the report. It
 never blocks the commit.
 
 ### 4. Commit the docs
-Stage exactly what this run wrote: the history docs `record-commit` printed, any feature doc you
-changed, and `specs/MODULES.md` / `specs/GLOSSARY.md` / `specs/TAGS.md` if you changed them. Then
-commit:
+Stage exactly what this run wrote: the history entries `record-commit` printed, any feature doc
+you changed, and `specs/MODULES.md` / `specs/GLOSSARY.md` / `specs/TAGS.md` if you changed them.
+Then commit, listing the full shas of the commits you recorded:
 
 ```bash
 git add <those paths>
-git commit -m "docs: sync specky docs [skip specky]"
+git commit -m "docs: sync specky docs [skip specky]" -m "Specky-Documents: <sha> <sha>"
 ```
 
 That subject is specky's own marker. The hook recognizes it and doesn't document the docs commit.
-Leave any other uncommitted work alone.
+The `Specky-Documents` trailer tells `specky check` which commits' code the feature docs in it
+describe. Leave any other uncommitted work alone.
 
 ### 5. Report
 For each commit: its short sha, the headline you wrote, and the feature doc it linked to, if any.

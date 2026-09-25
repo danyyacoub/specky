@@ -7,12 +7,20 @@ a full rebuild can't drift from reality the way incremental updates could.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 
 from specky import frontmatter, gitlog, paths
 from specky.check import CheckConfig
-from specky.commit_doc import _AUTO_COMMIT_MARKER, MicroDoc, history_names, read_history
+from specky.commit_doc import (
+    _AUTO_COMMIT_MARKER,
+    DOCUMENTS_TRAILER,
+    MicroDoc,
+    history_names,
+    is_legacy_name,
+    read_history,
+)
 from specky.db import connect, fts_match_query
 from specky.staleness import index_staleness
 
@@ -80,8 +88,9 @@ def index_documents(repo_root: Path, conn) -> int:
 def _history_docs(repo_root: Path) -> dict[str, MicroDoc]:
     """`{sha or filename: what its history doc says}` for every doc under the history dir.
 
-    Keyed by the recorded full sha where the doc has one, and by its filename otherwise (a doc
-    written before the sha was recorded) — `index_commits` tries the sha, then `history_names`.
+    Keyed by every commit the doc covers — an entry's several, a legacy doc's recorded sha — and by
+    its filename when it records none (a doc written before the sha was recorded):
+    `index_commits` tries the sha, then `history_names`. An entry's commits share one `MicroDoc`.
     """
     history_dir = paths.history_dir(repo_root)
     docs: dict[str, MicroDoc] = {}
@@ -91,7 +100,8 @@ def _history_docs(repo_root: Path) -> dict[str, MicroDoc]:
         parsed = read_history(md_path.read_text())
         if parsed is not None:
             sha, doc = parsed
-            docs[sha or md_path.name] = doc
+            for key in doc.commits or [sha or md_path.name]:
+                docs[key] = doc
     return docs
 
 
@@ -107,6 +117,10 @@ def index_commits(repo_root: Path, conn) -> int:
     """
     log = gitlog.run(repo_root, ["log", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%s", "--reverse"])
     history = _history_docs(repo_root)
+    # An entry's prose is searchable under its oldest commit only; its others still carry its
+    # headline, impact and links. Every one of them carrying it made `search_history` answer one
+    # branch's worth of work as that many identical hits.
+    summarised: set[int] = set()
 
     count = 0
     for line in log.splitlines():
@@ -122,7 +136,8 @@ def index_commits(repo_root: Path, conn) -> int:
             (sha, author, date, subject, doc.headline if doc else "", doc.impact if doc else ""),
         )
         if doc:
-            summary = doc.text()
+            summary = "" if id(doc) in summarised else doc.text()
+            summarised.add(id(doc))
             # Before the tag query below, which reads these links back.
             conn.executemany(
                 "INSERT OR IGNORE INTO commit_links (sha, path) VALUES (?, ?)",
@@ -165,8 +180,9 @@ def _not_coverable(repo_root: Path) -> tuple[str, ...]:
     return (paths.docs_prefix(repo_root), ".specky/")
 
 
-def doc_commits(repo_root: Path) -> list[tuple[str, list[str], str, list[str]]]:
-    """`(sha, parents, subject, doc paths)` for every commit that touched the docs tree.
+def doc_commits(repo_root: Path) -> list[tuple[str, list[str], str, list[str], list[str]]]:
+    """`(sha, parents, subject, doc paths, commits it says it documents)` for every commit that
+    touched the docs tree — the last from a doc-sync commit's `DOCUMENTS_TRAILER`, else empty.
 
     Path-limited, so both the walk and the file lists stay proportional to the number of
     doc-producing commits rather than to the length of history.
@@ -175,7 +191,7 @@ def doc_commits(repo_root: Path) -> list[tuple[str, list[str], str, list[str]]]:
         repo_root,
         [
             "log",
-            "--format=%x01%H%x1f%P%x1f%s",
+            f"--format=%x01%H%x1f%P%x1f%s%x1f%(trailers:key={DOCUMENTS_TRAILER},valueonly,separator=%x20)",
             "--name-only",
             "--",
             paths.docs_prefix(repo_root),
@@ -183,24 +199,35 @@ def doc_commits(repo_root: Path) -> list[tuple[str, list[str], str, list[str]]]:
     )
     commits = []
     for lines in gitlog.blocks(log):
-        sha, parents, subject = lines[0].split("\x1f", 2)
-        commits.append((sha, parents.split(), subject, [f for f in lines[1:] if f]))
+        sha, parents, subject, documents = lines[0].split("\x1f", 3)
+        commits.append((sha, parents.split(), subject, [f for f in lines[1:] if f], documents.split()))
     return commits
 
 
 def _documented_revs(
-    sha: str, parents: list[str], subject: str, docs: list[str], history_prefix: str
+    sha: str,
+    parents: list[str],
+    subject: str,
+    docs: list[str],
+    history_prefix: str,
+    documents: Sequence[str] = (),
 ) -> list[str]:
     """Which commits' code the docs in this commit describe.
 
     specky's own flow splits the two: the code lands in one commit and the hook's follow-up
-    commits the docs, so a doc-sync commit's docs describe *other* commits. The history docs in
-    it say which — `specs/history/<sha>.md` is named for the commit it documents, and one
-    `specky sync` backfill can carry hundreds of them. Failing that, an auto-commit's docs
-    belong to the commit it followed. Any other commit (a hand-written doc, an agent that
-    committed code and docs together) describes itself.
+    commits the docs, so a doc-sync commit's docs describe *other* commits. Its
+    `DOCUMENTS_TRAILER` says which. Before that trailer, the history docs in it said so by name —
+    a legacy `specs/history/<sha>.md` is named for the commit it documents, and one `specky sync`
+    backfill can carry hundreds of them; an entry is named for its branch or subject, which is why
+    the trailer exists. Failing both, an auto-commit's docs belong to the commit it followed. Any
+    other commit (a hand-written doc, an agent that committed code and docs together) describes
+    itself.
     """
-    if stems := [Path(d).stem for d in docs if d.startswith(history_prefix)]:
+    if documents:
+        return list(documents)
+    if stems := [
+        Path(d).stem for d in docs if d.startswith(history_prefix) and is_legacy_name(Path(d))
+    ]:
         return stems
     return parents[:1] if subject.startswith(_AUTO_COMMIT_MARKER) else [sha]
 
@@ -263,13 +290,13 @@ def index_doc_files(repo_root: Path, conn) -> int:
     # indexes; neither "covers" a code file. What's left is <docs root>/<domain>/<topic>.md.
     covering = {
         sha: docs
-        for sha, _, _, all_docs in commits
+        for sha, _, _, all_docs, _ in commits
         if 0 < len(docs := [d for d in all_docs if d.count("/") >= 2 and not d.startswith(history_prefix)])
         <= DOC_FILES_MAX_DOCS_PER_COMMIT
     }
     targets = {
-        sha: _documented_revs(sha, parents, subject, docs, history_prefix)
-        for sha, parents, subject, docs in commits
+        sha: _documented_revs(sha, parents, subject, docs, history_prefix, documents)
+        for sha, parents, subject, docs, documents in commits
         if sha in covering
     }
     resolved = _resolve_revs(repo_root, sorted({r for revs in targets.values() for r in revs}))

@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from specky import paths
-from specky.commit_doc import history_doc_for
+from specky.commit_doc import HistoryIndex
 from specky.db import connect
 
 
@@ -128,6 +128,9 @@ def commits_for_doc(repo_root: Path, doc_path: str) -> list[dict]:
     Each carries what its history doc says — the one-line `headline`, its `impact`, and the doc's
     repo path as `history_path` — so a caller listing a feature's recent changes has a sentence to
     show rather than a commit subject. All three are empty for a commit with no structured doc.
+
+    One row per history doc: the commits of an entry share its headline and its page, so a branch
+    of five commits is its newest one, listed once, rather than the same sentence five times.
     """
     conn = connect(repo_root)
     try:
@@ -140,10 +143,15 @@ def commits_for_doc(repo_root: Path, doc_path: str) -> list[dict]:
         ).fetchall()
     finally:
         conn.close()
-    history_dir = paths.history_dir(repo_root)
+    history = HistoryIndex(paths.history_dir(repo_root))
     commits = []
+    listed: set[Path] = set()
     for sha, author, date, message, headline, impact in rows:
-        doc = history_doc_for(history_dir, sha)
+        doc = history.doc_for(sha)
+        if doc is not None and doc in listed:
+            continue
+        if doc is not None:
+            listed.add(doc)
         commits.append(
             {
                 "sha": sha,

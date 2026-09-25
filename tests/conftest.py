@@ -40,6 +40,24 @@ def _outside_any_agent_session(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _one_entry_per_commit(monkeypatch):
+    """Most tests are about one commit's history. Their commits land on the default branch minutes
+    apart, by one author — exactly what `[history] consolidate` folds into a single entry — so it's
+    off unless a test asks for it with `consolidating`."""
+    from specky import commit_doc
+
+    monkeypatch.setattr(commit_doc, "HISTORY_CONSOLIDATE", "off")
+
+
+@pytest.fixture
+def consolidating(monkeypatch):
+    """`[history] consolidate` at its shipped default, for the tests about folding commits."""
+    from specky import commit_doc
+
+    monkeypatch.setattr(commit_doc, "HISTORY_CONSOLIDATE", "branch")
+
+
 class FakeProvider:
     """Returns canned replies in order, and records every prompt it was given.
 

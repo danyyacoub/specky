@@ -122,7 +122,8 @@ repo asks of its users applies here:
 
 - Docs are `specs/<domain>/<topic>.md` — kebab-case topic, never `README.md`. `specs/MODULES.md`
   indexes them; `specs/GLOSSARY.md` is the shared vocabulary.
-- Never hand-write or edit anything under `specs/history/`. One generated micro-doc per commit.
+- Never hand-write or edit anything under `specs/history/`. Generated history entries: one per
+  commit, or one for a branch's recent commits together.
 - Before opening a pull request: `uv run specky index && uv run specky check --base origin/main`.
   Offline, free, and it names the doc a change left stale while you can still fix it.
 - The installed git hooks document commits automatically. A `docs: sync specky docs [skip specky]`

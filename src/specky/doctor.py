@@ -39,7 +39,7 @@ from specky.commit_doc import (
     HOOK_MARKER,
     HOOK_MODES,
     _AUTO_COMMIT_MARKER,
-    history_doc_for,
+    HistoryIndex,
     hook_disabled,
     hook_mode,
     hooks_dir,
@@ -511,7 +511,7 @@ def _pending(repo_root: Path) -> list[Check]:
 
 def _backlog(repo_root: Path) -> list[Check]:
     """Whether the hook is producing docs *now*, over a fixed window of recent commits."""
-    history_dir = paths.history_dir(repo_root)
+    history = HistoryIndex(paths.history_dir(repo_root))
     log = _run(
         # --no-merges: merges are never documented, by design (see `pending_commits`).
         ["git", "log", f"-{BACKLOG_PROBE_COMMITS}", "--no-merges", "--format=%H%x1f%s"],
@@ -524,7 +524,7 @@ def _backlog(repo_root: Path) -> list[Check]:
         if subject.startswith(_AUTO_COMMIT_MARKER):
             continue  # specky's own doc-sync commits are never documented, by design
         considered += 1
-        if history_doc_for(history_dir, sha) is None:
+        if history.doc_for(sha) is None:
             missing += 1
 
     if not considered:

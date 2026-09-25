@@ -10,14 +10,15 @@ into the PR they were part of. A commit with one parent (a direct push, or a squ
 its own. Commits the mainline can't reach yet are work in progress, grouped by the branch they're
 on.
 
-**Where the words come from.** The history docs (`<docs root>/history/<sha8>.md`), read with
+**Where the words come from.** The history docs (`<docs root>/history/`), read with
 `commit_doc.read_history`: from the working tree when the doc is there — the same file the viewer
 renders as that commit's page, so the brief and the page it links to never disagree — and
 otherwise from the tree of the branch the commit is on, which is how an unmerged branch's docs,
 committed only on that branch, are read at all. A merge's own doc is never used: `git show` of a clean
 merge is empty, so specky no longer writes one (see `commit_doc.pending_commits`), and an old one
 says nothing its branch's docs don't. A commit with no doc falls back to its subject, marked, and
-counted so the reader can see how much of the picture is missing.
+counted so the reader can see how much of the picture is missing. The commits one history entry
+covers share its words, so they share one line.
 
 **People, not agents.** Authors and `Co-authored-by` trailers, minus bots and coding agents
 (`is_agent`), with specky's own doc-sync commits dropped outright. A change that no human touched
@@ -25,9 +26,10 @@ is counted, not shown.
 
 **Cost.** About a dozen git processes, and a fixed number of them, none proportional to the
 history: the first-parent window, one walk of every commit it introduced, one `--name-only` walk
-for the files, one walk of the unmerged branches, one `cat-file --batch` for every history doc at
-once, and a few `rev-parse`/`for-each-ref`/`remote get-url` lookups. The grouping of a merge's
-commits is a walk over the parent map in Python rather than a `git log M^1..M^2` per merge.
+for the files, one walk of the unmerged branches, one `cat-file --batch` for every legacy history
+doc at once, one `log` plus one `cat-file --batch` for the entries, and a few `rev-parse`/
+`for-each-ref`/`remote get-url` lookups. The grouping of a merge's commits is a walk over the
+parent map in Python rather than a `git log M^1..M^2` per merge.
 """
 
 from __future__ import annotations
@@ -45,11 +47,12 @@ from specky import gitlog, paths
 from specky.check import CheckConfig, covering_docs
 from specky.commit_doc import (
     _AUTO_COMMIT_MARKER,
+    HistoryIndex,
     MicroDoc,
     _is_revision,
     brief,
-    history_doc_for,
     history_names,
+    is_legacy_name,
     read_history,
 )
 
@@ -151,6 +154,7 @@ class Branch:
     lines: list[Line]
     people: list[str]
     features: list[str]
+    commits: int = 0  # its commits in the window; several can share one line (one entry)
 
 
 @dataclass
@@ -285,20 +289,28 @@ def _read_blobs(repo_root: Path, specs: list[str]) -> list[str | None]:
     return blobs
 
 
-def _history_docs(repo_root: Path, wanted: list[tuple[str, str]]) -> dict[str, tuple[str, MicroDoc]]:
+def _history_docs(
+    repo_root: Path, wanted: list[tuple[str, str]], since: str
+) -> dict[str, tuple[str, MicroDoc]]:
     """`{sha: (doc path, what it says)}` for `(tree-ish, sha)` pairs — the working tree's doc where
     there is one, else the doc in that tree-ish.
 
-    Both possible names per commit, with `commit_doc.history_doc_for`'s rule for which one is
-    this commit's: the `sha:` it records, or none recorded at all.
+    A legacy doc is named for its commit: both possible names are read from the tree-ish, with
+    `commit_doc.history_doc_for`'s rule for which one is this commit's — the `sha:` it records, or
+    none recorded at all. An entry is named for its branch or its subject, so no name can be worked
+    out from a sha: the entries are found instead, as every history file the window's commits on
+    those tree-ishes touched, read at the newest commit that touched it and mapped to the commits
+    its `commits:` lists. One `git log` and one more `cat-file --batch`, however many there are.
     """
     found: dict[str, tuple[str, MicroDoc]] = {}
-    history_dir = paths.history_dir(repo_root)
+    history = HistoryIndex(paths.history_dir(repo_root))
     for _, sha in wanted:
-        local = history_doc_for(history_dir, sha)
+        local = history.doc_for(sha)
         if local is not None and (parsed := read_history(local.read_text())) is not None:
             found[sha] = (str(local.relative_to(repo_root)), parsed[1])
     wanted = [(tree, sha) for tree, sha in wanted if sha not in found]
+    if not wanted:
+        return found
 
     prefix = paths.history_prefix(repo_root)
     names = [tuple(prefix + name for name in history_names(sha)) for _, sha in wanted]
@@ -310,7 +322,38 @@ def _history_docs(repo_root: Path, wanted: list[tuple[str, str]]) -> dict[str, t
             parsed = read_history(text) if text is not None else None
             if parsed is not None and parsed[0] in (None, sha) and sha not in found:
                 found[sha] = (name, parsed[1])
+
+    missing = {sha for _, sha in wanted if sha not in found}
+    if not missing:
+        return found
+    trees = list(dict.fromkeys(tree for tree, sha in wanted if sha in missing))
+    log = gitlog.run(repo_root, ["log", "--format=%x01%H", "--name-only", since, *trees, "--", prefix])
+    newest: dict[str, str] = {}  # entry path -> the newest commit that touched it
+    for lines in gitlog.blocks(log):
+        for name in lines[1:]:
+            if name and not is_legacy_name(Path(name)):
+                newest.setdefault(name, lines[0])
+    entries = list(newest.items())
+    for (name, _), text in zip(entries, _read_blobs(repo_root, [f"{c}:{n}" for n, c in entries])):
+        parsed = read_history(text) if text is not None else None
+        for sha in parsed[1].commits if parsed is not None else ():
+            if sha in missing and sha not in found:
+                found[sha] = (name, parsed[1])
     return found
+
+
+def _lines(commits: list[_Commit], docs: dict[str, tuple[str, MicroDoc]]) -> list[Line]:
+    """One line per history doc: the commits of an entry share its words, so they share a line."""
+    lines: list[Line] = []
+    seen: set[str] = set()
+    for commit in commits:
+        line = _line(commit, docs)
+        if line.history_path in seen:
+            continue
+        if line.history_path:
+            seen.add(line.history_path)
+        lines.append(line)
+    return lines
 
 
 def _line(commit: _Commit, docs: dict[str, tuple[str, MicroDoc]]) -> Line:
@@ -591,6 +634,7 @@ def collect(
         repo_root,
         [(tip, c.sha) for _, work in groups for c in work]
         + [(branch, c.sha) for branch, commits in branches.items() for c in commits],
+        since,
     )
     covering = _coverage(repo_root, files)
     min_commits = CheckConfig.load(repo_root).min_link_commits
@@ -599,7 +643,10 @@ def collect(
     # `people` holds emails until every identity has been seen; `_by_person` settles the names.
     items: list[Change | Branch] = []
 
-    for head, work in groups:
+    # Direct commits on the mainline that share a history entry — one person's hotfixes, folded
+    # into one entry by the hook — are one change too, told once, as of the latest of them.
+    by_entry: dict[str, Change] = {}
+    for head, work in groups:  # oldest first
         emails = people.humans(_identities(work))
         if not emails and len(head.parents) > 1:
             emails = people.humans([head.author])  # whoever merged a branch no human wrote
@@ -607,24 +654,30 @@ def collect(
             activity.automated += 1
             continue
         label, pr = _change_label(head)
-        items.append(
-            Change(
-                sha=head.sha,
-                date=head.date,
-                lines=[_line(c, docs) for c in work],
-                label=label,
-                pr_url=pr_link(pr) if pr and pr_link else "",
-                commits=len(work),
-                people=emails,
-                features=_features(
-                    repo_root,
-                    _stated_features(work, docs),
-                    files.get(head.sha, []),
-                    covering,
-                    min_commits,
-                ),
-            )
+        lines = _lines(work, docs)
+        features = _features(
+            repo_root, _stated_features(work, docs), files.get(head.sha, []), covering, min_commits
         )
+        entry = lines[0].history_path if not label and len(lines) == 1 else ""
+        if entry and (shared := by_entry.get(entry)) is not None:
+            shared.sha, shared.date, shared.lines = head.sha, head.date, lines
+            shared.commits += len(work)
+            shared.people = _dedupe(shared.people + emails)
+            shared.features = _dedupe(shared.features + features)
+            continue
+        change = Change(
+            sha=head.sha,
+            date=head.date,
+            lines=lines,
+            label=label,
+            pr_url=pr_link(pr) if pr and pr_link else "",
+            commits=len(work),
+            people=emails,
+            features=features,
+        )
+        if entry:
+            by_entry[entry] = change
+        items.append(change)
 
     for branch, commits in branches.items():
         emails = people.humans(_identities(commits))
@@ -635,9 +688,10 @@ def collect(
             Branch(
                 ref=branch,
                 date=max(c.date for c in commits),
-                lines=[_line(c, docs) for c in commits],
+                lines=_lines(commits, docs),
                 people=emails,
                 features=_dedupe(_stated_features(commits, docs)),
+                commits=len(commits),
             )
         )
 

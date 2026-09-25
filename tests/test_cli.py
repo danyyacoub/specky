@@ -145,6 +145,34 @@ def test_pending_json_carries_the_providers_own_rules(tmp_repo, monkeypatch, cap
     assert [c["subject"] for c in out["commits"]] == ["initial commit"]
 
 
+def test_pending_json_says_which_entry_a_commit_joins(tmp_repo, monkeypatch, capsys, consolidating):
+    import json
+
+    from specky.commit_doc import MICRO_DOC_EXTEND_PREFIX
+
+    from conftest import git
+
+    monkeypatch.chdir(tmp_repo)
+    git(tmp_repo, "checkout", "-q", "-b", "feat/x")
+    shas = []
+    for message in ("feat: x", "wip"):
+        (tmp_repo / f"{message[-1]}.txt").write_text(message)
+        git(tmp_repo, "add", "-A")
+        git(tmp_repo, "commit", "-q", "-m", message)
+        shas.append(git(tmp_repo, "rev-parse", "HEAD").strip())
+
+    _run(["pending", "--json"])
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["rules_extend"] == MICRO_DOC_EXTEND_PREFIX
+    joins = {c["sha"]: (c["joins_branch"], c["extends"]) for c in out["commits"]}
+    # The first opens the branch's entry, the second joins it; the default branch's own commit,
+    # by the fixture's author, isn't this branch's work.
+    assert joins[shas[0]] == (True, None)
+    assert joins[shas[1]] == (True, shas[0])
+    assert [joined for joined, _ in joins.values()].count(False) == 1
+
+
 def test_record_commit_reads_the_micro_doc_from_stdin(tmp_repo, monkeypatch, capsys):
     import io
     import json

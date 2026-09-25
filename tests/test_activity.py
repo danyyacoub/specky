@@ -195,6 +195,60 @@ def test_a_legacy_doc_gives_its_first_sentence(repo):
     assert line.history_path.startswith("specs/history/")
 
 
+def _entry(repo: Path, shas: list[str], headline: str, branch: str = "") -> None:
+    """The entry the hook leaves for a branch's commits, committed the way it commits it."""
+    doc = commit_doc.MicroDoc(
+        headline=headline, impact="feature", what="What.", commits=shas, branch=branch
+    )
+    commit_doc.write_entry(repo, doc, commit_doc._members_info(repo, shas), name=branch)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", commit_doc._AUTO_COMMIT_MARKER)
+
+
+def test_the_commits_of_one_entry_are_one_line(repo):
+    git(repo, "checkout", "-q", "-b", "feat/refunds")
+    shas = [work(repo, m) for m in ("feat: partial refunds", "wip", "fix typo")]
+    _entry(repo, shas, "Refunds can be partial", branch="feat/refunds")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "-m", "Merge pull request #7 from o/feat/refunds", "feat/refunds")
+
+    found = brief(repo)
+
+    [change] = person(found, "Alice Martin").shipped
+    assert [line.text for line in change.lines] == ["Refunds can be partial"]
+    assert change.commits == 3
+    assert found.undocumented == 0
+
+
+def test_direct_commits_sharing_an_entry_are_one_change(repo):
+    """One person's hotfixes on the mainline, folded into one entry by the hook, are told once."""
+    shas = [work(repo, m) for m in ("fix: unmatched lines", "fix: badge stays conform")]
+    _entry(repo, shas, "Unmatched lines report full exposure", branch="main")
+
+    [change] = person(brief(repo), "Alice Martin").shipped
+
+    assert [line.text for line in change.lines] == ["Unmatched lines report full exposure"]
+    assert change.commits == 2
+    assert change.sha == shas[-1]
+
+
+def test_an_unmerged_branchs_entry_is_read_from_its_own_tree(repo):
+    """The entry exists only on the branch, and its name says nothing about which commits it
+    covers — it is found by the history files the branch's commits touched."""
+    git(repo, "checkout", "-q", "-b", "feat/x")
+    shas = [work(repo, m) for m in ("feat: x", "wip")]
+    _entry(repo, shas, "X is possible", branch="feat/x")
+    git(repo, "checkout", "-q", "main")
+    assert not (repo / "specs" / "history" / "feat-x.md").exists()
+
+    [branch] = person(brief(repo), "Alice Martin").in_progress
+
+    assert [(line.text, line.history_path) for line in branch.lines] == [
+        ("X is possible", "specs/history/feat-x.md")
+    ]
+    assert branch.commits == 2, "one line, still two commits"
+
+
 # --- people -------------------------------------------------------------------------------
 
 

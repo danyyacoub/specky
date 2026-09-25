@@ -22,7 +22,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from specky import facts, lint, paths
-from specky.commit_doc import _AUTO_COMMIT_MARKER, _is_revision, history_doc_for
+from specky.commit_doc import _AUTO_COMMIT_MARKER, HistoryIndex, _is_revision
 from specky.db import connect
 from specky.paths import read_table as _read_table
 from specky.staleness import days_behind
@@ -264,7 +264,7 @@ def _changed_files(repo_root: Path, base: str) -> list[str]:
 
 
 def _undocumented_commits(repo_root: Path, base: str) -> list[tuple[str, str]]:
-    history_dir = paths.history_dir(repo_root)
+    history = HistoryIndex(paths.history_dir(repo_root))
     # The empty tree isn't a commit, so there's no range to exclude — that case is "all of it".
     revs = "HEAD" if base == EMPTY_TREE else f"{base}..HEAD"
     # --no-merges: a merge never gets a history doc (see `commit_doc.pending_commits`), so asking
@@ -273,7 +273,7 @@ def _undocumented_commits(repo_root: Path, base: str) -> list[tuple[str, str]]:
     pending = []
     for line in log.splitlines():
         sha, _, subject = line.partition("\x1f")
-        if subject.startswith(_AUTO_COMMIT_MARKER) or history_doc_for(history_dir, sha):
+        if subject.startswith(_AUTO_COMMIT_MARKER) or history.doc_for(sha):
             continue
         pending.append((sha, subject))
     return pending

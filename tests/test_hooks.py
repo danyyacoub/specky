@@ -50,7 +50,13 @@ def _use_provider(monkeypatch, provider) -> None:
 
 
 def _history(repo: Path) -> set[str]:
-    return {p.stem for p in paths.history_dir(repo).glob("*.md")}
+    """The short shas of every commit a history doc covers: an entry's `commits:`, a legacy doc's
+    name. What a test means by "documented" — no longer what the files happen to be called."""
+    covered: set[str] = set()
+    for path in paths.history_dir(repo).glob("*.md"):
+        parsed = commit_doc.read_history(path.read_text())
+        covered |= {sha[:8] for sha in parsed[1].commits} if parsed else {path.stem}
+    return covered
 
 
 def _reject_commits(repo: Path) -> None:
@@ -672,11 +678,38 @@ class TestRewrites:
         _use_provider(monkeypatch, RoutingProvider(summary="The summary a human then edited."))
         sha = _commit(repo, "original message")
         commit_doc.sync()
-        return sha, paths.history_dir(repo) / f"{sha[:8]}.md"
+        return sha, paths.history_dir(repo) / "original-message.md"
 
-    def test_an_amend_renames_the_doc_instead_of_orphaning_it(self, in_repo: Path, monkeypatch):
-        old_sha, old_doc = self._documented(in_repo, monkeypatch)
-        assert old_doc.exists()
+    def _legacy(self, repo: Path) -> tuple[str, Path]:
+        """The same, documented the way specky did before entries: `<sha8>.md`, left uncommitted."""
+        sha = _commit(repo, "original message")
+        path = commit_doc.write_history_file(
+            repo,
+            commit_doc._commit_info(sha, with_diff=False),
+            commit_doc.MicroDoc(what="The summary a human then edited."),
+        )
+        return sha, path
+
+    def test_an_amend_moves_the_entry_onto_the_new_sha(self, in_repo: Path, monkeypatch):
+        old_sha, entry = self._documented(in_repo, monkeypatch)
+        assert entry.exists()
+        git(in_repo, "commit", "-q", "--amend", "-m", "amended message")
+        new_sha = git(in_repo, "rev-parse", "HEAD").strip()
+
+        moved = commit_doc.apply_rewrites(in_repo, f"{old_sha} {new_sha}\n")
+
+        # Named for its subject, not its sha, so it stays where it is: the viewer's links to it
+        # don't break every time somebody amends.
+        assert moved == [(entry, entry)]
+        text = entry.read_text()
+        assert new_sha in text and old_sha not in text
+        assert "amended message" in text
+        # The summary is read back off disk, so a hand-edited one survives the rewrite — and no
+        # provider call is made to re-say what the entry already said.
+        assert "The summary a human then edited." in text
+
+    def test_an_amend_renames_a_legacy_doc_instead_of_orphaning_it(self, in_repo: Path):
+        old_sha, old_doc = self._legacy(in_repo)
         git(in_repo, "commit", "-q", "--amend", "-m", "amended message")
         new_sha = git(in_repo, "rev-parse", "HEAD").strip()
 
@@ -689,8 +722,6 @@ class TestRewrites:
         text = moved[0][1].read_text()
         assert new_sha in text
         assert "amended message" in text
-        # The summary is read back off disk, so a hand-edited one survives the rename — and no
-        # provider call is made to re-say what the old doc already said.
         assert "The summary a human then edited." in text
 
     def test_a_rename_costs_no_provider_call(self, in_repo: Path, monkeypatch):
@@ -752,14 +783,14 @@ class TestRewrites:
         assert commit_doc._rewrite_pairs(f"{old} {new} squash\n") == [(old, new)]
 
     def test_main_reads_the_pairs_off_stdin(self, in_repo: Path, monkeypatch):
-        old_sha, old_doc = self._documented(in_repo, monkeypatch)
+        old_sha, entry = self._documented(in_repo, monkeypatch)
         git(in_repo, "commit", "-q", "--amend", "-m", "amended message")
         new_sha = git(in_repo, "rev-parse", "HEAD").strip()
         monkeypatch.setattr("sys.stdin", io.StringIO(f"{old_sha} {new_sha}\n"))
 
         commit_doc.main(rewritten=True)
 
-        assert not old_doc.exists()
+        assert new_sha in entry.read_text() and old_sha not in entry.read_text()
         assert f"{new_sha[:8]}" in _history(in_repo)
 
     def test_an_uncommitted_old_doc_does_not_break_the_follow_up_commit(
@@ -768,7 +799,8 @@ class TestRewrites:
         # `sync()` leaves its docs uncommitted, so the doc the rename deletes here was never tracked.
         # Handing git the deletion of a path it never knew fails with `pathspec did not match any
         # files` — and takes the whole follow-up commit down with it.
-        old_sha, _ = self._documented(in_repo, monkeypatch)
+        _use_provider(monkeypatch, RoutingProvider())
+        old_sha, _ = self._legacy(in_repo)
         git(in_repo, "commit", "-q", "--amend", "-m", "amended message")
         new_sha = git(in_repo, "rev-parse", "HEAD").strip()
         monkeypatch.setattr("sys.stdin", io.StringIO(f"{old_sha} {new_sha}\n"))
@@ -789,16 +821,24 @@ class TestARenameIsCommitted:
     document it again.
     """
 
-    def _replayed(self, repo: Path, monkeypatch) -> tuple[str, str]:
+    def _replayed(self, repo: Path, monkeypatch, legacy: bool = False) -> tuple[str, str]:
         """A repo where a commit has been replaced by a copy with a different sha, as a rebase does.
 
         The replay covers specky's own doc-sync commit too — which is what makes the old-sha doc a
-        tracked file at the point the rename happens, and HEAD a marker commit.
+        tracked file at the point the rename happens, and HEAD a marker commit. `legacy` documents
+        the commit as a `<sha8>.md` doc, the only kind a rewrite still renames.
         """
         _use_provider(monkeypatch, RoutingProvider())
         base = git(repo, "rev-parse", "HEAD").strip()
         old_sha = _commit(repo, "work that gets replayed")
-        commit_doc.main()  # documents it *and* commits the doc
+        if legacy:
+            commit_doc.write_history_file(
+                repo, commit_doc._commit_info(old_sha, with_diff=False), commit_doc.MicroDoc(what="w")
+            )
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", commit_doc._AUTO_COMMIT_MARKER)
+        else:
+            commit_doc.main()  # documents it *and* commits the doc
         doc_commit = git(repo, "rev-parse", "HEAD").strip()
 
         git(repo, "reset", "-q", "--hard", base)
@@ -809,7 +849,7 @@ class TestARenameIsCommitted:
         return old_sha, git(repo, "rev-parse", "HEAD~1").strip()
 
     def test_both_halves_of_the_rename_land_in_one_commit(self, in_repo: Path, monkeypatch):
-        old_sha, new_sha = self._replayed(in_repo, monkeypatch)
+        old_sha, new_sha = self._replayed(in_repo, monkeypatch, legacy=True)
         monkeypatch.setattr("sys.stdin", io.StringIO(f"{old_sha} {new_sha}\n"))
 
         commit_doc.main(rewritten=True)
@@ -820,6 +860,16 @@ class TestARenameIsCommitted:
         tracked = git(in_repo, "ls-tree", "-r", "--name-only", "HEAD")
         assert f"specs/history/{old_sha[:8]}.md" not in tracked
         assert f"specs/history/{new_sha[:8]}.md" in tracked
+
+    def test_a_replayed_entry_is_rewritten_in_place_and_committed(self, in_repo: Path, monkeypatch):
+        old_sha, new_sha = self._replayed(in_repo, monkeypatch)
+        monkeypatch.setattr("sys.stdin", io.StringIO(f"{old_sha} {new_sha}\n"))
+
+        commit_doc.main(rewritten=True)
+
+        assert git(in_repo, "status", "--porcelain", "--", "specs") == ""
+        committed = git(in_repo, "show", "HEAD:specs/history/work-that-gets-replayed.md")
+        assert new_sha in committed and old_sha not in committed
 
     def test_a_marker_head_no_longer_stops_the_rename_being_committed(
         self, in_repo: Path, monkeypatch
@@ -844,7 +894,7 @@ class TestARenameIsCommitted:
         # `post-rewrite` fires while `rebase-merge` still exists, so a rebase's rename can never be
         # committed by the fire that made it. The ledger is how the promise in that printed line —
         # "committed by the next fire" — is actually kept.
-        old_sha, new_sha = self._replayed(in_repo, monkeypatch)
+        old_sha, new_sha = self._replayed(in_repo, monkeypatch, legacy=True)
         monkeypatch.setattr("sys.stdin", io.StringIO(f"{old_sha} {new_sha}\n"))
         (in_repo / ".git" / "CHERRY_PICK_HEAD").write_text(f"{new_sha}\n")
 

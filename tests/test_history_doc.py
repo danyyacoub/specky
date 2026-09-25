@@ -6,6 +6,7 @@ adopted specky before this has a directory of them and nothing rewrites them una
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -92,14 +93,15 @@ def test_a_structured_doc_round_trips(tmp_repo):
     assert "impact: fix" in text and "features: [specs/billing/refund-limits.md]" in text
     assert "## What changed" in text and "## Why" in text
     assert "- **Message:** Cap refunds at the order total" in text
-    assert commit_doc.read_history(text) == ("c" * 40, doc)
+    # A legacy doc covers the one commit its `sha:` names.
+    assert commit_doc.read_history(text) == ("c" * 40, replace(doc, commits=["c" * 40]))
 
 
 def test_a_structured_doc_without_a_why_has_no_why_section(tmp_repo):
     doc = commit_doc.MicroDoc(headline="Adds refunds", impact="feature", what="Refunds exist.")
     text = commit_doc.write_history_file(tmp_repo, _commit_obj(), doc).read_text()
     assert "## Why" not in text
-    assert commit_doc.read_history(text)[1] == doc
+    assert commit_doc.read_history(text)[1] == replace(doc, commits=["c" * 40])
 
 
 def test_a_legacy_doc_reads_as_prose_with_no_headline():
@@ -109,7 +111,9 @@ def test_a_legacy_doc_reads_as_prose_with_no_headline():
     )
     sha, doc = commit_doc.read_history(text)
     assert sha == "c" * 40
-    assert doc == commit_doc.MicroDoc(what="Refunds are capped. They used to be unlimited.")
+    assert doc == commit_doc.MicroDoc(
+        what="Refunds are capped. They used to be unlimited.", commits=["c" * 40]
+    )
 
 
 def test_a_doc_with_nothing_after_its_metadata_is_not_guessed_at():
@@ -226,7 +230,7 @@ def test_a_rebase_keeps_impact_features_and_headline(in_repo):
 
     [(_old, new)] = commit_doc.apply_rewrites(in_repo, f"{sha} {new_sha}\n")
 
-    assert commit_doc.read_history(new.read_text()) == (new_sha, doc)
+    assert commit_doc.read_history(new.read_text()) == (new_sha, replace(doc, commits=[new_sha]))
 
 
 # --- the index -----------------------------------------------------------------------------

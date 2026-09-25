@@ -35,7 +35,13 @@ def _use_provider(monkeypatch, provider) -> None:
 
 
 def _history(repo: Path) -> set[str]:
-    return {p.stem for p in (repo / "specs" / "history").glob("*.md")}
+    """The short shas of every commit a history doc covers: an entry's `commits:`, a legacy doc's
+    name."""
+    covered: set[str] = set()
+    for path in (repo / "specs" / "history").glob("*.md"):
+        parsed = commit_doc.read_history(path.read_text())
+        covered |= {sha[:8] for sha in parsed[1].commits} if parsed else {path.stem}
+    return covered
 
 
 # --- which commits get picked -------------------------------------------------------------
@@ -215,8 +221,17 @@ def test_commit_lands_the_run_as_one_marker_commit(in_repo, monkeypatch):
 
     assert git(in_repo, "log", "-1", "--format=%s").strip() == commit_doc._AUTO_COMMIT_MARKER
     committed = git(in_repo, "show", "--name-only", "--format=", "HEAD").split()
-    assert {f"specs/history/{sha[:8]}.md" for sha in shas} <= set(committed)
+    covered = {
+        sha
+        for f in committed
+        if f.startswith("specs/history/")
+        for sha in commit_doc.read_history((in_repo / f).read_text())[1].commits
+    }
+    assert set(shas) <= covered
     assert "draft.md" not in committed
+    # The trailer names what it documents, which is how the indexer knows whose code it describes.
+    trailer = git(in_repo, "log", "-1", f"--format=%(trailers:key={commit_doc.DOCUMENTS_TRAILER},valueonly)")
+    assert set(shas) <= set(trailer.split())
     assert git(in_repo, "rev-list", "--count", f"{shas[-1]}..HEAD").strip() == "1"
 
 

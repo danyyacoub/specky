@@ -7,6 +7,21 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+### Changed
+- **History entries per branch.** With the hook on every commit, a branch's commits now share one
+  history entry instead of getting one each. Each new commit rewrites the entry to describe the
+  whole change, so "wip" and "fix typo" stop showing up as history. Entries are named for the
+  branch (`history/feat-refund-limits.md`), or on `main`/`dev` for the first commit's subject.
+  - An entry takes new commits for 4 days after its first one (`[history] window_days`), so a
+    week of hotfixes on `main` doesn't pile into one file.
+  - On a long-lived branch, only one author's commits share an entry. Integration branches that
+    pull requests merge into (a `sprint`) belong in `[history] long_lived = ["sprint"]`.
+  - Only a branch's own first-parent commits fold in, never what a merge brought.
+  - `[history] consolidate = "off"` gives one entry per commit.
+  - Existing `<sha8>.md` docs are read as before and never renamed.
+  - Doc-sync commits now carry a `Specky-Documents:` trailer naming the commits they document.
+    `specky check` reads it for its coverage map.
+
 ### Added
 - **`specky install-git-hook --on commit|merge|none`** picks when the doc commits land: after each
   commit (the default, unchanged), once per local merge or pull, or never, leaving it to `specky

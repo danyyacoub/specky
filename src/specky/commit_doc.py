@@ -2,9 +2,10 @@
 
 These are deliberately real git hooks rather than agent-specific ones (Claude Code
 PostToolUse, opencode tool.execute.after, Kiro agent hooks) — they must fire on every
-commit regardless of which agent (or no agent) made it. Each commit gets a real
-markdown file under specs/history/, plus a mirrored row in the micro_docs sqlite
-table for Phase 3's indexer to pick up.
+commit regardless of which agent (or no agent) made it. Each commit ends up in a real
+markdown file under specs/history/ — a history *entry*, which a branch's recent commits share
+(see `branch_context`) — plus a mirrored row in the micro_docs sqlite table for the indexer
+to fall back on.
 
 **A hook fire reconciles a backlog; it does not document "the commit that just happened".**
 That distinction is the whole reliability story, because git gives no hook that fires for every
@@ -32,9 +33,10 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Sequence
 
@@ -151,6 +153,29 @@ SYNC_DEFAULT_DEPTH = 10
 HOOK_CATCHUP_DEPTH = 20
 HOOK_CATCHUP_MAX = 5
 
+# How history entries fold commits together (see `branch_context`), overridden by `[history]
+# consolidate` / `window_days` in specky.toml. With the hook on every commit, one entry per commit
+# is one entry per "wip" and "fix typo": a branch's commits share an entry instead, and so do one
+# person's commits straight onto main or dev. The window is what stops the second kind growing
+# forever — a week of hotfixes is two entries, not one that says everything.
+HISTORY_CONSOLIDATE = "branch"
+HISTORY_CONSOLIDATE_MODES = ("branch", "off")
+HISTORY_WINDOW_DAYS = 4
+
+# How much of a feature branch's own work (`<base>..HEAD`) is walked for entries to extend. Only a
+# guard against a base that shares no history with the branch, which would make "the branch's own
+# work" the whole repo.
+BRANCH_RANGE_CAP = 200
+
+# The mainline a feature branch's own work is measured from, after `activity.MAINLINE_CANDIDATES`'
+# remote refs: the local long-lived branches, so a repo with no remote still has one.
+_LOCAL_MAINLINES = ("dev", "develop", "main", "master", "trunk")
+
+# The trailer on a doc-sync commit naming the commits it documents. The indexer used to read that
+# off the history files the commit touched, when each was named for its commit; an entry is named
+# for its branch or subject, and extending it touches a file named for somebody else's commit.
+DOCUMENTS_TRAILER = "Specky-Documents"
+
 # Sequencer state files. While any of these exists, git is midway through a multi-commit operation
 # and `_commit_doc_updates` must not run a `git commit`: doing so during a rebase or cherry-pick
 # writes a commit into the middle of someone else's replay, which at best confuses the sequencer and
@@ -254,14 +279,45 @@ def generate_micro_doc(commit: Commit, provider: Provider) -> str:
     return provider.generate(prompt, prefix=prefix, task="summary").strip()
 
 
+# The instruction for a commit that extends an entry (see `branch_context`): the same reply, about
+# the change as a whole rather than about this commit. Its own stable prefix, so it caches like the
+# first one; the entry so far travels in the per-call half. The entry is rewritten rather than
+# appended to, because "wip", "address review" and "fix typo" are exactly the steps a reader of
+# the history doesn't want told one at a time.
+MICRO_DOC_EXTEND_PREFIX = MICRO_DOC_PREFIX + (
+    "\n\nThis commit is one more step of a change that already has a history entry, shown with "
+    "the commits it covers so far. Reply with the same JSON for the change as a whole, this commit "
+    "included: keep what still holds, fold in what this commit adds or changes, and drop what it "
+    "reverted. Work in progress, review fixes and typo fixes are steps, not changes: don't mention "
+    "them on their own. impact is the whole change's: feature if any of it adds a capability, "
+    "else improvement, else fix, else internal."
+)
+
+
+def extend_prompt(entry: MicroDoc, subjects: Sequence[str], commit: Commit) -> tuple[str, str]:
+    """`(cacheable prefix, this call's half)` for a commit joining the entry `entry`."""
+    so_far = [f"Headline: {entry.headline}", f"Impact: {entry.impact}", f"What changed: {entry.what}"]
+    if entry.why:
+        so_far.append(f"Why: {entry.why}")
+    covered = "\n".join(f"- {subject}" for subject in subjects)
+    return (
+        MICRO_DOC_EXTEND_PREFIX,
+        "The entry so far:\n" + "\n".join(so_far) + f"\n\nCommits it covers:\n{covered}\n\n"
+        + micro_doc_prompt(commit)[1],
+    )
+
+
 @dataclass
 class MicroDoc:
-    """What a history doc says about its commit.
+    """What a history doc says about the commits it covers.
 
     An empty `headline` is the legacy shape — one paragraph under `# Commit <sha8>`, all of it in
     `what` — and is what `specky sync --refresh-history` looks for. A reply that isn't the JSON
     asked for lands in that shape too, rather than having a headline guessed for it: the doc stays
     readable, and a refresh will pick it up again.
+
+    `commits` is every commit it covers, oldest first: one for a legacy doc (its `sha:`), one or
+    more for an entry. `branch` is set on an entry later commits of that branch may extend.
     """
 
     headline: str = ""
@@ -269,6 +325,8 @@ class MicroDoc:
     what: str = ""
     why: str = ""
     features: list[str] = field(default_factory=list)
+    commits: list[str] = field(default_factory=list)
+    branch: str = ""
 
     def text(self) -> str:
         """The prose, as one searchable block — what the index and the Spec Assistant read."""
@@ -305,8 +363,8 @@ def history_names(sha: str) -> tuple[str, str]:
     return f"{sha[:8]}.md", f"{sha[:12]}.md"
 
 
-def history_doc_for(history_dir: Path, sha: str) -> Path | None:
-    """The doc that documents `sha`, or None if this commit still needs one.
+def _legacy_doc_for(history_dir: Path, sha: str) -> Path | None:
+    """The legacy doc named for `sha`, if it has one.
 
     Two names are possible, because 8 hex digits is not a unique key on a large repo: the usual
     `<sha8>.md`, and the `<sha12>.md` written when some other commit got there first. A doc with
@@ -320,6 +378,74 @@ def history_doc_for(history_dir: Path, sha: str) -> Path | None:
     return None
 
 
+# The names a legacy doc can have (`history_names`). An entry's name is never one of these (see
+# `new_entry_path`), which is what lets `HistoryIndex` skip reading every legacy doc.
+_LEGACY_NAME = re.compile(r"^(?:[0-9a-f]{8}|[0-9a-f]{12})$")
+
+
+def is_legacy_name(path: Path) -> bool:
+    return bool(_LEGACY_NAME.match(path.stem))
+
+
+class HistoryIndex:
+    """Which history doc documents a commit, for a pass that asks about many.
+
+    Two kinds of file answer that. A legacy doc is named for its one commit (`<sha8>.md`) and is
+    found by name, as it always was. An entry is named for its branch or its subject and lists the
+    commits it covers in `commits:`, so finding one means reading them: once per pass, lazily, and
+    only the entries — a legacy doc never has `commits:`, so a repo with thousands of them pays for
+    none of that.
+    """
+
+    def __init__(self, history_dir: Path) -> None:
+        self.history_dir = history_dir
+        self._entries: dict[Path, tuple[list[str], str]] | None = None
+        self._members: dict[str, Path] = {}
+
+    def _load(self) -> dict[Path, tuple[list[str], str]]:
+        if self._entries is None:
+            self._entries = {}
+            if self.history_dir.is_dir():
+                for path in sorted(self.history_dir.glob("*.md")):
+                    if is_legacy_name(path):
+                        continue
+                    meta = frontmatter.parse(path.read_text(errors="replace"))[0]
+                    shas, branch = meta.get("commits"), meta.get("branch")
+                    if isinstance(shas, list) and shas:
+                        self._record(path, shas, branch if isinstance(branch, str) else "")
+        return self._entries
+
+    def _record(self, path: Path, shas: list[str], branch: str) -> None:
+        assert self._entries is not None
+        for sha in self._entries.get(path, ([], ""))[0]:
+            if self._members.get(sha) == path:
+                del self._members[sha]
+        self._entries[path] = (list(shas), branch)
+        for sha in shas:
+            self._members[sha] = path
+
+    def doc_for(self, sha: str) -> Path | None:
+        """The doc that documents `sha`, or None if this commit still needs one."""
+        legacy = _legacy_doc_for(self.history_dir, sha)
+        if legacy is not None:
+            return legacy
+        self._load()
+        return self._members.get(sha)
+
+    def add(self, path: Path, shas: list[str], branch: str) -> None:
+        """An entry this pass just wrote, so the rest of the pass sees it."""
+        self._load()
+        self._record(path, shas, branch)
+
+    def branch_entries(self, branch: str) -> list[tuple[Path, list[str]]]:
+        return [(p, shas) for p, (shas, b) in self._load().items() if b == branch]
+
+
+def history_doc_for(history_dir: Path, sha: str) -> Path | None:
+    """The doc that documents `sha`, or None — one lookup; a loop wants a `HistoryIndex`."""
+    return HistoryIndex(history_dir).doc_for(sha)
+
+
 WHAT_CHANGED_HEADING = "## What changed"
 WHY_HEADING = "## Why"
 
@@ -327,8 +453,86 @@ WHY_HEADING = "## Why"
 # it as "no headline", which is what marks a doc as one `--refresh-history` should rewrite.
 _LEGACY_TITLE = re.compile(r"^Commit [0-9a-f]{7,40}$")
 
+# An item of the metadata block's nested list of commits.
+_NESTED_ITEM = re.compile(r"^\s+- ")
+
+# A conventional-commit type, stripped from a subject before it names an entry: `fix(api): x` is
+# about x, and a history directory where half the names start `fix-` sorts by nothing useful.
+_CONVENTIONAL_PREFIX = re.compile(r"^\w+(?:\([^)]*\))?!?:\s*")
+ENTRY_NAME_CHARS = 60
+
+
+def entry_slug(text: str) -> str:
+    """`feat/Refund limits (v2)` → `feat-refund-limits-v2`: ASCII, lowercase, bounded on a word."""
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", folded.lower()).strip("-")
+    if len(slug) > ENTRY_NAME_CHARS:
+        slug = slug[:ENTRY_NAME_CHARS].rsplit("-", 1)[0].strip("-")
+    return slug
+
+
+def _subject(commit: Commit) -> str:
+    return commit.message.splitlines()[0] if commit.message else ""
+
+
+def new_entry_path(history_dir: Path, sha: str, name: str) -> Path:
+    """Where a new entry goes: `<slug of name>.md`, then `-2`, `-3` … when that's taken.
+
+    Named once and never renamed: extending an entry or rebasing its commits leaves the file where
+    it is, so the viewer's links to it and every `history_path` stay good. A slug that could be
+    read as a sha gets a suffix, because a file named like one is taken for a legacy doc. A
+    conventional-commit type is dropped first; a branch name can't have one (`:` isn't allowed in
+    a ref), so this only ever touches a subject.
+    """
+    base = entry_slug(_CONVENTIONAL_PREFIX.sub("", name))
+    if not base:
+        base = f"change-{sha[:8]}"
+    elif _LEGACY_NAME.match(base):
+        base += "-change"
+    path, n = history_dir / f"{base}.md", 2
+    while path.exists():
+        path, n = history_dir / f"{base}-{n}.md", n + 1
+    return path
+
+
+def _render_body(doc: MicroDoc, bullets: str, sha: str) -> str:
+    if doc.headline:
+        sections = [f"{WHAT_CHANGED_HEADING}\n\n{doc.what}\n"] if doc.what else []
+        if doc.why:
+            sections.append(f"{WHY_HEADING}\n\n{doc.why}\n")
+        return f"# {doc.headline}\n\n{bullets}" + "\n".join(sections)
+    return f"# Commit {sha[:8]}\n\n{bullets}{doc.what}\n"
+
+
+def _bullets(members: Sequence[Commit]) -> str:
+    """The metadata block under the title. One commit's is what it always was; several get the
+    span, everyone involved, and the commits themselves — the only place a reader sees the steps
+    the prose above deliberately leaves out."""
+    if not members:
+        return ""
+    if len(members) == 1:
+        (commit,) = members
+        return (
+            f"- **Date:** {commit.date}\n"
+            f"- **Author:** {commit.author}\n"
+            f"- **Message:** {_subject(commit)}\n\n"
+        )
+    authors = ", ".join(dict.fromkeys(c.author for c in members))
+    # Four spaces, not two: the viewer's Markdown only nests a list indented that far.
+    listed = "".join(f"    - `{c.sha[:8]}` {_subject(c)}\n" for c in members)
+    return (
+        f"- **Date:** {members[0].date} → {members[-1].date}\n"
+        f"- **Author:** {authors}\n"
+        f"- **Commits:**\n{listed}\n"
+    )
+
 
 def write_history_file(repo_root: Path, commit: Commit, doc: MicroDoc) -> Path:
+    """Write a *legacy* doc: `<sha8>.md`, one commit, keyed by `sha:`.
+
+    New history is written as entries (`write_entry`). This is still how a legacy doc is rewritten
+    in place — `--refresh-history`, and the rename that follows an amend — so its name survives.
+    """
     history_dir = paths.history_dir(repo_root)
     history_dir.mkdir(parents=True, exist_ok=True)
 
@@ -345,30 +549,75 @@ def write_history_file(repo_root: Path, commit: Commit, doc: MicroDoc) -> Path:
         meta["impact"] = doc.impact
     if doc.features:
         meta["features"] = doc.features
-    bullets = (
-        f"- **Date:** {commit.date}\n"
-        f"- **Author:** {commit.author}\n"
-        f"- **Message:** {commit.message.splitlines()[0] if commit.message else ''}\n\n"
-    )
-    if doc.headline:
-        sections = [f"{WHAT_CHANGED_HEADING}\n\n{doc.what}\n"] if doc.what else []
-        if doc.why:
-            sections.append(f"{WHY_HEADING}\n\n{doc.why}\n")
-        body = f"# {doc.headline}\n\n{bullets}" + "\n".join(sections)
-    else:
-        body = f"# Commit {commit.sha[:8]}\n\n{bullets}{doc.what}\n"
-    path.write_text(frontmatter.render(meta, body))
+    path.write_text(frontmatter.render(meta, _render_body(doc, _bullets([commit]), commit.sha)))
     return path
 
 
-def read_history(text: str) -> tuple[str | None, MicroDoc] | None:
-    """`(the sha it records, what it says)` for a history doc — `write_history_file` in reverse.
+def write_entry(
+    repo_root: Path,
+    doc: MicroDoc,
+    members: Sequence[Commit],
+    path: Path | None = None,
+    name: str = "",
+) -> Path:
+    """Write a history entry covering `doc.commits` — rewritten in place at `path`, or new.
 
-    Reads both shapes. A legacy doc (`# Commit <sha8>`, one paragraph) comes back with no headline
-    and its paragraph as `what`; callers wanting a one-liner take its first sentence. Read back
-    rather than regenerated wherever a doc already exists, so a rename costs no provider call and a
-    hand-edited summary survives it. None when there's nothing after the metadata block — a shape
-    this didn't write, which a caller should leave alone rather than guess at.
+    A new entry is named for `name` (its branch) or else its first commit's subject (see
+    `new_entry_path`). `members` is the metadata of the commits git still knows, in `doc.commits`
+    order: a commit a rebase dropped stays in `commits:`, where it harms nothing, and out of the
+    block a reader sees.
+    """
+    history_dir = paths.history_dir(repo_root)
+    history_dir.mkdir(parents=True, exist_ok=True)
+    first = doc.commits[0]
+    if path is None:
+        path = new_entry_path(history_dir, first, name or (_subject(members[0]) if members else ""))
+    meta: dict[str, str | list[str]] = {"commits": list(doc.commits)}
+    if doc.branch:
+        meta["branch"] = doc.branch
+    if doc.impact:
+        meta["impact"] = doc.impact
+    if doc.features:
+        meta["features"] = doc.features
+    path.write_text(frontmatter.render(meta, _render_body(doc, _bullets(members), first)))
+    return path
+
+
+def _members_info(repo_root: Path, shas: Sequence[str]) -> list[Commit]:
+    """Metadata (no diffs) for the commits of an entry, in `shas` order, in one git process —
+    leaving out any git no longer has."""
+    if not shas:
+        return []
+    out = subprocess.run(
+        [
+            "git", "log", "--no-walk=unsorted", "--ignore-missing", "--stdin",
+            "--format=%x01%H%x1f%an <%ae>%x1f%aI%x1f%B",
+        ],
+        cwd=repo_root,
+        input="\n".join(dict.fromkeys(shas)) + "\n",
+        capture_output=True,
+        text=True,
+        errors="replace",
+        check=True,
+    ).stdout
+    found: dict[str, Commit] = {}
+    for record in out.split("\x01"):
+        fields = record.split("\x1f", 3)
+        if len(fields) == 4:
+            sha, author, date, message = fields
+            found[sha] = Commit(sha=sha, author=author, date=date, message=message.strip(), diff="")
+    return [found[sha] for sha in dict.fromkeys(shas) if sha in found]
+
+
+def read_history(text: str) -> tuple[str | None, MicroDoc] | None:
+    """`(the first commit it records, what it says)` for a history doc — the writers in reverse.
+
+    Reads every shape. A legacy doc (`# Commit <sha8>`, one paragraph) comes back with no headline
+    and its paragraph as `what`; callers wanting a one-liner take its first sentence. An entry's
+    commits come back in `commits`, a legacy doc's one sha too. Read back rather than regenerated
+    wherever a doc already exists, so a rename costs no provider call and a hand-edited summary
+    survives it. None when there's nothing after the metadata block — a shape this didn't write,
+    which a caller should leave alone rather than guess at.
     """
     meta, body = frontmatter.parse(text)
     headline = ""
@@ -377,8 +626,8 @@ def read_history(text: str) -> tuple[str | None, MicroDoc] | None:
         if not prose and line.startswith("# "):
             title = line[2:].strip()
             headline = "" if _LEGACY_TITLE.match(title) else title
-        elif not prose and (line.startswith("- **") or not line.strip()):
-            continue
+        elif not prose and (line.startswith("- **") or _NESTED_ITEM.match(line) or not line.strip()):
+            continue  # the metadata block, an entry's list of commits included
         else:
             prose.append(line)
     rest = "\n".join(prose).strip()
@@ -393,15 +642,21 @@ def read_history(text: str) -> tuple[str | None, MicroDoc] | None:
 
     impact = meta.get("impact", "")
     features = meta.get("features", [])
+    commits = meta.get("commits", [])
+    commits = list(commits) if isinstance(commits, list) else []
     sha = meta.get("sha")
+    sha = sha if isinstance(sha, str) else (commits[0] if commits else None)
+    branch = meta.get("branch", "")
     return (
-        sha if isinstance(sha, str) else None,
+        sha,
         MicroDoc(
             headline=headline,
             impact=impact if impact in IMPACTS else "",
             what=what,
             why=why,
             features=list(features) if isinstance(features, list) else [],
+            commits=commits or ([sha] if sha else []),
+            branch=branch if isinstance(branch, str) else "",
         ),
     )
 
@@ -422,12 +677,12 @@ def brief(doc: MicroDoc, limit: int = 200) -> str:
     return text
 
 
-def record_micro_doc(repo_root: Path, commit: Commit, summary: str) -> None:
+def record_micro_doc(repo_root: Path, sha: str, summary: str) -> None:
     conn = connect(repo_root)
     try:
         conn.execute(
             "INSERT OR REPLACE INTO micro_docs (sha, summary, created_at) VALUES (?, ?, ?)",
-            (commit.sha, summary, datetime.now(timezone.utc).isoformat()),
+            (sha, summary, datetime.now(timezone.utc).isoformat()),
         )
         conn.commit()
     finally:
@@ -454,6 +709,182 @@ def _is_revision(repo_root: Path, value: str) -> bool:
         ).returncode
         == 0
     )
+
+
+@dataclass(frozen=True)
+class HistoryConfig:
+    """`[history]` in specky.toml, or `[tool.specky.history]` in pyproject.toml — the same two
+    spellings as the other tables.
+
+    `long_lived` names the repo's own integration branches (a `sprint` or `release` that pull
+    requests merge into) on top of `activity.LONG_LIVED`: they get a long-lived branch's rules — one
+    author per entry, named for its subject — rather than a feature branch's single shared entry.
+    """
+
+    consolidate: str = HISTORY_CONSOLIDATE
+    window_days: int = HISTORY_WINDOW_DAYS
+    long_lived: tuple[str, ...] = ()
+
+    @classmethod
+    def load(cls, repo_root: Path) -> HistoryConfig:
+        table = paths.read_table(repo_root / "specky.toml", ("history",)) or paths.read_table(
+            repo_root / "pyproject.toml", ("tool", "specky", "history")
+        )
+        mode = str(table.get("consolidate", HISTORY_CONSOLIDATE)).strip().lower()
+        try:
+            days = int(table.get("window_days", HISTORY_WINDOW_DAYS))
+        except (TypeError, ValueError):
+            days = HISTORY_WINDOW_DAYS
+        branches = table.get("long_lived", ())
+        return cls(
+            consolidate=mode if mode in HISTORY_CONSOLIDATE_MODES else HISTORY_CONSOLIDATE,
+            window_days=days,
+            long_lived=tuple([branches] if isinstance(branches, str) else branches),
+        )
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass
+class BranchContext:
+    """The branch a run documents from, and which of its commits may share a history entry.
+
+    `recent` is `sha -> (author date, author email)` for the branch's own recent work: commits
+    authored inside the window, on HEAD's first-parent chain — on a feature branch, down to where
+    it left the mainline (`<base>..HEAD`). First-parent everywhere, so a commit a merge brought in
+    is never folded into this branch's entry: on a long-lived or integration branch those are other
+    people's pull requests, and on a feature branch another branch's work.
+    """
+
+    name: str
+    long_lived: bool
+    recent: dict[str, tuple[datetime, str]]
+
+    def joins(self, sha: str) -> bool:
+        """Whether `sha` goes into an entry of this branch: one it extends, or one it opens."""
+        return sha in self.recent
+
+    def open_entry(self, index: HistoryIndex, sha: str) -> Path | None:
+        """The entry `sha` extends, or None when it opens its own.
+
+        The newest entry of this branch whose first commit is still recent work: authored inside the
+        window, and on a feature branch not merged yet (a reused branch name starts afresh). On a
+        long-lived branch it must also be the same author's, or two people fixing things on main
+        would rewrite one file between them and conflict on every pull.
+        """
+        if sha not in self.recent:
+            return None
+        email = self.recent[sha][1]
+        best: tuple[datetime, Path] | None = None
+        for path, members in index.branch_entries(self.name):
+            if sha in members or members[0] not in self.recent:
+                continue
+            opened, opener = self.recent[members[0]]
+            if self.long_lived and opener != email:
+                continue
+            if best is None or opened > best[0]:
+                best = (opened, path)
+        return best[1] if best else None
+
+
+def _branch_base(repo_root: Path, configured: str) -> str | None:
+    """What a feature branch's own work is measured from: the configured mainline, else the first of
+    the brief's remote candidates or a local long-lived branch that exists."""
+    from specky.activity import MAINLINE_CANDIDATES  # activity imports this module
+
+    candidates = [configured] if configured else [
+        *(c for c in MAINLINE_CANDIDATES if c != "HEAD"),
+        *_LOCAL_MAINLINES,
+    ]
+    return next((c for c in candidates if _is_revision(repo_root, c)), None)
+
+
+def branch_context(repo_root: Path) -> BranchContext | None:
+    """Where the commits of this run may share entries, or None when each gets its own.
+
+    None for `[history] consolidate = "off"`, and for a detached HEAD (a rebase in progress, a CI
+    checkout of a merge ref), which has no branch to share an entry with.
+    """
+    from specky.activity import LONG_LIVED, ActivityConfig  # activity imports this module
+
+    config = HistoryConfig.load(repo_root)
+    if config.consolidate == "off" or config.window_days <= 0:
+        return None
+    name = subprocess.run(
+        ["git", "symbolic-ref", "--short", "-q", "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if not name:
+        return None
+    try:
+        configured = ActivityConfig.load(repo_root).branch
+    except (TypeError, ValueError):
+        configured = ""
+    long_lived = (
+        name in LONG_LIVED
+        or name in config.long_lived
+        or configured == name
+        or configured.endswith(f"/{name}")
+    )
+
+    start = _now() - timedelta(days=config.window_days)
+    # `--since` is the committer date, which is never before the author date the window is about,
+    # so it only trims; the author date is checked below.
+    args = [
+        "git", "log", "--first-parent", "--no-merges", f"--since={start.isoformat()}",
+        "--format=%H%x1f%aI%x1f%ae",
+    ]
+    if long_lived:
+        args += ["HEAD"]
+    else:
+        base = _branch_base(repo_root, configured)
+        if base is None:
+            return None
+        args += [f"-n{BRANCH_RANGE_CAP}", f"{base}..HEAD"]
+    log = subprocess.run(args, cwd=repo_root, capture_output=True, text=True, errors="replace")
+    recent: dict[str, tuple[datetime, str]] = {}
+    for line in log.stdout.splitlines():
+        sha, date, email = (line.split("\x1f") + ["", ""])[:3]
+        try:
+            when = datetime.fromisoformat(date)
+        except ValueError:
+            continue
+        if when >= start:
+            recent[sha] = (when, email.strip().lower())
+    return BranchContext(name=name, long_lived=long_lived, recent=recent)
+
+
+def entry_plan(repo_root: Path, pending: Sequence[tuple[str, str]]) -> dict[str, str]:
+    """`{sha: what it joins}` for the pending commits that go into an entry of this branch.
+
+    The value is the repo-relative path of an entry that already exists, the sha of an earlier
+    commit in `pending` whose new entry this one joins, or "" for a commit that opens one. It's what
+    `specky pending --json` tells the document-commits skill, which writes each reply for the whole
+    change — `record_commit` then does exactly what this predicts, because it asks the same
+    `BranchContext`.
+    """
+    branch = branch_context(repo_root)
+    if branch is None:
+        return {}
+    index = HistoryIndex(paths.history_dir(repo_root))
+    opened: dict[str, str] = {}  # author email ("" off a long-lived branch) -> the sha opening one
+    plan: dict[str, str] = {}
+    for sha, _ in pending:
+        if not branch.joins(sha):
+            continue
+        key = branch.recent[sha][1] if branch.long_lived else ""
+        if (path := branch.open_entry(index, sha)) is not None:
+            plan[sha] = path.relative_to(repo_root).as_posix()
+        elif key in opened:
+            plan[sha] = opened[key]
+        else:
+            opened[key] = sha
+            plan[sha] = ""
+    return plan
 
 
 def pending_commits(
@@ -514,12 +945,13 @@ def pending_commits(
     log = subprocess.run(
         args, cwd=repo_root, capture_output=True, text=True, errors="replace", check=True
     ).stdout
+    index = HistoryIndex(history_dir)
     pending = []
     for line in log.splitlines():
         sha, _, subject = line.partition("\x1f")
         if subject.startswith(_AUTO_COMMIT_MARKER):
             continue
-        doc = history_doc_for(history_dir, sha)
+        doc = index.doc_for(sha)
         wanted = _is_legacy(doc) if legacy else doc is None
         if wanted:
             pending.append((sha, subject))
@@ -546,25 +978,80 @@ def record_commit(
 
     The `document-commits` skill's half of `_sync_one`: the session agent writes the reply and any
     feature doc itself, and this records it exactly as a provider's reply would have been — same
-    parse, same file, same index rows.
+    parse, same entry (extended or new, as `entry_plan` told the skill), same index rows.
     """
     commit = _commit_info(sha, with_diff=False)
     doc = parse_micro_doc(reply)
     if feature:
         doc.features = [feature]
-    path = write_history_file(repo_root, commit, doc)
-    record_micro_doc(repo_root, commit, doc.text())
+    index = HistoryIndex(paths.history_dir(repo_root))
+    branch = branch_context(repo_root)
+    target = branch.open_entry(index, commit.sha) if branch else None
+    path = _record_entry(repo_root, commit, doc, branch, index, target)
     if feature:
         record_commit_link(repo_root, commit.sha, feature)
     return path
 
 
 def _is_legacy(doc: Path | None) -> bool:
-    """Whether a history doc is in the pre-headline shape — False for no doc at all."""
+    """Whether a history doc is in the pre-headline shape — False for no doc at all.
+
+    False for an entry of several commits too: a refresh describes one commit, and would replace
+    what the entry says about the rest. Its next extension gives it a headline anyway.
+    """
     if doc is None:
         return False
     parsed = read_history(doc.read_text())
-    return parsed is not None and not parsed[1].headline
+    return parsed is not None and not parsed[1].headline and len(parsed[1].commits) <= 1
+
+
+def _extend_micro_doc(repo_root: Path, entry: Path, commit: Commit, provider: Provider) -> str:
+    """The model's reply for `commit` joining `entry`: the entry rewritten to include it."""
+    parsed = read_history(entry.read_text())
+    so_far = parsed[1] if parsed else MicroDoc()
+    subjects = [_subject(c) for c in _members_info(repo_root, so_far.commits)]
+    prefix, prompt = extend_prompt(so_far, subjects, commit)
+    return provider.generate(prompt, prefix=prefix, task="summary").strip()
+
+
+def _record_entry(
+    repo_root: Path,
+    commit: Commit,
+    doc: MicroDoc,
+    branch: BranchContext | None,
+    index: HistoryIndex,
+    target: Path | None,
+) -> Path:
+    """Write `commit`'s history: into the entry it extends (`target`), or as a new entry.
+
+    Extending keeps the entry's name, branch and every commit it had, and takes the reply's words
+    for the whole change. A reply that isn't the JSON asked for doesn't get to replace a structured
+    entry with a paragraph: the entry keeps what it said, and still gains the commit, which is what
+    stops it being pending. `features:` is the union, so a branch that touched two docs names both.
+
+    A new entry is its branch's when the commit is the branch's own recent work (`BranchContext.
+    joins`) — named for a feature branch, and for its subject on a long-lived one, where the branch
+    name would say nothing. Anything else is an entry of one, named for its subject.
+    """
+    name = ""
+    if target is not None:
+        parsed = read_history(target.read_text())
+        before = parsed[1] if parsed else MicroDoc()
+        if not doc.headline and before.headline:
+            doc = replace(before, features=list(doc.features))
+        doc.commits = list(dict.fromkeys([*before.commits, commit.sha]))
+        doc.branch = before.branch
+        doc.features = list(dict.fromkeys([*before.features, *doc.features]))
+    else:
+        doc.commits = [commit.sha]
+        if branch is not None and branch.joins(commit.sha):
+            doc.branch = branch.name
+            name = "" if branch.long_lived else branch.name
+    members = _members_info(repo_root, doc.commits)
+    path = write_entry(repo_root, doc, members, path=target, name=name)
+    index.add(path, doc.commits, doc.branch)
+    record_micro_doc(repo_root, doc.commits[0], doc.text())
+    return path
 
 
 def _sync_one(
@@ -574,18 +1061,30 @@ def _sync_one(
     existing: ExistingDocs | None = None,
     label: str = "specky commit-doc",
     summary: str | None = None,
+    branch: BranchContext | None = None,
+    index: HistoryIndex | None = None,
 ) -> list[Path]:
-    """History log entry (changelog trail) + feature/workflow reference doc, if this commit
-    affects one. The specs/<domain>/<topic>.md docs are the reference; specs/history/ is just
-    the supplementary per-commit trail alongside them.
+    """History entry (changelog trail) + feature/workflow reference doc, if this commit affects
+    one. The specs/<domain>/<topic>.md docs are the reference; specs/history/ is just the
+    supplementary trail alongside them.
 
     `existing` lets a multi-commit caller (`sync()`) reuse one walk of specs/ across every
     commit; the single-commit hook path leaves it out. `label` prefixes this commit's output —
     `sync()` passes a `[12/431] abc1234` progress marker. `summary` is the micro-doc when the
-    caller already fetched it (see `_prefetch_summaries`)."""
+    caller already fetched it (see `_prefetch_summaries`) — never for a commit that `branch` says
+    may extend an entry, whose reply depends on what the entry says by the time its turn comes.
+    `index` is the caller's view of the history docs, kept current as this writes to it."""
     from specky.generator import sync_feature_doc
 
-    doc = parse_micro_doc(summary if summary is not None else generate_micro_doc(commit, provider))
+    index = index or HistoryIndex(paths.history_dir(repo_root))
+    target = branch.open_entry(index, commit.sha) if branch else None
+    if summary is None:
+        summary = (
+            _extend_micro_doc(repo_root, target, commit, provider)
+            if target is not None
+            else generate_micro_doc(commit, provider)
+        )
+    doc = parse_micro_doc(summary)
 
     # Classified before the history doc is written, so the doc can say which feature it belongs to:
     # `features:` is committed, where the `commit_links` row below lives in a gitignored database a
@@ -594,14 +1093,13 @@ def _sync_one(
     try:
         result = sync_feature_doc(repo_root, commit, provider, existing)
     except Exception:
-        write_history_file(repo_root, commit, doc)
-        record_micro_doc(repo_root, commit, doc.text())
+        _record_entry(repo_root, commit, doc, branch, index, target)
         raise
     if result:
         doc.features = [str(result.path.relative_to(repo_root))]
-    history_path = write_history_file(repo_root, commit, doc)
-    record_micro_doc(repo_root, commit, doc.text())
-    print(f"{label}: wrote {history_path}")
+    feature = doc.features[0] if doc.features else ""
+    history_path = _record_entry(repo_root, commit, doc, branch, index, target)
+    print(f"{label}: {'extended' if target is not None else 'wrote'} {history_path}")
     written = [history_path]
 
     # A doc can be linked without being written — see generator.DocSync. `written` is what gets
@@ -611,7 +1109,7 @@ def _sync_one(
         print(f"{label}: {result.note}")
         if result.written:
             written.append(result.path)
-        record_commit_link(repo_root, commit.sha, doc.features[0])
+        record_commit_link(repo_root, commit.sha, feature)
     return written
 
 
@@ -620,7 +1118,9 @@ def _refresh_one(repo_root: Path, commit: Commit, reply: str, label: str) -> Pat
 
     The link comes from the doc if it has one, else from this machine's `commit_links` rows — the
     only record of a legacy doc's feature, and absent on a clone that didn't write it, in which case
-    the refreshed doc is simply unlinked, as it was.
+    the refreshed doc is simply unlinked, as it was. It keeps its name and its shape: a legacy doc
+    stays `<sha8>.md`, and an entry of one commit written from a reply that wasn't JSON stays an
+    entry.
     """
     doc = parse_micro_doc(reply)
     old = history_doc_for(paths.history_dir(repo_root), commit.sha)
@@ -637,8 +1137,12 @@ def _refresh_one(repo_root: Path, commit: Commit, reply: str, label: str) -> Pat
             ]
         finally:
             conn.close()
-    path = write_history_file(repo_root, commit, doc)
-    record_micro_doc(repo_root, commit, doc.text())
+    if old is not None and old_doc is not None and not is_legacy_name(old):
+        doc.commits, doc.branch = old_doc[1].commits, old_doc[1].branch
+        path = write_entry(repo_root, doc, _members_info(repo_root, doc.commits), path=old)
+    else:
+        path = write_history_file(repo_root, commit, doc)
+    record_micro_doc(repo_root, commit.sha, doc.text())
     print(f"{label}: refreshed {path}")
     return path
 
@@ -773,13 +1277,13 @@ def sync(
         with exclusive(repo_root):
             modules = paths.modules_index(repo_root)
             modules_before = _contents(modules)
-            written = _write_docs(
+            written, documented = _write_docs(
                 repo_root, pending, provider, label_prefix="", batch=batch, refresh=refresh_history
             )
             if commit:
                 # MODULES.md only when this run changed it, as in `main()`: it's edited by hand too.
                 staged = written + ([modules] if _contents(modules) != modules_before else [])
-                _commit_doc_updates(repo_root, staged)
+                _commit_doc_updates(repo_root, staged, documented=documented)
     except LockBusy as exc:
         print(f"specky sync: {exc}")
         return []
@@ -805,12 +1309,20 @@ def _write_docs(
     label_prefix: str = "",
     batch: bool = False,
     refresh: bool = False,
-) -> list[Path]:
+) -> tuple[list[Path], list[str]]:
     """Work through a pending list in commit order, batching the micro-doc calls.
 
     Shared by `sync()` and the hook's catch-up so the two can't drift: same batching, same
     `ExistingDocs` snapshot, same per-commit error containment. Caller holds the lock. `refresh`
     rewrites existing history docs (`_refresh_one`) instead of documenting new commits.
+
+    Returns the files written and the commits documented, which the doc-sync commit names in its
+    `DOCUMENTS_TRAILER`.
+
+    A commit that joins an entry of this branch (`BranchContext.joins`) is neither prefetched nor
+    batched: its reply is the entry rewritten to include it, so it can only be asked for once the
+    commit before it has had its turn. Those are the branch's recent commits — the handful a hook
+    fire sees — so a backfill of older history keeps its concurrency.
     """
     from specky.generator import ExistingDocs
 
@@ -819,30 +1331,50 @@ def _write_docs(
     # into it, so commit 400 is told about the doc commit 3 created. A refresh classifies nothing,
     # so it has no use for one.
     existing = None if refresh else ExistingDocs.load(repo_root)
+    index = HistoryIndex(paths.history_dir(repo_root))
+    branch = None if refresh else branch_context(repo_root)
+    serial = {sha for sha, _ in pending if branch is not None and branch.joins(sha)}
 
     # With `--batch`, every commit's summary is fetched up front in one request; the per-chunk
     # `_prefetch_summaries` below then has nothing left to ask for and the loop is unchanged.
     batched: dict[str, str] = {}
-    if batch:
-        batched = _batch_summaries([_commit_info(sha) for sha, _ in pending], provider)
+    if batch and (upfront := [sha for sha, _ in pending if sha not in serial]):
+        batched = _batch_summaries([_commit_info(sha) for sha in upfront], provider)
 
     written: list[Path] = []
+    documented: list[str] = []
     for start in range(0, total, SYNC_CONCURRENCY):
         chunk = [_commit_info(sha) for sha, _ in pending[start : start + SYNC_CONCURRENCY]]
-        summaries = _prefetch_summaries([c for c in chunk if c.sha not in batched], provider)
+        summaries = _prefetch_summaries(
+            [c for c in chunk if c.sha not in batched and c.sha not in serial], provider
+        )
         for offset, commit in enumerate(chunk):
             label = f"{label_prefix}[{start + offset + 1}/{total}] {commit.sha[:8]}"
             try:
-                reply = batched.get(commit.sha) or summaries[commit.sha].result()
+                reply = (
+                    None
+                    if commit.sha in serial
+                    else batched.get(commit.sha) or summaries[commit.sha].result()
+                )
                 if refresh:
+                    assert reply is not None
                     written.append(_refresh_one(repo_root, commit, reply, label))
                 else:
                     written += _sync_one(
-                        repo_root, commit, provider, existing, label=label, summary=reply
+                        repo_root,
+                        commit,
+                        provider,
+                        existing,
+                        label=label,
+                        summary=reply,
+                        branch=branch,
+                        index=index,
                     )
+                documented.append(commit.sha)
             except Exception as exc:
                 print(f"{label}: skipped ({exc})")
-    return written
+    # Deduped: commits sharing an entry, like commits updating one feature doc, write it again.
+    return list(dict.fromkeys(written)), documented
 
 
 def _git_path(repo_root: Path, name: str) -> Path:
@@ -884,19 +1416,35 @@ def _read_deferred(repo_root: Path) -> dict[str, bool]:
         return {}
     entries: dict[str, bool] = {}
     for line in ledger.read_text().splitlines():
+        if line.startswith("@"):
+            continue  # a documented commit, see `_deferred_documented`
         if rel := line.strip().removeprefix("-"):
             entries[rel] = line.strip().startswith("-")
     return entries
 
 
-def _write_deferred(repo_root: Path, targets: Mapping[str, bool]) -> None:
+def _deferred_documented(repo_root: Path) -> list[str]:
+    """The commits an earlier fire documented but couldn't commit, owed to the doc-sync commit's
+    `DOCUMENTS_TRAILER` along with its paths — `@<sha>` lines in the same ledger."""
+    ledger = repo_root / ".specky" / DEFERRED_LEDGER
+    if not ledger.exists():
+        return []
+    return [line[1:].strip() for line in ledger.read_text().splitlines() if line.startswith("@")]
+
+
+def _write_deferred(
+    repo_root: Path, targets: Mapping[str, bool], documented: Sequence[str] = ()
+) -> None:
     """Record paths for the next fire to commit, or clear the record when there are none left."""
     ledger = repo_root / ".specky" / DEFERRED_LEDGER
     if not targets:
         ledger.unlink(missing_ok=True)
         return
     paths.state_dir(repo_root)
-    ledger.write_text("".join(f"{'-' if gone else ''}{rel}\n" for rel, gone in targets.items()))
+    ledger.write_text(
+        "".join(f"@{sha}\n" for sha in documented)
+        + "".join(f"{'-' if gone else ''}{rel}\n" for rel, gone in targets.items())
+    )
 
 
 def _stageable(repo_root: Path, rel_paths: list[str]) -> list[str]:
@@ -924,7 +1472,10 @@ def _contents(path: Path) -> bytes | None:
 
 
 def _commit_doc_updates(
-    repo_root: Path, written: list[Path], removed: Sequence[Path] = ()
+    repo_root: Path,
+    written: list[Path],
+    removed: Sequence[Path] = (),
+    documented: Sequence[str] = (),
 ) -> None:
     """Commit exactly the docs this run wrote, as a separate commit.
 
@@ -946,7 +1497,11 @@ def _commit_doc_updates(
     rebase in progress) is printed, not raised — the commit being documented already succeeded and
     must stay that way. A rejected commit also un-stages what it staged (`_unstage`), or the same
     sweep this function exists to prevent happens through the developer's next commit instead.
+
+    `documented` — the commits this run wrote history for — goes in the commit's
+    `DOCUMENTS_TRAILER`, which is how the indexer knows whose code the feature docs in it describe.
     """
+    documented = list(dict.fromkeys([*documented, *_deferred_documented(repo_root)]))
     targets: dict[str, bool] = {}  # rel path -> is a deletion. Deduped, in the order written.
     for path in written:  # a batch often rewrites one feature doc twice
         if path.exists() and path.is_relative_to(repo_root):
@@ -959,7 +1514,7 @@ def _commit_doc_updates(
 
     if (operation := sequencer_in_progress(repo_root)) is not None:
         if targets:
-            _write_deferred(repo_root, targets)
+            _write_deferred(repo_root, targets, documented)
             print(
                 f"specky commit-doc: {len(targets)} doc file(s) written but left uncommitted — git "
                 f"is midway through an operation ({operation}). They're committed by the next fire, "
@@ -989,14 +1544,16 @@ def _commit_doc_updates(
         # Cleared *before* the commit: that commit fires this hook again, and a nested fire that
         # found the ledger still full would report the lock it can't take as a problem.
         _write_deferred(repo_root, {})
+        # The trailer is a paragraph of its own, after the subject every fire matches on.
+        trailer = ["-m", f"{DOCUMENTS_TRAILER}: {' '.join(documented)}"] if documented else []
         subprocess.run(
-            ["git", "commit", "-m", _AUTO_COMMIT_MARKER, "--", *staged_paths],
+            ["git", "commit", "-m", _AUTO_COMMIT_MARKER, *trailer, "--", *staged_paths],
             cwd=repo_root,
             check=True,
         )
         print("specky commit-doc: committed doc updates")
     except subprocess.CalledProcessError as exc:
-        _write_deferred(repo_root, targets)
+        _write_deferred(repo_root, targets, documented)
         _unstage(repo_root, [rel for rel in staged_paths if rel not in pre_staged])
         print(f"specky commit-doc: doc updates written but not committed ({exc})")
 
@@ -1061,31 +1618,41 @@ def _repoint_rows(repo_root: Path, old_sha: str, new_sha: str) -> None:
 
 
 def apply_rewrites(repo_root: Path, stdin_text: str) -> list[tuple[Path, Path]]:
-    """Follow `git commit --amend` / `git rebase` by *renaming* the history docs they invalidated.
+    """Follow `git commit --amend` / `git rebase` to the history docs they invalidated.
 
     An amend replaces one commit with another that has a different sha, and a rebase does it for
     every replayed commit. Without this, the doc for the old sha is orphaned — it documents a
     commit that is no longer in the history — and the new sha looks undocumented, so the next fire
     pays a provider call to write what is almost exactly the same paragraph again.
 
-    So the doc moves instead: same content — headline, impact, `features:` and prose, via
-    `read_history` — new filename, refreshed `sha:` and metadata block (an amend can change the
-    message, author and date, all of which git already knows). Free, and it
-    keeps `pending_commits` honest, which is what everything else here reads.
+    So the doc follows instead, keeping its content — headline, impact, `features:` and prose, via
+    `read_history` — with a refreshed metadata block (an amend can change the message, author and
+    date, all of which git already knows). Free, and it keeps `pending_commits` honest, which is
+    what everything else here reads.
+
+    - An **entry** stays where it is: its name isn't a sha, so only its `commits:` change, every
+      rewritten one at once (an interactive squash maps two onto one, and they become one).
+    - A **legacy doc** is named for its sha, so it moves to the new one's name.
 
     Pairs whose old doc doesn't exist are left for the ordinary catch-up to document.
 
-    Returns `(old path, new path)` per rename. Both halves matter to the caller: the rename has to be
-    *committed*, and staging only the new file would leave the old one — a doc for a sha that is no
-    longer in the history — to come back with the next checkout.
+    Returns `(old path, new path)` per doc, the same path twice for an entry. Both halves of a
+    rename matter to the caller: it has to be *committed*, and staging only the new file would leave
+    the old one — a doc for a sha that is no longer in the history — to come back with the next
+    checkout.
     """
     history_dir = paths.history_dir(repo_root)
+    index = HistoryIndex(history_dir)
     moved: list[tuple[Path, Path]] = []
+    entries: dict[Path, dict[str, str]] = {}  # entry -> its old sha -> new sha
     for old_sha, new_sha in _rewrite_pairs(stdin_text):
         if old_sha == new_sha:
             continue
-        old_doc = history_doc_for(history_dir, old_sha)
+        old_doc = index.doc_for(old_sha)
         if old_doc is None:
+            continue
+        if not is_legacy_name(old_doc):
+            entries.setdefault(old_doc, {})[old_sha] = new_sha
             continue
         parsed = read_history(old_doc.read_text())
         if parsed is None:
@@ -1099,6 +1666,22 @@ def apply_rewrites(repo_root: Path, stdin_text: str) -> list[tuple[Path, Path]]:
         _repoint_rows(repo_root, old_sha, commit.sha)
         moved.append((old_doc, new_doc))
         print(f"specky commit-doc: {old_doc.name} -> {new_doc.name} ({old_sha[:8]} was rewritten)")
+
+    for entry, mapping in entries.items():
+        parsed = read_history(entry.read_text())
+        if parsed is None:
+            continue
+        doc = parsed[1]
+        doc.commits = list(dict.fromkeys(mapping.get(sha, sha) for sha in doc.commits))
+        members = _members_info(repo_root, doc.commits)
+        if not set(mapping.values()) <= {c.sha for c in members}:
+            continue  # the rewrite didn't land (an aborted rebase), so the entry still stands
+        write_entry(repo_root, doc, members, path=entry)
+        index.add(entry, doc.commits, doc.branch)
+        for old_sha, new_sha in mapping.items():
+            _repoint_rows(repo_root, old_sha, new_sha)
+        moved.append((entry, entry))
+        print(f"specky commit-doc: {entry.name} follows {len(mapping)} rewritten commit(s)")
     return moved
 
 
@@ -1145,7 +1728,7 @@ def main(rewritten: bool = False) -> None:
             # keeps their commits *out* of the pending list.
             renames = apply_rewrites(repo_root, sys.stdin.read())
         written = [new for _, new in renames]
-        removed = [old for old, _ in renames]
+        removed = [old for old, new in renames if old != new]  # an entry is rewritten in place
 
         # Our own doc-sync commit's fire, or a rebase replaying one. Nothing new to document —
         # anything still pending is picked up by the next real commit or by `specky sync` — but a
@@ -1154,12 +1737,19 @@ def main(rewritten: bool = False) -> None:
         # stages exactly these paths, so the fire it triggers finds nothing left to do.
         ours = _head_subject(repo_root).startswith(_AUTO_COMMIT_MARKER)
 
+        # Mid-rebase, git fires `post-commit` for every commit it replays, each one a new sha with
+        # no doc yet — and `post-rewrite`, at the end, moves the docs they already have onto those
+        # shas. Documenting them here as well paid for each one twice, and on a detached HEAD
+        # wrote each into an entry of its own beside the one `post-rewrite` then brought across.
+        # A commit the rebase really added (an `edit` stop) is left for the next fire.
+        rebasing = sequencer_in_progress(repo_root) in ("rebase-merge", "rebase-apply")
+
         # `todo`, not `batch`: `_write_docs` takes a keyword argument called `batch` meaning "use
         # the Batch API", and a local of the same name meaning "the commits to document" is one
         # keyword-ification away from a hook that silently starts batching.
         todo: list[tuple[str, str]] = []
         too_old: list[tuple[str, str]] = []
-        if not ours:
+        if not (ours or rebasing):
             pending = pending_commits(repo_root, depth=HOOK_CATCHUP_DEPTH)
             todo, too_old = pending[:HOOK_CATCHUP_MAX], pending[HOOK_CATCHUP_MAX:]
 
@@ -1179,14 +1769,16 @@ def main(rewritten: bool = False) -> None:
             except ConfigError as exc:
                 print(f"specky commit-doc: skipping ({exc})")
 
+        documented: list[str] = []
         try:
             with exclusive(repo_root):
                 modules = paths.modules_index(repo_root)
                 modules_before = _contents(modules)
                 if provider is not None:
-                    written += _write_docs(
+                    more, documented = _write_docs(
                         repo_root, todo, provider, label_prefix="specky commit-doc "
                     )
+                    written += more
                 # `update_modules_index` edits MODULES.md as a side effect of writing a doc, so it
                 # never appears in `written` — and it's a file people edit by hand too. Staging it
                 # on every fire committed whatever edit a developer had pending in it under
@@ -1195,7 +1787,7 @@ def main(rewritten: bool = False) -> None:
                     written.append(modules)
                 # Inside the lock: the commit below fires this hook again, and the nested fire
                 # finding the lock held is what stops two of them interleaving.
-                _commit_doc_updates(repo_root, written, removed=removed)
+                _commit_doc_updates(repo_root, written, removed=removed, documented=documented)
         except LockBusy as exc:
             print(f"specky commit-doc: {exc}")
             return

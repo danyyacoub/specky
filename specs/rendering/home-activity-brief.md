@@ -19,8 +19,9 @@ Three things decide what appears:
 - **One pull request is one change.** A branch's in-between commits ("wip", "address review") are
   never entries of their own. They're folded into the merge that brought them in.
 - **The words come from the history docs**, not from commit messages. Each line is a history doc's
-  headline ([documentation/auto-commit-docs.md](../documentation/auto-commit-docs.md)). Commits
-  whose `impact` is `internal` are counted ("+2 internal") rather than listed.
+  headline ([documentation/auto-commit-docs.md](../documentation/auto-commit-docs.md)). A branch's
+  commits that share one entry share one line. Commits whose `impact` is `internal` are counted
+  ("+2 internal") rather than listed.
 - **People, not agents.** Coding agents and bots are not people here: Claude co-author trailers,
   Copilot, Cursor, `[bot]` accounts, and specky's own doc-sync commits all drop out.
 
@@ -37,7 +38,8 @@ No model is called to build it; it is git and the committed docs only.
      and its lines, oldest first. The PR title from the merge message (GitHub, GitLab or Bitbucket
      format) is its label, linked to the PR when `origin` is on GitHub or GitLab.
    - A **commit with one parent** (a direct push or a squash) is a change of its own. A trailing
-     `(#N)` gives it a PR label.
+     `(#N)` gives it a PR label. Direct commits without one that share a history entry — one
+     person's hotfixes, folded together by the hook — are one change, dated by the latest.
 
    The window is about when a change *landed*. A branch commit written a month ago and merged
    yesterday counts.
@@ -48,8 +50,12 @@ No model is called to build it; it is git and the committed docs only.
 4. **Read the words** — each commit's history doc:
    - **Source:** the working-tree doc, the same file the viewer renders as that commit's page, so
      the line and the page it links to always agree. Failing that, the doc on the commit's own
-     branch, which is the only place an unmerged branch's docs exist.
-   - **Line text:** the headline, or the first sentence of a legacy doc.
+     branch, which is the only place an unmerged branch's docs exist. A legacy `<sha8>.md` doc is
+     read there by name. An entry is named for its branch or subject, so the history files the
+     window's commits touched are read instead, and each is matched to the commits its `commits:`
+     lists.
+   - **Line text:** the headline, or the first sentence of a legacy doc. Commits covered by the same
+     entry give one line, not one each.
    - **No doc:** the commit's subject, in italics. Those commits are counted in the footer, which
      points at `specky sync`.
 5. **Find the people** — a change's people are the humans among its authors and `Co-authored-by`
@@ -87,6 +93,8 @@ No model is called to build it; it is git and the committed docs only.
 | A commit is co-authored by Claude | It is credited to the human alone |
 | Dependabot or Renovate commits land | They appear in no one's list; the footer counts them as automated |
 | A commit has no history doc | Its subject is shown in italics and counted in the footer |
+| A merged branch's three commits share one history entry | One change with one line, its headline; the change still counts three commits |
+| Two direct commits on the mainline share one history entry | One change, one line, two commits, dated by the later commit |
 | A change's commits are all `impact: internal` | It is listed after the person's user-facing changes, as "+N internal" |
 | A branch is pushed but not merged | It is listed under its authors as In progress, in the words of the docs committed on it |
 | The checkout is a shallow clone (a depth-1 CI checkout) | The section says so and asks for full history, instead of showing a partial picture |
@@ -105,6 +113,7 @@ No model is called to build it; it is git and the committed docs only.
 | A legacy history doc "Refunds are capped. They used to be unlimited." | The brief is collected | The line is "Refunds are capped." |
 | A history doc rewritten in the working tree but not committed | The brief is collected | The line is the rewritten headline |
 | An unmerged branch whose history docs are committed only on it | The brief is collected from `main` | Its author has it In progress, with the headlines from those docs |
+| An unmerged branch whose two commits share an entry committed only on it | The brief is collected from `main` | One In progress line, the entry's headline, linking to its path |
 | A remote with `main` and `feat/export`, and `origin/HEAD` → `main` | The brief is collected | The header says `origin/main`; `origin/feat/export` is In progress; `main` never is |
 | A commit dated 30 days ago on a branch merged today, and a direct commit from 30 days ago | The brief is collected with a 14-day window | The branch commit is listed, and the old direct commit is not |
 | Two commits by "Alice Martin" from two addresses | The brief is collected | There is one Alice Martin, with two changes |

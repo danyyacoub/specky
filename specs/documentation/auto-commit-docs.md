@@ -7,9 +7,10 @@ tags: [documentation]
 
 ## What It Does
 
-Each commit gets an AI-written history entry in `specs/history/<sha8>.md` (`<docs root>/history/`
-— see [documentation/doc-adoption.md](doc-adoption.md) — keyed by the first 8 characters of the
-sha). The entry has a fixed structure because three readers use different parts of it:
+Every commit ends up in an AI-written history entry in `specs/history/` (`<docs root>/history/` —
+see [documentation/doc-adoption.md](doc-adoption.md)). A branch's recent commits share one entry
+(see One entry per branch below). The entry has a fixed structure because three readers use
+different parts of it:
 
 - A **headline** is the doc's title: one line in its users' terms about what the product now does
   differently. The home page's activity brief lists these
@@ -20,13 +21,66 @@ sha). The entry has a fixed structure because three readers use different parts 
 - **What changed** and **Why** sections hold the prose the Spec Assistant retrieves when asked why
   something changed. `Why` is left out when neither the commit message nor the diff states a
   reason, rather than letting the model make one up.
-- **`features:`** names the feature or workflow doc the commit was classified under. The entry is
-  committed, so the link travels with the repo. A feature page's list of recent changes relies on
-  that.
+- **`features:`** names the feature or workflow docs the entry's commits were classified under.
+  The entry is committed, so the link travels with the repo. A feature page's list of recent
+  changes relies on that.
+- **`commits:`** lists the full sha of every commit the entry covers, oldest first. The metadata
+  block under the title shows one commit's date, author and message, or for several commits the
+  span, the people and the commits themselves.
 
-Docs written before this structure existed (`# Commit <sha8>` and one paragraph) are still read
-everywhere. The one-line text shown for them is their first sentence.
-`specky sync --refresh-history` rewrites them in the new shape ([cli/sync.md](../cli/sync.md)).
+Docs written before entries existed are named `<sha8>.md` and record one `sha:`. They are still
+read everywhere, and nothing renames them. Docs older still (`# Commit <sha8>` and one paragraph)
+are shown by their first sentence. `specky sync --refresh-history` rewrites them in the new shape
+([cli/sync.md](../cli/sync.md)).
+
+### One entry per branch
+
+With the hook on every commit, one entry per commit would be one entry per "wip", "address review"
+and "fix typo". Instead, a commit **extends** an entry of its branch when all of these hold:
+
+1. `[history] consolidate` isn't `"off"` (the default is `"branch"`), and HEAD is on a named
+   branch. A detached HEAD, such as a rebase in progress or CI on a merge ref, has none.
+2. The commit is the branch's own recent work: authored less than `[history] window_days` (default
+   4) days ago, and on HEAD's first-parent chain, so nothing a merge brought in is folded in.
+   - On a **feature branch**, it must also not be on the mainline yet. The mainline is
+     `[activity] branch`, else `origin/dev`, `origin/develop` or `origin/HEAD`, else a local `dev`,
+     `develop`, `main`, `master` or `trunk`.
+   - A **long-lived branch** is `main`, `master`, `dev`, `develop`, `trunk`, `[activity] branch`,
+     or a branch listed in `[history] long_lived`. List there any integration branch that pull
+     requests merge into (a `sprint`, a `release`). Otherwise it is treated as one feature branch
+     with one entry everyone rewrites.
+3. The entry was opened on the same branch by a commit that is itself still recent work. On a
+   long-lived branch it must also be the same author's.
+
+The extending commit's micro-doc call gets the entry so far and rewrites it to describe the change
+as a whole, with the intermediate steps left out. `features:` becomes the union. A reply that isn't
+the JSON asked for keeps what the entry said, and still adds the commit.
+
+Otherwise the commit opens a new entry. If rules 1–2 hold, the new entry records `branch:` so later
+commits can extend it.
+
+Each rule guards against a specific problem:
+- The **window** keeps a week of hotfixes on `main` or `dev` from growing into one file: a commit
+  after the entry's first commit is 4 days old starts a new one.
+- The **same-author rule on long-lived branches** keeps two people fixing things on `main` from
+  rewriting one file between them.
+- Checking that the entry's first commit **isn't merged** yet means a reused branch name starts
+  fresh.
+
+Because the window is measured from now, a backfill of older commits (`specky sync --since …`) gets
+one entry per commit, fetched concurrently as before.
+
+**Names.** An entry is named when it is created, and never renamed after. A feature branch's entry
+is its branch name (`feat/refund-limits` → `feat-refund-limits.md`). Any other entry is named for
+its first commit's subject, minus a conventional-commit type (`fix(api): Unmatched lines…` →
+`unmatched-lines-….md`). Names are ASCII-folded, lowercase and at most 60 characters, and a taken
+name gets `-2`, `-3`, …. A name that could be read as a sha gets `-change`, because a file named
+like one is taken for a legacy doc. Since names don't depend on shas, an amend or a rebase rewrites
+the entry in place, and the viewer's links to it survive.
+
+**Two people on one branch** both rewrite its entry, so a `git pull` can conflict there. Resolving
+by taking either side heals itself: the other side's commits are missing from `commits:`, so they
+are pending again and the next fire extends the entry with them.
 
 **Merge commits get no entry.** `git show` of a clean merge is an empty combined diff, so its entry
 was a paid call that could only say "merged a branch". What the branch did is already in the
@@ -136,14 +190,18 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    - `[ai] skill_handoff = false`.
 
 5. **Follow rewrites instead of re-paying for them** — `post-rewrite` reads `<old-sha> <new-sha>`
-   pairs on stdin and *renames* each old history doc onto the new sha, rewriting its `sha:`
-   frontmatter and metadata block and repointing its index rows. The whole entry — headline,
-   `impact`, `features:` and prose — is read back off disk, so no provider call is made and a
-   hand-edited entry survives. Without this, an amend orphans
-   the doc it already paid for and the new sha looks undocumented. Pairs whose old doc is missing
-   fall through to the ordinary catch-up. Both halves of the rename are then committed — the new
-   file *and* the deletion of the old one — which is why the fire continues past the recursion guard
-   in step 7 even when HEAD is one of specky's own doc-sync commits: a rebase replays those too.
+   pairs on stdin and moves each history doc onto the new shas, repointing its index rows:
+   - an **entry** stays where it is, and its `commits:` are mapped all at once. An interactive
+     squash maps two commits onto one, and they become one.
+   - a **legacy doc** is named for its sha, so it is *renamed* onto the new one.
+
+   Either way the whole entry — headline, `impact`, `features:` and prose — is read back off disk.
+   No provider call is made, and a hand-edited entry survives. Without this, an amend orphans the
+   doc it already paid for and the new sha looks undocumented. Pairs whose old doc is missing fall
+   through to the ordinary catch-up. The result is then committed, and for a rename that is both
+   halves: the new file *and* the deletion of the old one. That is why the fire continues past the
+   recursion guard in step 7 even when HEAD is one of specky's own doc-sync commits: a rebase
+   replays those too.
 
 6. **One writer at a time** — The run holds a non-blocking `flock` on `.specky/run.lock`. Two
    fires (rapid commits, or a hook firing during a manual `specky sync`) would otherwise both pick
@@ -155,6 +213,12 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    recursing. Committing by path rather than `git add specs` matters twice: a human mid-sentence in
    a feature doc (or in `MODULES.md`) doesn't get their draft committed under specky's name, and
    anything else they had staged stays staged.
+
+   The commit carries a `Specky-Documents: <sha> …` trailer naming the commits the run documented.
+   `specky index` reads it to learn whose code the feature docs in that commit describe, which
+   builds `specky check`'s file→doc map. That used to be read off the history files' names, which
+   an entry named for its branch can't give. A doc-sync commit without the trailer falls back to
+   legacy `<sha8>.md` names, then to the commit it followed.
 
 8. **Never commit mid-sequencer, but never forget either** — If git is midway through a rebase,
    cherry-pick, revert, merge or bisect (`rebase-merge`, `rebase-apply`, `MERGE_HEAD`,
@@ -204,15 +268,19 @@ flowchart TD
 
 | Outcome | When | Result |
 |---------|------|--------|
-| **Summary created** | A fire finds pending commits | One doc per commit written to `specs/history/<sha8>.md` with a headline, an impact, What changed / Why, and the `features:` it was classified under; entries added to `micro_docs`; a follow-up doc-sync commit is made |
+| **Summary created** | A fire finds pending commits | Each commit opens an entry in `specs/history/`, named for its branch or its subject, with a headline, an impact, What changed / Why, its `commits:` and the `features:` it was classified under; entries added to `micro_docs`; a follow-up doc-sync commit is made, with a `Specky-Documents` trailer naming the commits |
+| **Entry extended** | A commit is its branch's recent work and the branch has an open entry (see One entry per branch) | The entry is rewritten to describe the whole change, gains the commit in `commits:` and the union of `features:`, and keeps its name |
+| **Entry closed by the window** | The entry's first commit is `window_days` (4) or more days old | The next commit opens a new entry: `<branch>-2.md` on a feature branch, its subject on a long-lived one |
+| **Hotfix by someone else** | A commit on `main`/`dev` by a different author than the open entry's | It opens its own entry |
+| **Consolidation off** | `[history] consolidate = "off"`, a detached HEAD, or a commit older than the window | One entry per commit, named for its subject |
 | **Merge skipped** | A merge commit lands | It is never pending, costs no provider call, and `specky check` / `specky doctor` don't count it as undocumented |
 | **Reply not structured** | The model's answer isn't the JSON asked for | The entry is written in the legacy one-paragraph shape instead of being dropped; `--refresh-history` picks it up later |
 | **Classified late, linked anyway** | Classification raises for a commit | The history entry is still written, without `features:`; the error is reported |
 | **Backlog closed late** | A commit arrived by a route no hook fires for (cherry-pick, `git am`, squash-merge, a contributor with no hook) | The next fire of *any* hook documents it, up to the per-fire cap |
 | **Backlog capped** | More than `HOOK_CATCHUP_MAX` (5) commits are pending | 5 are documented; the rest are reported with `run specky sync` and picked up by later fires |
 | **Older than the window** | A commit is more than `HOOK_CATCHUP_DEPTH` (20) commits back | Never documented by a hook; `specky doctor` reports it and `specky sync` fixes it |
-| **Doc follows a rewrite** | `git commit --amend` or `git rebase` | The existing history doc is renamed onto the new sha with its summary intact; no provider call; the new sha isn't pending |
-| **Rewrite committed as a rename** | The rename can be committed (no sequencer in progress) | One commit carrying the new file and the deletion of the old, so the old-sha doc is out of the tree rather than only out of the working copy |
+| **Doc follows a rewrite** | `git commit --amend` or `git rebase` | An entry's `commits:` are mapped onto the new shas in place; a legacy `<sha8>.md` doc is renamed onto the new sha; either way the summary is intact, no provider call is made, and the new sha isn't pending |
+| **Rewrite committed as a rename** | A legacy doc's rename can be committed (no sequencer in progress) | One commit carrying the new file and the deletion of the old, so the old-sha doc is out of the tree rather than only out of the working copy |
 | **Docs written, not committed** | A rebase, cherry-pick, revert, merge or bisect is in progress | Files land on disk; the commit is skipped with the operation named; the paths go to the `.specky/` ledger |
 | **Ledger drained** | A later fire runs with the sequencer finished | Those paths are committed — including a deletion whose file a checkout or fast-forward has since restored — and the ledger is removed |
 | **Nothing owed, nothing pending** | A fire finds an empty backlog and an empty ledger | Returns without taking the lock, so the nested fire of a doc-sync commit reports nothing |
@@ -231,7 +299,17 @@ flowchart TD
 
 | Given | When | Then |
 |-------|------|------|
-| `specky.toml` has valid `[ai]` config and the hooks are installed | A commit is made | Within seconds, `specs/history/<sha8>.md` exists with a headline as its title, an `impact:`, and What changed / Why sections |
+| `specky.toml` has valid `[ai]` config and the hooks are installed | A commit is made | Within seconds, an entry in `specs/history/` lists the commit in `commits:` and has a headline as its title, an `impact:`, and What changed / Why sections |
+| Three commits on `feat/refund-limits`, not yet merged, each documented as it lands | The third fire runs | `specs/history/feat-refund-limits.md` lists all three in `commits:`; the second and third micro-doc calls were given the entry so far and asked for the change as a whole |
+| An entry on `feat/x` whose first commit is 5 days old | A new commit on `feat/x` is documented | It opens `feat-x-2.md`; `feat-x.md` is unchanged |
+| Two hotfixes on `main` by Alice and one by Bob, all this week | They are documented | Alice's two share an entry named for her first one's subject; Bob's has its own |
+| A commit on `main` that a `--no-ff` merge brought in | It is documented | It opens its own entry; it is never folded into a hotfix entry |
+| `feat/y` branched off the unmerged `feat/x` | A commit on `feat/y` is documented | It opens `feat-y.md`; `feat-x.md` is unchanged |
+| `feat/x` merged into the mainline, then committed on again | The new commit is documented | It opens `feat-x-2.md` |
+| `[history] consolidate = "off"` | Two commits on a feature branch are documented | Each has its own entry, named for its subject |
+| Commits on a branch authored 30 days ago | `specky sync --since …` documents them | One entry per commit, their micro-docs fetched concurrently |
+| A branch's entry extended by a fire | The doc-sync commit is made | Its `Specky-Documents` trailer names the commit that fire documented, not the entry's first |
+| One doc-sync commit documenting two commits and updating a feature doc, with the trailer | `specky index` runs | `doc_files` pairs both commits' files with the feature doc |
 | A commit classified under `specs/billing/refund-limits.md` | Its entry is written | The entry's frontmatter has `features: [specs/billing/refund-limits.md]` |
 | A branch merged with `--no-ff` | `pending_commits` runs | The branch's commits are pending; the merge commit is not |
 | A history entry with `features:` and no `micro_docs`/`commit_links` rows (a fresh clone) | `specky index` runs | The commit's search summary is the entry's prose and `commits_for_doc` lists it under that feature |
@@ -261,10 +339,13 @@ flowchart TD
 | A human's half-written doc is uncommitted in the docs root | A hook fires and writes docs | The draft is not in the doc-sync commit and still has its uncommitted edits |
 | Unrelated work is staged (`git add src.py`) | A hook fires and commits docs | `src.py` is still staged afterwards |
 | `.git/CHERRY_PICK_HEAD`, `.git/REVERT_HEAD` or `.git/MERGE_HEAD` exists | A hook fires | The history doc is written, HEAD is unchanged, and the output says the docs were left uncommitted and names the operation |
-| A documented commit is amended | `specky commit-doc --rewritten` gets `<old> <new>` on stdin | The doc is renamed to `<new-sha8>.md`, carries the new message and the old entry's headline, impact, `features:` and prose, and the provider is never called |
-| The same | After the rename | The new sha is not in `pending_commits`, and `micro_docs` holds the new sha and not the old |
+| A documented commit is amended | `specky commit-doc --rewritten` gets `<old> <new>` on stdin | The entry keeps its name, lists the new sha instead of the old, carries the new message and the old entry's headline, impact, `features:` and prose, and the provider is never called |
+| A commit with a legacy `<sha8>.md` doc is amended | The same | The doc is renamed to `<new-sha8>.md` with its content intact |
+| The same | After the rewrite | The new sha is not in `pending_commits`, and `micro_docs` holds the new sha and not the old |
+| A branch whose entry covers two commits is rebased | `post-rewrite` gets both pairs | The entry is rewritten in place listing both new shas |
+| Two commits of an entry squashed into one | `post-rewrite` maps both onto the new sha | The entry lists it once |
 | A rewrite pair whose old sha has no doc | `--rewritten` runs | Nothing is renamed; the commit is left for the ordinary catch-up |
-| A rebase replays a commit and specky's own doc-sync commit | `post-rewrite` fires with HEAD carrying the marker | The rename is still committed: `git ls-tree HEAD` has the new sha's doc and not the old one, and the working tree is clean |
+| A rebase replays a commit and specky's own doc-sync commit | `post-rewrite` fires with HEAD carrying the marker | The rewrite is still committed: `git ls-tree HEAD` has the new sha's doc and not the old one (for a legacy doc), or the entry in HEAD lists the new sha and not the old, and the working tree is clean |
 | The same, with a sequencer file present | The next ordinary fire runs | The ledger's paths are committed, the working tree is clean, and the ledger file is gone |
 | A rename deferred, then the old doc restored by a fast-forward | The next fire commits the ledger | The restored old-sha doc is deleted again rather than re-committed, so no orphan doc survives |
 | A doc the rename deleted was never committed (written by `specky sync`) | The follow-up commit runs | It succeeds — git is only handed the deletion of paths it actually tracks |

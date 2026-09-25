@@ -3034,7 +3034,7 @@ def _person_html(
                 branch.date,
                 [
                     f"<code>{html.escape(branch.ref)}</code>",
-                    f"{len(branch.lines)} commit{'s' if len(branch.lines) != 1 else ''}",
+                    f"{branch.commits} commit{'s' if branch.commits != 1 else ''}",
                     others(branch.people),
                 ],
                 _activity_lines(branch.lines, pages),
@@ -3100,8 +3100,8 @@ def _render_rail(
             "name": domain,
             "icon": _icon_for_domain(domain),
             "docs": sorted(domains[domain], key=lambda d: d["nav_title"]),
-            # "history" entries are commit shas, not meaningful titles — collapsed by
-            # default so they don't crowd out the rest of the nav. NAV_JS re-opens the
+            # "history" is the changelog trail, one entry per branch or commit — collapsed
+            # by default so it doesn't crowd out the rest of the nav. NAV_JS re-opens the
             # group when the page you're on is one of them.
             "open": domain != _DOMAIN_ORDER_LAST,
         }

@@ -89,7 +89,8 @@ changes, and scaffold tests from a doc's acceptance-test table.
 ## How it works
 
 1. **Docs live in your repo as markdown**: `specs/<domain>/<topic>.md` for features and workflows,
-   and `specs/history/<sha>.md` for commits. You review and version them like code.
+   and `specs/history/` for commits. A branch's commits share one entry named for the branch, so
+   "wip" and "fix typo" don't each get a page. You review and version them like code.
 2. **Writing calls your AI provider.** Either the coding agent you already use (Claude Code,
    Codex, Gemini CLI, opencode, Kiro, Cursor Agent or Devin CLI), on its default model or one you name, any
    OpenAI-compatible endpoint, or Claude on Amazon Bedrock (install `specky[bedrock]`; credentials

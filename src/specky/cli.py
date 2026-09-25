@@ -236,18 +236,37 @@ def _commit_doc(args: argparse.Namespace) -> None:
 def _pending(args: argparse.Namespace) -> None:
     import json
 
-    from specky.commit_doc import HOOK_CATCHUP_DEPTH, MICRO_DOC_PREFIX, pending_commits
+    from specky.commit_doc import (
+        HOOK_CATCHUP_DEPTH,
+        MICRO_DOC_EXTEND_PREFIX,
+        MICRO_DOC_PREFIX,
+        entry_plan,
+        pending_commits,
+    )
     from specky.db import repo_root
 
-    commits = pending_commits(repo_root(), depth=args.depth or HOOK_CATCHUP_DEPTH)
+    root = repo_root()
+    commits = pending_commits(root, depth=args.depth or HOOK_CATCHUP_DEPTH)
     if args.json:
-        # `rules` is the provider's own instruction, so the skill writes the reply a provider
-        # would have written, from the one copy of it.
+        # `rules` and `rules_extend` are the provider's own instructions, so the skill writes the
+        # reply a provider would have written, from the one copy of them. `extends` says which of
+        # this branch's entries a commit joins — a path, or an earlier commit here whose new entry
+        # it joins — and `record-commit` does exactly that, because it asks the same question.
+        plan = entry_plan(root, commits)
         print(
             json.dumps(
                 {
-                    "commits": [{"sha": sha, "subject": subject} for sha, subject in commits],
+                    "commits": [
+                        {
+                            "sha": sha,
+                            "subject": subject,
+                            "joins_branch": sha in plan,
+                            "extends": plan.get(sha) or None,
+                        }
+                        for sha, subject in commits
+                    ],
                     "rules": MICRO_DOC_PREFIX,
+                    "rules_extend": MICRO_DOC_EXTEND_PREFIX,
                 },
                 indent=2,
             )
@@ -687,8 +706,8 @@ def build_parser() -> argparse.ArgumentParser:
     commit_doc_cmd.add_argument(
         "--rewritten",
         action="store_true",
-        help="Read `<old-sha> <new-sha>` pairs on stdin and rename the history docs they "
-        "invalidated (the post-rewrite hook's contract — an amend or a rebase)",
+        help="Read `<old-sha> <new-sha>` pairs on stdin and move the history docs they "
+        "invalidated onto the new shas (the post-rewrite hook's contract — an amend or a rebase)",
     )
     pending_cmd = command(
         "pending",
@@ -706,7 +725,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     record_cmd = command(
         "record-commit",
-        "Write a commit's history doc from micro-doc JSON on stdin (used by the document-commits skill)",
+        "Write a commit's history entry — new, or extending its branch's — from micro-doc JSON on "
+        "stdin (used by the document-commits skill)",
         _record_commit,
     )
     record_cmd.add_argument("sha", help="The commit the history doc is for")
