@@ -501,6 +501,54 @@ def test_a_section_envelope_with_trailing_junk_is_still_spliced(tmp_repo, write_
     assert "refund policy" in now["How It Works"]
 
 
+def test_a_section_envelope_after_agent_narration_is_still_spliced(tmp_repo, write_doc):
+    """`devin -p` prints its running narration ahead of the answer, glued on without a newline. The
+    envelope had to come first, so against a real repo the narration and the envelope's source were
+    written into the doc as its body."""
+    doc = write_doc("billing/refund-flow.md", _BIG_DOC, {"type": "feature", "tags": ["refunds"]})
+    new_how = "1. **Check.** The request is now examined against the refund policy as well. " * 8
+    envelope = json.dumps({"sections": {"How It Works": new_how}})
+    provider = FakeProvider([_CLASSIFY, "Check doc path + source first.Doc exist. Read." + envelope])
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert result.written
+    assert "Doc exist" not in doc.read_text()
+    assert '"sections"' not in doc.read_text()
+    assert "refund policy" in _sections(doc.read_text())["How It Works"]
+
+
+def test_a_new_doc_that_is_only_agent_narration_is_refused_and_staged(tmp_repo):
+    """The agent wrote the doc with its own tools and printed only what it was doing — which specky
+    then wrote over the file as the doc."""
+    provider = FakeProvider(
+        [_CLASSIFY, "Spec doc task. Invoke document-domain skill.Have full picture. Writing doc."]
+    )
+    result = sync_feature_doc(tmp_repo, _commit(), provider)
+
+    assert not result.written
+    assert "no `#` title or `##` section" in result.note
+    assert not (tmp_repo / "specs" / "billing" / "refund-flow.md").exists()
+    assert (tmp_repo / PENDING_DIR / "billing" / "refund-flow.md").exists()
+
+
+def test_the_doc_prompt_names_the_configured_root_and_asks_for_a_reply_only(tmp_repo):
+    """A hardcoded `specs/…` sent an agent CLI looking for that folder in a repo whose docs live
+    under `_specs/`; it wrote the doc there itself and printed only its narration."""
+    from specky import paths
+
+    (tmp_repo / "specky.toml").write_text('[docs]\nroot = "_specs"\n')
+    paths.reset_cache()
+    try:
+        provider = FakeProvider([_CLASSIFY, "# Billing — Refund Flow\n\n## What It Does\n\nRefunds.\n"])
+        sync_feature_doc(tmp_repo, _commit(), provider)
+    finally:
+        paths.reset_cache()
+
+    doc_prompt = provider.prompts[-1]
+    assert "You maintain _specs/billing/refund-flow.md" in doc_prompt
+    assert "Don't read, create or edit any file yourself" in doc_prompt
+
+
 def test_a_section_update_wrapped_in_echoed_frontmatter_is_still_spliced(tmp_repo, write_doc):
     """The doc handed to the model starts with a frontmatter block, and `generate_feature_doc`
     already strips the echo of one from a whole-body response; the envelope path strips it too,

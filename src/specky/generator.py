@@ -274,6 +274,29 @@ def leading_json_object(text: str) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+_SECTIONS_START = re.compile(r'\{\s*"sections"\s*:')
+
+
+def section_envelope(text: str) -> dict | None:
+    """The `{"sections": {...}}` answer in `text`, wherever it sits — or None if there isn't one.
+
+    `leading_json_object` needs the object first, and an agent CLI in print mode doesn't put it
+    there: `devin -p` writes its running narration to stdout ahead of the answer, glued on without
+    a newline ("Check doc path + source first.Doc exist. Read.{"sections": …"). Missing the envelope
+    there doesn't fail loudly — the whole reply falls through to the whole-body path, and against a
+    doc with no sections to lose, that wrote the narration *and* the envelope's source into a real
+    repo's doc. The last envelope that decodes wins, since the answer comes after the narration.
+    """
+    found = leading_json_object(text)
+    if found is not None and isinstance(found.get("sections"), dict):
+        return found
+    for match in reversed(list(_SECTIONS_START.finditer(text))):
+        candidate = leading_json_object(text[match.start() :])
+        if candidate is not None and isinstance(candidate.get("sections"), dict):
+            return candidate
+    return None
+
+
 def _doc_title(body: str, fallback: str) -> str:
     return next((line.lstrip("#").strip() for line in body.splitlines() if line.startswith("#")), fallback)
 
@@ -596,6 +619,9 @@ def repeated_sections(existing_body: str | None, body: str) -> list[str]:
     return [title for title in repeats(body) if title.lower() not in already]
 
 
+_ANY_HEADING = re.compile(r"^#{1,2} \S", re.MULTILINE)
+
+
 def doc_problem(repo_root: Path, existing_body: str | None, body: str) -> str | None:
     """Why this doc must not reach disk, or None if it may.
 
@@ -612,6 +638,13 @@ def doc_problem(repo_root: Path, existing_body: str | None, body: str) -> str | 
     Not included here: `repair_mermaid`, which callers run *before* this, because it rewrites the
     body that everything below is then measured against.
     """
+    # First, because nothing after it can tell: a reply with no title and no section is the model
+    # talking, not a doc. An agent CLI's narration ("Writing doc to `_specs/…`, then MODULES.md
+    # row.") reached two docs in a real repo this way — one new, one whose own body was a line of
+    # the same narration, so `lost_content` had nothing to measure a loss against.
+    if not _ANY_HEADING.search(body):
+        return "it has no `#` title or `##` section — the reply reads as the model's commentary, not a doc"
+
     repeated = repeated_sections(existing_body, body)
     if repeated:
         return "it repeats " + ", ".join(f"`## {title}`" for title in repeated)
@@ -723,6 +756,21 @@ def _missing_sections(doc_type: str, titles: list[str]) -> list[tuple[str, str]]
     ]
 
 
+# An agent CLI provider (`devin -p`, `claude -p`) has its own file tools, and a prompt naming a doc
+# path reads to it as a task: it went looking for `specs/…` in a repo whose docs live under
+# `_specs/`, wrote the doc there itself, and printed only its narration — which specky then wrote
+# over the file. The path is the real one, and the reply is the only channel.
+REPLY_ONLY = (
+    "Answer in your reply only. Don't read, create or edit any file yourself — specky writes the "
+    "doc from your reply.\n\n"
+)
+
+
+def _doc_intro(doc_rel: str, domain: str, topic: str) -> str:
+    where = doc_rel or f"specs/{domain}/{topic}.md"
+    return f"You maintain {where}, the living reference doc for this feature/workflow.\n\n{REPLY_ONLY}"
+
+
 def update_feature_doc(
     existing_content: str,
     commit: Commit,
@@ -730,6 +778,7 @@ def update_feature_doc(
     topic: str,
     provider: Provider,
     doc_type: str = "",
+    doc_rel: str = "",
 ) -> str:
     """An existing doc's new body, built by replacing only the sections the model names.
 
@@ -739,8 +788,8 @@ def update_feature_doc(
     """
     titles = [title for title, _ in split_sections(existing_content) if title]
     prompt = (
-        f"You maintain specs/{domain}/{topic}.md, the living reference doc for this "
-        "feature/workflow.\n\nIts current content follows in full.\n\n"
+        _doc_intro(doc_rel, domain, topic)
+        + "Its current content follows in full.\n\n"
         f"{existing_content}\n\n"
         + _commit_block(commit)
         + SECTION_UPDATE_INSTRUCTIONS.format(
@@ -755,8 +804,8 @@ def update_feature_doc(
     # Frontmatter off first, so an echo of the block the doc it was shown starts with doesn't hide
     # the envelope behind it; the whole-body fallback below wants it gone either way.
     _, raw = frontmatter.parse(strip_code_fence(provider.generate(prompt, task="doc")))
-    parsed = leading_json_object(raw)
-    if parsed is not None and isinstance(parsed.get("sections"), dict):
+    parsed = section_envelope(raw)
+    if parsed is not None:
         return merge_sections(existing_content, parsed["sections"])
     # Not the JSON contract: read it as a whole replacement body.
     return raw + "\n"
@@ -769,6 +818,7 @@ def generate_feature_doc(
     topic: str,
     provider: Provider,
     doc_type: str = "",
+    doc_rel: str = "",
 ) -> str:
     """This feature's doc body. A doc that already exists is updated section by section
     (`update_feature_doc`); one that doesn't is written whole, from this commit alone.
@@ -776,14 +826,16 @@ def generate_feature_doc(
     `doc_type` picks the template (`doc_style`). It is the doc's own type, or this run's
     classification for a doc that has none, and is resolved before either path is entered — unlike
     `document.py`, where the model decides the type mid-run and so has to be shown both shapes up
-    front.
+    front. `doc_rel` is the doc's repo-relative path, so the prompt names the configured docs root.
     """
     if existing_content:
-        return update_feature_doc(existing_content, commit, domain, topic, provider, doc_type)
+        return update_feature_doc(
+            existing_content, commit, domain, topic, provider, doc_type, doc_rel
+        )
 
     prompt = (
-        f"You maintain specs/{domain}/{topic}.md, the living reference doc for this feature/workflow.\n\n"
-        "No existing doc yet — write one from scratch based on this change, staying grounded in "
+        _doc_intro(doc_rel, domain, topic)
+        + "No existing doc yet — write one from scratch based on this change, staying grounded in "
         "what's actually shown below (don't invent behaviour the diff/message doesn't evidence).\n\n"
         + _commit_block(commit)
         + doc_style(
@@ -1054,6 +1106,7 @@ def sync_feature_doc(
         classification.topic,
         provider,
         doc_type,
+        rel.as_posix(),
     )
     # Same two checks `document.write` applies, for the same reason: this path rewrites whole
     # sections, and a section carrying a diagram can come back with it mangled.

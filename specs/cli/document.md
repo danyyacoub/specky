@@ -107,6 +107,7 @@ invisibly — prose reads the same whether or not it is true. So the guards are 
 | **Ungrounded flags** | A doc naming a `--flag` neither the CLI accepts nor any real code mentions — the one error class a machine can settle by itself |
 | **Lost content** | An update that drops a `##` section, guts one, or keeps less than 80% of the doc. A model shown an existing doc will sometimes summarise it away |
 | **Repeated section** | A doc carrying a `##` heading twice when the doc it replaces didn't: two docs stacked. Nothing is lost, so the lost-content check can't see it |
+| **Not a doc** | A body with no `#` title and no `##` section — the model's commentary, not a doc. The same guard the commit path uses, where an agent CLI's narration was once written over docs as their whole body |
 | **`authored: human`** | Any doc somebody took ownership of. Unlike the commit path, this cannot be checked up front — the model picks the target — so `read_doc` says a doc is frozen while that can still change course, and the draft is parked if it goes ahead anyway |
 | **Unparseable diagram** | A fenced ```mermaid block the renderer cannot read. The viewer degrades one into a block of raw syntax, dropped into the middle of a doc written for people who don't read syntax |
 
@@ -238,6 +239,7 @@ the same set of refusals stated as guards, with the reasoning behind each one.
 | The subject is already documented | The existing doc is updated in place | A second doc on one subject is a defect: it reads as authoritative, it is the copy nobody updates, and the two drift apart |
 | The update would drop or gut a section | It is refused and the draft is parked in `.specky/pending/` | A model shown an existing doc will sometimes summarise it away. The draft is kept because it may still be the better doc |
 | The doc repeats a `##` heading the existing one didn't | Refused and parked | A doc stacked on itself loses nothing, so no size check notices it |
+| The submitted body has no `#` title and no `##` section | Refused and parked | It is commentary rather than a doc, and against a doc with nothing to lose no size check notices it |
 | The target is `authored: human` | `read_doc` says so while the model can still change course; going ahead anyway parks the draft | Unlike the commit path, this can't be checked up front — the model picks the target, so by the time we know, the doc has been written and paid for |
 | The doc names a `--flag` nothing in the repo accepts | Refused and parked | It is the one error class a machine can settle by itself |
 | An update stops stating a number, formula or defined term the doc had | Written, and the summary line names them — `removed N fact(s): …`, constants first | The code may have changed the value; the person who ran it is the one who knows, so it's said rather than refused |
