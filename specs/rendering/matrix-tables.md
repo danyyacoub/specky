@@ -1,14 +1,7 @@
 ---
 type: feature
 tags: [rendering, cli]
-sources:
-  - src/specky/matrix.py
-  - src/specky/testgen.py
-  - src/specky/lint.py
-  - src/specky/doc_tools.py
-  - src/specky/html_render.py
-  - src/specky/answer_render.py
-  - src/specky/export.py
+sources: [src/specky/matrix.py, src/specky/testgen.py, src/specky/lint.py, src/specky/doc_tools.py, src/specky/html_render.py, src/specky/answer_render.py, src/specky/export.py]
 ---
 
 # Rendering — Matrix Tables
