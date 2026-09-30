@@ -11,7 +11,7 @@ Redesigns the docs viewer from a rail+card layout to a desktop app shell with a 
 
 ## How It Works
 
-1. **Navigation Structure** — Sidebar organizes docs by domain in collapsible groups, with domain icons and an active indicator on the current page. Each link drops a title prefix that merely repeats its own module (the repo name, for root docs) since the group header already names it, keeping the full title on hover; any other title is left as written. Links and search hits carry the feature or workflow icon in its chip's color so the type reads at a glance.
+1. **Navigation Structure** — Sidebar organizes docs by domain in collapsible groups, with domain icons and an active indicator on the current page. Within each domain group, docs sort by type before title: workflows (a domain's guided paths) lead, features (reference material) follow, and docs with no type — or a type outside this map — sort last; each type group stays alphabetical. Each link drops a title prefix that merely repeats its own module (the repo name, for root docs) since the group header already names it, keeping the full title on hover; any other title is left as written. Links and search hits carry the feature or workflow icon in its chip's color so the type reads at a glance.
 
 2. **Tag & Type Filtering** — Colored chips below the domain list let readers filter the sidebar and search by doc type (Feature or Workflow) or by tag name; active filters show a clear button.
 
