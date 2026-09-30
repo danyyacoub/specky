@@ -2536,12 +2536,17 @@ def _wrap_tables(body_html: str) -> str:
 # gets. Only for `doc_type == "workflow"`: on a feature doc the numbered list is one detail among
 # several and promoting it would just be louder, not clearer.
 
-# `head` is tempered against `h2` rather than a plain `.*?`: left greedy-free but unbounded, the
-# first `<h2>` on the page swallows everything up to the *steps*' closing tag, the heading check
-# then fails on the concatenation, and the real heading never gets its own attempt.
+# A section is its `<h2>` and everything up to the next one. `head` is tempered against `h2` rather
+# than a plain `.*?`: left unbounded, the first `<h2>` on the page swallows everything up to a later
+# heading's close, the heading check fails on the concatenation, and the real heading never gets its
+# own attempt. The body runs to the next `<h2>` rather than stopping at the first `<ol>`, because
+# most docs open the section with a sentence — "Five phases then run in order:" — or split it under
+# `###` subheadings, one path each, and a list that must follow the heading directly reached none
+# of them.
 _STEP_SECTION = re.compile(
-    r"(<h2>(?P<head>(?:(?!</?h2>).)*?)</h2>\s*)<ol>(?P<items>.*?)</ol>", re.DOTALL
+    r"(?P<open><h2>(?P<head>(?:(?!</?h2>).)*?)</h2>)(?P<body>(?:(?!<h2[ >]).)*)", re.DOTALL
 )
+_STEP_LIST = re.compile(r"<ol>(?P<items>.*?)</ol>", re.DOTALL)
 _STEP_ITEM = re.compile(r"<li>\s*(?P<body>.*?)\s*</li>", re.DOTALL)
 # The bold label the template asks for, and whatever separator the writer put after it. The label
 # may itself contain markup — `link_glossary` has already run, so a glossary term inside it is a
@@ -2562,16 +2567,20 @@ STEP_HEADING = "how it works"
 def _step_list(body_html: str) -> str:
     """Turn a workflow's happy-path `<ol>` into `<ol class="steps">` — see `ol.steps` in CSS.
 
-    Left exactly as it was unless the list really is the shape the template asks for: under the
-    `## How It Works` heading, and with bold labels to split on. A doc that writes its steps some
+    Left exactly as it was unless the list really is the shape the template asks for: in the
+    `## How It Works` section, and with bold labels to split on. A doc that writes its steps some
     other way gets a plain list rather than a stepper full of empty titles, which is the right
     trade — nothing here is load-bearing, and a hand-written doc predating the template is the
-    common case.
+    common case. Every such list in the section is promoted on its own merits, so a doc with one
+    happy path per mode under `###` subheadings gets a stepper for each.
     """
 
     def section(match: re.Match[str]) -> str:
         if _TAGS.sub("", match.group("head")).strip().lower() != STEP_HEADING:
             return match.group(0)
+        return match.group("open") + _STEP_LIST.sub(steps, match.group("body"))
+
+    def steps(match: re.Match[str]) -> str:
         if _NESTED_LIST.search(match.group("items")):
             return match.group(0)
         labelled = False
@@ -2597,7 +2606,7 @@ def _step_list(body_html: str) -> str:
         items = _STEP_ITEM.sub(item, match.group("items"))
         if not labelled:
             return match.group(0)
-        return f'{match.group(1)}<ol class="steps">{items}</ol>'
+        return f'<ol class="steps">{items}</ol>'
 
     return _STEP_SECTION.sub(section, body_html)
 

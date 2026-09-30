@@ -749,6 +749,42 @@ def test_a_list_that_is_not_under_how_it_works_is_left_alone(tmp_repo, write_doc
     assert '<ol class="steps">' not in (site / "billing-refund-flow.html").read_text()
 
 
+def test_steps_after_a_lead_in_sentence_still_render_as_a_stepper(tmp_repo, write_doc):
+    """Regression: the list had to follow the heading directly, so a doc opening the section with
+    "Five phases then run in order:" got a plain list — and the next section's list stays plain."""
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## How It Works\n\n"
+        "Refunds start when the customer asks. Two steps then run in order:\n\n"
+        "1. **Request a refund** — the customer asks.\n"
+        "2. **Pay it out** — money moves.\n\n"
+        "## Outcomes\n\n1. **Paid** — money moved.\n",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    run_index(tmp_repo)
+    page = (render_site(tmp_repo).parent / "billing-refund-flow.html").read_text()
+
+    assert "Two steps then run in order:</p>" in page
+    assert page.count('<ol class="steps">') == 1
+    assert '<span class="st">Request a refund</span>' in page
+    assert "<li><strong>Paid</strong> — money moved.</li>" in page
+
+
+def test_each_path_under_a_subheading_gets_its_own_stepper(tmp_repo, write_doc):
+    write_doc(
+        "billing/refund-flow.md",
+        "# Billing — Refund Flow\n\n## How It Works\n\n"
+        "### Card refund\n\n1. **Request** — the customer asks.\n2. **Reverse** — the charge goes back.\n\n"
+        "### Bank refund\n\n1. **Request** — the customer asks.\n2. **Transfer** — money is wired.\n",
+        {"type": "workflow", "tags": ["refunds"]},
+    )
+    run_index(tmp_repo)
+    page = (render_site(tmp_repo).parent / "billing-refund-flow.html").read_text()
+
+    assert page.count('<ol class="steps">') == 2
+    assert '<span class="st">Transfer</span>' in page
+
+
 def test_steps_written_without_bold_labels_are_left_alone(tmp_repo, write_doc):
     """A stepper full of empty titles is worse than the plain list it replaced, and a doc
     predating the template is the common case."""
