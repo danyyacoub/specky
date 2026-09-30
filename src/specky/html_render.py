@@ -2949,7 +2949,11 @@ def _activity_html(
 ) -> str:
     """The home page's "Recent activity" section (see activity.py for what goes in it)."""
     meta = (
-        f'<p class="activity-meta">on <code>{html.escape(recent.branch)}</code> · last '
+        f'<p class="activity-meta">from the history docs · this checkout\'s git history '
+        f"isn't the repo's · last {recent.days} days · as of {_short_date(recent.as_of)} "
+        f"{recent.as_of:%Y}</p>"
+        if recent.docs_only
+        else f'<p class="activity-meta">on <code>{html.escape(recent.branch)}</code> · last '
         f"{recent.days} days · as of {_short_date(recent.as_of)} {recent.as_of:%Y}</p>"
     )
     if recent.shallow:
@@ -2959,8 +2963,11 @@ def _activity_html(
             "<code>fetch-depth: 0</code> in CI) and render again.</p>"
         )
     elif not recent.people:
+        where = (
+            "the history docs" if recent.docs_only else f"<code>{html.escape(recent.branch)}</code>"
+        )
         body = (
-            f'<p class="empty-state">Nothing landed on <code>{html.escape(recent.branch)}</code> '
+            f'<p class="empty-state">Nothing landed in {where} '
             f"in the last {recent.days} days.</p>"
         )
     else:

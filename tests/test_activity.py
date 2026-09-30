@@ -370,6 +370,90 @@ def test_a_shallow_clone_says_so_rather_than_guessing(repo, tmp_path):
     assert brief(shallow).shallow
 
 
+# --- the docs-only brief: a checkout whose git isn't the repo's ------------------------------
+
+
+def _docs_image(tmp_path: Path, docs: list[tuple[str, str, commit_doc.MicroDoc]]) -> Path:
+    """What the deployed docs site renders from: the docs tree copied into a fresh `git init`,
+    whose one synthetic commit is every word git has to offer."""
+    image = tmp_path / "image"
+    image.mkdir()
+    recent = datetime.now(timezone.utc).isoformat()
+    for i, (sha, message, doc) in enumerate(docs):
+        commit = commit_doc.Commit(sha, f"{ALICE[0]} <{ALICE[1]}>", recent, message, "")
+        commit_doc.write_history_file(image, commit, doc)
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=image, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=image, check=True)
+    git(image, "add", "-A")
+    git(image, "commit", "-q", "-m", "build", who=("ci", "ci@zylio.io"))
+    paths.reset_cache()
+    return image
+
+
+def test_more_history_docs_than_commits_means_the_docs_answer(tmp_path):
+    image = _docs_image(
+        tmp_path,
+        [
+            ("a" * 40, "Ship refunds", commit_doc.MicroDoc(headline="Refunds can be partial", impact="feature", what="What.")),
+            ("b" * 40, "Cap refunds", commit_doc.MicroDoc(headline="Refunds are capped", impact="fix", what="What.")),
+        ],
+    )
+
+    found = brief(image)
+
+    assert found.docs_only and not found.shallow
+    alice = person(found, "Alice Martin")
+    assert {l.text for c in alice.shipped for l in c.lines} == {
+        "Refunds can be partial",
+        "Refunds are capped",
+    }
+    assert {c.lines[0].history_path for c in alice.shipped} == {
+        "specs/history/aaaaaaaa.md",
+        "specs/history/bbbbbbbb.md",
+    }
+    assert found.undocumented == 0  # a doc is its own line's source, never "undocumented"
+
+
+def test_docs_only_ignores_docs_outside_the_window(tmp_path):
+    image = _docs_image(
+        tmp_path,
+        [
+            ("a" * 40, "Ship refunds", commit_doc.MicroDoc(headline="Refunds can be partial", what="What.")),
+            ("b" * 40, "Old work", commit_doc.MicroDoc(headline="Ancient", what="What.")),
+        ],
+    )
+    old = paths.history_dir(image) / "bbbbbbbb.md"
+    old.write_text(
+        "\n".join(
+            "- **Date:** 2020-01-01T00:00:00+00:00" if line.startswith("- **Date:**") else line
+            for line in old.read_text().splitlines()
+        )
+    )
+
+    found = brief(image)
+
+    assert [l.text for c in person(found, "Alice Martin").shipped for l in c.lines] == [
+        "Refunds can be partial"
+    ]
+
+
+def test_a_repo_with_docs_and_no_commits_at_all_still_briefs(tmp_path):
+    image = tmp_path / "image"
+    image.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=image, check=True)
+    recent = datetime.now(timezone.utc).isoformat()
+    commit = commit_doc.Commit("a" * 40, f"{ALICE[0]} <{ALICE[1]}>", recent, "Ship refunds", "")
+    commit_doc.write_history_file(
+        image, commit, commit_doc.MicroDoc(headline="Refunds can be partial", what="What.")
+    )
+    paths.reset_cache()
+
+    found = brief(image)
+
+    assert found.docs_only
+    assert person(found, "Alice Martin").shipped[0].lines[0].text == "Refunds can be partial"
+
+
 # --- parsing ------------------------------------------------------------------------------
 
 

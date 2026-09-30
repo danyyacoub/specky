@@ -29,6 +29,13 @@ No model is called to build it; it is git and the committed docs only.
 
 ## How It Works
 
+0. **Docs without their git history** — a history directory holding more docs than the whole
+   repo has commits is impossible when the docs were written from that history, so the
+   checkout's git isn't the repo's. The deployed docs image is exactly this: the docs tree
+   copied into a fresh `git init` of one synthetic commit. Instead of reporting the synthetic
+   commit as the only work that ever happened, the brief reads the docs directly — each
+   in-window doc is one change under its recorded author, newest 10 — and the header says the
+   answers came from the docs. The same happens when there are docs and no commits at all.
 1. **Pick the mainline** — `[activity] branch` if set. Otherwise `origin/dev`, then
    `origin/develop`, then `origin/HEAD`, then `HEAD`. In a gitflow repo, `dev` is where work lands
    and `main` only receives release merges. The section header names the branch it walked.
@@ -98,6 +105,7 @@ No model is called to build it; it is git and the committed docs only.
 | A change's commits are all `impact: internal` | It is listed after the person's user-facing changes, as "+N internal" |
 | A branch is pushed but not merged | It is listed under its authors as In progress, in the words of the docs committed on it |
 | The checkout is a shallow clone (a depth-1 CI checkout) | The section says so and asks for full history, instead of showing a partial picture |
+| The checkout's git history isn't the repo's (more history docs than commits, or none at all) | The section reads the docs themselves: each in-window doc is one change under its recorded author, capped at the newest 10, and the header says so |
 | Nothing landed in the window | The section says so and names the branch |
 | `[activity] branch` names a branch that doesn't exist | The section is left out and the render prints why; the rest of the site renders |
 
@@ -119,3 +127,6 @@ No model is called to build it; it is git and the committed docs only.
 | Two commits by "Alice Martin" from two addresses | The brief is collected | There is one Alice Martin, with two changes |
 | `[activity] branch = "dev"` | The brief is collected | `dev` is walked and named in the header |
 | A `--depth 1` clone | The brief is collected | It reports shallow history instead of any people |
+| A checkout with two history docs and one synthetic commit | The brief is collected | The docs answer: both are changes under their recorded authors, marked `docs_only` |
+| A docs-only checkout whose newest doc predates the window | The brief is collected | No one is listed; the stale doc doesn't appear |
+| A checkout with a history doc and no commits at all | The brief is collected | The doc is listed rather than raising "no commits yet" |

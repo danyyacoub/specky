@@ -182,6 +182,9 @@ class Activity:
     automated: int = 0  # changes no human touched, left out
     undocumented: int = 0  # commits shown with their subject because they have no history doc
     shallow: bool = False
+    # The docs, not git, answered: this checkout's history isn't the one the docs were written
+    # from (a docs-only image that `git init`s one synthetic commit is the case this is for).
+    docs_only: bool = False
 
 
 @dataclass
@@ -465,6 +468,78 @@ def _dedupe(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+# A `- **Date:**` / `- **Author:**` / `- **Message:**` line of a history doc's metadata block.
+# An entry's nested commit list is indented, so `^- ` never reaches it.
+_DOC_META = re.compile(r"^- \*\*(Date|Author|Message):\*\*\s*(.+?)\s*$", re.MULTILINE)
+
+# The fallback brief's cap: how many of the newest in-window docs become a change each. The git
+# walk needs no such bound — the window is small — but a docs-only reader can't tell stale from
+# recent itself, so the docs it has are bounded outright.
+DOCS_ONLY_MAX = 10
+
+
+def _doc_stamp(text: str) -> tuple[datetime | None, list[tuple[str, str]]]:
+    """`(when, who)` from a history doc's metadata bullets — the docs-only brief's only clock.
+
+    An entry's date is a span (`first → last`); the end is when the change last moved. Authors
+    are the writer's `name <email>` list, comma-joined for a multi-commit entry.
+    """
+    meta: dict[str, str] = {}
+    for key, value in _DOC_META.findall(text):
+        meta.setdefault(key, value)
+    when: datetime | None = None
+    if raw := meta.get("Date"):
+        try:
+            when = datetime.fromisoformat(raw.rsplit("→", 1)[-1].strip())
+        except ValueError:
+            pass
+    authors = [i for a in meta.get("Author", "").split(", ") if (i := _identity(a))]
+    return when, authors
+
+
+def _docs_only(repo_root: Path, activity: Activity, now: datetime, cfg: ActivityConfig) -> None:
+    """Fill `activity` from the history docs alone, for a checkout whose git history isn't the
+    repo's — a deploy that copies the docs tree into a fresh `git init` is the case this exists
+    for. Every doc is one change; the window and the people rules are the git walk's own."""
+    activity.docs_only = True
+    since_dt = now - timedelta(days=cfg.days)
+    people = _People(cfg.ignore_authors)
+    items: list[Change] = []
+    for path in sorted(paths.history_dir(repo_root).glob("*.md")):
+        text = path.read_text(errors="replace")
+        parsed = read_history(text)
+        when, authors = _doc_stamp(text)
+        if parsed is None or when is None or when < since_dt:
+            continue
+        _, doc = parsed
+        emails = people.humans(authors)
+        if not emails:
+            activity.automated += 1
+            continue
+        items.append(
+            Change(
+                sha=doc.commits[0] if doc.commits else "",
+                date=when,
+                lines=[
+                    Line(
+                        text=brief(doc),
+                        detail="\n\n".join(p for p in (doc.what, doc.why) if p),
+                        impact=doc.impact,
+                        history_path=str(path.relative_to(repo_root)),
+                    )
+                ],
+                label="",
+                pr_url="",
+                commits=len(doc.commits) or 1,
+                people=emails,
+                features=doc.features,
+            )
+        )
+    items.sort(key=lambda c: c.date, reverse=True)
+    del items[DOCS_ONLY_MAX:]
+    activity.people = _by_person(items, people)
+
+
 def _identities(commits: list[_Commit]) -> list[tuple[str, str]]:
     return [identity for c in commits for identity in (c.author, *c.coauthors)]
 
@@ -620,14 +695,35 @@ def collect(
     if not cfg.enabled:
         return None
     now = now or datetime.now(timezone.utc)
-    ref = mainline(repo_root, cfg.branch)
+    history_dir = paths.history_dir(repo_root)
+    n_docs = len(list(history_dir.glob("*.md"))) if history_dir.is_dir() else 0
+    try:
+        ref = mainline(repo_root, cfg.branch)
+    except ValueError:
+        # A configured mainline that doesn't exist is still a misconfiguration to report. "No
+        # commits yet" with a full history directory isn't empty, though — it's the docs without
+        # their git history, and the docs alone still say who changed what.
+        if cfg.branch or not n_docs:
+            raise
+        activity = Activity(branch="", days=cfg.days, as_of=now, people=[])
+        _docs_only(repo_root, activity, now, cfg)
+        return activity
     activity = Activity(branch=_display_name(repo_root, ref), days=cfg.days, as_of=now, people=[])
     if gitlog.run(repo_root, ["rev-parse", "--is-shallow-repository"]).strip() == "true":
         activity.shallow = True  # a depth-1 CI checkout: any brief from it would be wrong, not short
         return activity
 
-    since = f"--since={(now - timedelta(days=cfg.days)).isoformat()}"
+    # More history docs than the whole repo has commits is impossible when they were written
+    # from this history — every doc covers at least one commit — so this checkout's git isn't
+    # the repo's (the deployed docs image is exactly this: the docs copied into a `git init` of
+    # one synthetic commit). Walk the docs instead of git's wrong answer.
     tip = gitlog.run(repo_root, ["rev-parse", ref]).strip()
+    total = gitlog.run(repo_root, ["rev-list", "--count", tip]).strip()
+    if n_docs and total.isdigit() and n_docs > int(total):
+        _docs_only(repo_root, activity, now, cfg)
+        return activity
+
+    since = f"--since={(now - timedelta(days=cfg.days)).isoformat()}"
     groups, files = _walk_mainline(repo_root, tip, since)
     branches = _unmerged_branches(repo_root, tip, since, activity.branch)
     docs = _history_docs(
