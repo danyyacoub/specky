@@ -7,6 +7,24 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+### Added
+- **Never-documented commits.** One shared rule decides which commits never get a history doc —
+  for `pending_commits`, the hook, `specky sync`, `specky check` and `specky doctor` alike — so a
+  doc deleted on purpose stays deleted instead of being regenerated on the next fire:
+  - `[history] ignore = ["chore: bump*", "docs:*"]` in `specky.toml` (or
+    `[tool.specky.history]` in `pyproject.toml`) retires a class of commits by subject glob;
+  - a bracketed skip tag in the subject — `[skip specky]`, or CI's own `[skip ci]`/`[ci skip]` —
+    opts a commit out;
+  - `[bot]`-authored commits (`github-actions[bot]`, `dependabot[bot]`, …) are never documented.
+- **`impact: internal` history entries leave the sidebar.** Their pages still render — links and
+  search still reach them — but the nav trail shows only changes a reader cares about, matching
+  what the activity brief already did by counting rather than listing them.
+
+### Changed
+- **The activity brief drops never-documented commits entirely** — skip-tagged or
+  configured-ignore commits are no line and not even counted as automated. Bot-authored commits
+  still count as automated, as before.
+
 ## [0.2.0]
 
 ### Added

@@ -46,13 +46,14 @@ from typing import Callable
 from specky import gitlog, paths
 from specky.check import CheckConfig, covering_docs
 from specky.commit_doc import (
-    _AUTO_COMMIT_MARKER,
+    HistoryConfig,
     HistoryIndex,
     MicroDoc,
     _is_revision,
     brief,
     history_names,
     is_legacy_name,
+    never_documented,
     read_history,
 )
 
@@ -550,10 +551,11 @@ def _stated_features(commits: list[_Commit], docs: dict[str, tuple[str, MicroDoc
 
 
 def _walk_mainline(
-    repo_root: Path, tip: str, since: str
+    repo_root: Path, tip: str, since: str, ignore: tuple[str, ...] = ()
 ) -> tuple[list[tuple[_Commit, list[_Commit]]], dict[str, list[str]]]:
     """The window's changes, oldest first — `(first-parent commit, the work it brought in)` — and
-    the files each first-parent commit changed. specky's doc-sync commits are not work."""
+    the files each first-parent commit changed. Commits `never_documented` (specky's own,
+    skip-tagged, CI bots, configured ignores) are not work."""
     spine = [
         line.split("\x1f")
         for line in gitlog.run(
@@ -575,7 +577,9 @@ def _walk_mainline(
     files = {lines[0]: [f for f in lines[1:] if f] for lines in gitlog.blocks(files_log)}
     groups = []
     for head, brought_in in _group_merges([sha for sha, _ in spine], introduced):
-        work = [c for c in brought_in if not c.subject.startswith(_AUTO_COMMIT_MARKER)]
+        # No author here on purpose: a bot's commit is still a change to count as automated —
+        # `humans()` drops it from the people. Only the subject-level skips mean "not work".
+        work = [c for c in brought_in if not never_documented(c.subject, ignore=ignore)]
         if work:
             groups.append((head, work))
     return groups, files
@@ -616,7 +620,7 @@ def _group_merges(
 
 
 def _unmerged_branches(
-    repo_root: Path, tip: str, since: str, mainline_name: str
+    repo_root: Path, tip: str, since: str, mainline_name: str, ignore: tuple[str, ...] = ()
 ) -> dict[str, list[_Commit]]:
     """`{branch: its commits in the window, oldest first}` for work the mainline can't reach yet.
 
@@ -640,7 +644,9 @@ def _unmerged_branches(
     )
     for c in reversed(log):  # `_log` is newest first
         ref = c.source.removeprefix("refs/remotes/").removeprefix("refs/heads/")
-        if c.subject.startswith(_AUTO_COMMIT_MARKER) or short(ref) in LONG_LIVED:
+        # Subject-level skips only, as in `_walk_mainline`: bot-authored commits still count
+        # as automated work rather than vanishing silently.
+        if never_documented(c.subject, ignore=ignore) or short(ref) in LONG_LIVED:
             continue
         if short(ref) != short(mainline_name):
             branches.setdefault(ref, []).append(c)
@@ -724,8 +730,9 @@ def collect(
         return activity
 
     since = f"--since={(now - timedelta(days=cfg.days)).isoformat()}"
-    groups, files = _walk_mainline(repo_root, tip, since)
-    branches = _unmerged_branches(repo_root, tip, since, activity.branch)
+    ignore = HistoryConfig.load(repo_root).ignore
+    groups, files = _walk_mainline(repo_root, tip, since, ignore)
+    branches = _unmerged_branches(repo_root, tip, since, activity.branch, ignore)
     docs = _history_docs(
         repo_root,
         [(tip, c.sha) for _, work in groups for c in work]

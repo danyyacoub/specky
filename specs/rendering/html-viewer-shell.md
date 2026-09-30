@@ -19,7 +19,7 @@ Redesigns the docs viewer from a rail+card layout to a desktop app shell with a 
 
 4. **Visual Polish** — Titlebar, sidebar, chat panel, and search dropdown use glass/blur effects and semantic color tokens (light/dark variants chosen by system preference). The titlebar and sidebar carry a wash of the accent so the frame reads as color rather than gray, and a doc's section headings, table headers, and blockquotes take its type's color (indigo for a feature, amber for a workflow, accent for unclassified). Icons are a hand-built SVG sprite (no icon font or new dependency). The titlebar and chat panel paint their glass on a layer behind their contents rather than on themselves, so the search dropdown and the @ picker that float out of them blur what lies beneath — the page, or the conversation — instead of letting it read through their translucent fill.
 
-5. **History Collapsing** — Commit history entries collapse by default (a long list of commits would crowd out the reference docs), but auto-expand when active or matched by a filter. Each entry is titled by its history doc's headline; a doc from before headlines existed still reads "Commit <sha8>".
+5. **History Collapsing** — Commit history entries collapse by default (a long list of commits would crowd out the reference docs), but auto-expand when active or matched by a filter. Each entry is titled by its history doc's headline; a doc from before headlines existed still reads "Commit <sha8>". Entries with `impact: internal` take no nav slot at all — their pages still render (links into them keep working), but the trail is for changes a reader cares about, and internal chores would only crowd it.
 
 6. **Home Page** — Besides the counts and the tag cloud, the home page carries a Recent activity brief of who changed what (see [rendering/home-activity-brief.md](home-activity-brief.md)).
 
@@ -32,6 +32,7 @@ Redesigns the docs viewer from a rail+card layout to a desktop app shell with a 
 | Multiple filters active | Nav and search show intersection of filters; Clear button appears |
 | Reader visits a doc with Related entries | Related section appears below main content with linked titles |
 | Reader views History section | Collapsed by default; expands on click or when matched by active filters |
+| A history doc is `impact: internal` | Its page renders and is reachable by links and search, but no sidebar entry points at it |
 | Reader's system is in dark mode | Colors adapt to dark-mode variants (no in-app toggle) |
 | Reader searches while scrolled down a doc | Results sit on frosted glass: the page behind them is blurred, never readable through the rows |
 
@@ -43,6 +44,7 @@ Redesigns the docs viewer from a rail+card layout to a desktop app shell with a 
 | Active filter is set on the page | Reader clicks Clear button | All docs reappear in sidebar and search; Clear button disappears |
 | Doc has `related: [other-doc]` in metadata | Page renders normally | "Related" section appears with a link to the other doc |
 | History section is displayed with commit-SHA titles | Page loads | History entries appear collapsed; clicking expands to show commit details |
+| A history entry is `impact: internal` and another is `impact: fix` | The site renders | Only the fix entry appears in the sidebar; the internal page still exists |
 | Active history entry is collapse/expanded when filter is applied | Filter matches an entry | Matched history entry expands automatically even if other history entries stay collapsed |
 | Multiple filter chips are active | Reader hovers over a chip | Chip shows active state (visual feedback); count/preview of matching docs updates in real time |
 | The content pane is scrolled so body text sits under the search box | Reader types a query | The result rows read cleanly; the text behind the dropdown is blurred, not visible through it, in light and dark mode |

@@ -164,6 +164,20 @@ def test_speckys_doc_commits_never_show_as_work(repo):
     assert texts == ["Refunds are capped"]
 
 
+def test_commits_that_are_never_documented_never_show_as_work(repo):
+    """`never_documented` is also the brief's cut: a `[skip ci]` or configured-ignore commit
+    isn't a change someone made, it's noise — not even counted as automated."""
+    work(repo, "ci: rotate the deploy key [skip ci]")
+    work(repo, "chore: bump the version")
+    (repo / "specky.toml").write_text('[history]\nignore = ["chore: bump*"]\n')
+    work(repo, "Cap refunds", headline="Refunds are capped")
+
+    found = brief(repo)
+    texts = [line.text for p in found.people for c in p.shipped for line in c.lines]
+    assert texts == ["Refunds are capped"]
+    assert found.automated == 0
+
+
 # --- where the words come from ------------------------------------------------------------
 
 

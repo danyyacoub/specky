@@ -23,7 +23,9 @@ Three things decide what appears:
   commits that share one entry share one line. Commits whose `impact` is `internal` are counted
   ("+2 internal") rather than listed.
 - **People, not agents.** Coding agents and bots are not people here: Claude co-author trailers,
-  Copilot, Cursor, `[bot]` accounts, and specky's own doc-sync commits all drop out.
+  Copilot, Cursor, `[bot]` accounts, and specky's own doc-sync commits all drop out. Commits that
+  are never documented — skip-tagged subjects or `[history] ignore` matches — are not work at
+  all: no line, and not even counted as automated.
 
 No model is called to build it; it is git and the committed docs only.
 
@@ -99,6 +101,7 @@ No model is called to build it; it is git and the committed docs only.
 | A branch of three commits by two people is merged | One change listed under both, labelled with the PR title, with three lines from the commits' history docs |
 | A commit is co-authored by Claude | It is credited to the human alone |
 | Dependabot or Renovate commits land | They appear in no one's list; the footer counts them as automated |
+| A commit's subject carries `[skip ci]`/`[ci skip]`/`[skip specky]`, or matches a `[history] ignore` glob | It is no line and no count — invisible to the brief, as it is to `pending_commits` |
 | A commit has no history doc | Its subject is shown in italics and counted in the footer |
 | A merged branch's three commits share one history entry | One change with one line, its headline; the change still counts three commits |
 | Two direct commits on the mainline share one history entry | One change, one line, two commits, dated by the later commit |

@@ -38,11 +38,12 @@ from specky.commit_doc import (
     DISABLE_HOOK_ENV,
     HOOK_MARKER,
     HOOK_MODES,
-    _AUTO_COMMIT_MARKER,
+    HistoryConfig,
     HistoryIndex,
     hook_disabled,
     hook_mode,
     hooks_dir,
+    never_documented,
 )
 from specky.generator import PENDING_DIR
 
@@ -512,17 +513,18 @@ def _pending(repo_root: Path) -> list[Check]:
 def _backlog(repo_root: Path) -> list[Check]:
     """Whether the hook is producing docs *now*, over a fixed window of recent commits."""
     history = HistoryIndex(paths.history_dir(repo_root))
+    ignore = HistoryConfig.load(repo_root).ignore
     log = _run(
         # --no-merges: merges are never documented, by design (see `pending_commits`).
-        ["git", "log", f"-{BACKLOG_PROBE_COMMITS}", "--no-merges", "--format=%H%x1f%s"],
+        ["git", "log", f"-{BACKLOG_PROBE_COMMITS}", "--no-merges", "--format=%H%x1f%s%x1f%aN%x1f%aE"],
         cwd=repo_root,
     ).stdout
     considered = 0
     missing = 0
     for line in log.splitlines():
-        sha, _, subject = line.partition("\x1f")
-        if subject.startswith(_AUTO_COMMIT_MARKER):
-            continue  # specky's own doc-sync commits are never documented, by design
+        sha, subject, name, email = (line.split("\x1f") + ["", ""])[:4]
+        if never_documented(subject, name, email, ignore):
+            continue  # specky's own commits, skip-tagged, CI bots and configured subjects
         considered += 1
         if history.doc_for(sha) is None:
             missing += 1

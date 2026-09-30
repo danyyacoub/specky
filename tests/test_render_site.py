@@ -159,6 +159,22 @@ def test_the_history_group_is_collapsed_by_default(site):
     assert '<details class="domain-group"><summary><svg class="icon" aria-hidden="true">' in page
 
 
+def test_internal_history_entries_stay_off_the_rail(tmp_repo, write_doc):
+    """`impact: internal` entries keep their page — links into them still work — but don't take
+    a nav slot: the history trail is for changes a reader cares about."""
+    write_doc("history/aaa11111.md", "# Commit aaa11111\n\nDid a thing.\n", {"impact": "fix"})
+    write_doc(
+        "history/bbb22222.md", "# Commit bbb22222\n\nReformatted.\n", {"impact": "internal"}
+    )
+    run_index(tmp_repo)
+    site = render_site(tmp_repo).parent
+
+    rail = (site / "index.html").read_text()
+    assert 'href="history-aaa11111.html"' in rail
+    assert 'href="history-bbb22222.html"' not in rail
+    assert (site / "history-bbb22222.html").exists()  # the page itself still renders
+
+
 def test_sidebar_titles_drop_the_module_the_group_already_names(site):
     page = (site / "index.html").read_text()
     assert "<span>Refund Flow</span>" in page

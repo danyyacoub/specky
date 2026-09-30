@@ -303,6 +303,21 @@ def test_specky_s_own_doc_sync_commits_are_not_counted_as_undocumented(covered):
     assert run_check(covered, base=base).undocumented_commits == ()
 
 
+def test_a_skip_tagged_commit_is_not_counted_as_undocumented(covered):
+    base = git(covered, "rev-parse", "HEAD").strip()
+    _commit(covered, "ci: rotate the deploy key [skip ci]", {"src/app.py": "x = 2\n"})
+
+    assert run_check(covered, base=base).undocumented_commits == ()
+
+
+def test_a_history_ignored_commit_is_not_counted_as_undocumented(covered):
+    base = git(covered, "rev-parse", "HEAD").strip()
+    (covered / "specky.toml").write_text('[history]\nignore = ["chore: bump*"]\n')
+    _commit(covered, "chore: bump the version", {"src/app.py": "x = 2\n"})
+
+    assert run_check(covered, base=base).undocumented_commits == ()
+
+
 def test_the_target_branch_moving_on_after_the_fork_is_not_this_ranges_fault(covered):
     """`git diff base...HEAD` compares against the merge base, so a file the base branch changed
     after this branch forked isn't in this branch's diff — with `..` it would be, and every

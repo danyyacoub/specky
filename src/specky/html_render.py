@@ -55,7 +55,7 @@ from urllib.parse import unquote
 import markdown as md
 from jinja2 import Environment
 
-from specky import activity, diagram_render, matrix, paths
+from specky import activity, diagram_render, frontmatter, matrix, paths
 from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
 from specky.staleness import days_behind
@@ -3229,17 +3229,27 @@ def render_site(repo_root: Path) -> Path:
             "owner": owner,
             "stale_days": stale_days,
         }
-        domains.setdefault(domain, []).append(
-            {
-                "title": title,
-                "nav_title": _nav_title(title, domain, repo_root.name),
-                "html_name": html_name,
-                "data_tags": ",".join(tags),
-                "doc_type": doc_type,
-                "type_icon": _icon_for_type(doc_type),
-                "stale": "true" if stale_days else "false",
-            }
+        # `impact: internal` history entries keep their page — links into them still work — but
+        # stay off the rail: the nav trail is for changes a reader cares about, and internal
+        # chores would crowd it (the activity brief already counts rather than lists them). The
+        # impact isn't in the index — `content` arrives frontmatter-stripped — so it's read off
+        # the file, only for the one domain that has it.
+        internal_history = domain == "history" and (
+            frontmatter.parse((repo_root / path).read_text(errors="replace"))[0].get("impact")
+            == "internal"
         )
+        if not internal_history:
+            domains.setdefault(domain, []).append(
+                {
+                    "title": title,
+                    "nav_title": _nav_title(title, domain, repo_root.name),
+                    "html_name": html_name,
+                    "data_tags": ",".join(tags),
+                    "doc_type": doc_type,
+                    "type_icon": _icon_for_type(doc_type),
+                    "stale": "true" if stale_days else "false",
+                }
+            )
         docs.append(doc)
         # Keyed by `<domain>/<topic>.md`: that's how a `related:` entry names its target, whatever
         # the docs root happens to be called (see `_related_section`).

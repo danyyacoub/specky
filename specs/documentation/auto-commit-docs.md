@@ -189,6 +189,19 @@ error after every commit and leave a `.specky/` behind in a repo that never aske
    - a commit made outside a session (a terminal, a GUI client, CI);
    - `[ai] skill_handoff = false`.
 
+   **Never pending, ever.** Some commits are excluded from the backlog outright — the same rule
+   (`never_documented`) decides for `pending_commits`, `specky check`'s undocumented list and
+   `specky doctor`'s backlog probe, so deleting a history doc for one of these stays deleted
+   instead of coming back on the next fire:
+   - specky's own doc-sync commits and any subject carrying a bracketed skip tag —
+     `[skip specky]` is the deliberate opt-out, and `[skip ci]`/`[ci skip]` are honoured so
+     CI's own commits don't get documented just because CI makes them;
+   - commits authored by a `[bot]` account (`github-actions[bot]`, `dependabot[bot]`, …) —
+     machine-made changes carry no business logic to record;
+   - subjects matching a `[history] ignore` glob in `specky.toml` (or `[tool.specky.history]`
+     in `pyproject.toml`) — e.g. `ignore = ["chore: bump*", "docs:*"]` retires a whole class of
+     commits.
+
 5. **Follow rewrites instead of re-paying for them** — `post-rewrite` reads `<old-sha> <new-sha>`
    pairs on stdin and moves each history doc onto the new shas, repointing its index rows:
    - an **entry** stays where it is, and its `commits:` are mapped all at once. An interactive
@@ -274,6 +287,7 @@ flowchart TD
 | **Hotfix by someone else** | A commit on `main`/`dev` by a different author than the open entry's | It opens its own entry |
 | **Consolidation off** | `[history] consolidate = "off"`, a detached HEAD, or a commit older than the window | One entry per commit, named for its subject |
 | **Merge skipped** | A merge commit lands | It is never pending, costs no provider call, and `specky check` / `specky doctor` don't count it as undocumented |
+| **Commit opted out** | A subject carries `[skip specky]`/`[skip ci]`/`[ci skip]`, is authored by a `[bot]`, or matches a `[history] ignore` glob | It is never pending — in the hook, in `specky sync`, and in `check`/`doctor`'s undocumented counts — and a history doc deleted for it stays deleted |
 | **Reply not structured** | The model's answer isn't the JSON asked for | The entry is written in the legacy one-paragraph shape instead of being dropped; `--refresh-history` picks it up later |
 | **Classified late, linked anyway** | Classification raises for a commit | The history entry is still written, without `features:`; the error is reported |
 | **Backlog closed late** | A commit arrived by a route no hook fires for (cherry-pick, `git am`, squash-merge, a contributor with no hook) | The next fire of *any* hook documents it, up to the per-fire cap |
@@ -307,6 +321,8 @@ flowchart TD
 | `feat/y` branched off the unmerged `feat/x` | A commit on `feat/y` is documented | It opens `feat-y.md`; `feat-x.md` is unchanged |
 | `feat/x` merged into the mainline, then committed on again | The new commit is documented | It opens `feat-x-2.md` |
 | `[history] consolidate = "off"` | Two commits on a feature branch are documented | Each has its own entry, named for its subject |
+| `[history] ignore = ["chore: bump*"]` | A `chore: bump …` commit lands, and its history doc is later deleted | It never appears in `specky pending`, and the deletion is never regenerated |
+| A commit whose subject ends `[ci skip]`, or authored by `dependabot[bot]` | The hook fires | No history doc is written and nothing is reported pending |
 | Commits on a branch authored 30 days ago | `specky sync --since …` documents them | One entry per commit, their micro-docs fetched concurrently |
 | A branch's entry extended by a fire | The doc-sync commit is made | Its `Specky-Documents` trailer names the commit that fire documented, not the entry's first |
 | One doc-sync commit documenting two commits and updating a feature doc, with the trailer | `specky index` runs | `doc_files` pairs both commits' files with the feature doc |

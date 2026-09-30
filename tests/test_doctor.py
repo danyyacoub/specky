@@ -469,6 +469,18 @@ def test_speckys_own_doc_sync_commits_dont_count_as_a_backlog(in_repo):
     assert "of the last 1 documentable commits" in checks[0].detail  # 2 commits, 1 considered
 
 
+def test_skipped_commits_dont_count_as_a_backlog(in_repo):
+    """`[skip ci]`/`[bot]`/`[history] ignore` commits never get docs by design — counting them
+    would warn on a repo that's healthy, same as the doc-sync commit itself."""
+    git(in_repo, "commit", "-q", "-m", "ci: bump deps [skip ci]", "--allow-empty")
+    (in_repo / "specky.toml").write_text('[history]\nignore = ["chore:*"]\n')
+    git(in_repo, "add", "specky.toml")
+    git(in_repo, "commit", "-q", "-m", "chore: configure specky ignores")
+
+    checks = _by_section(doctor.run_checks())["docs"]
+    assert "of the last 1 documentable commits" in checks[0].detail  # still just the initial one
+
+
 def test_the_backlog_probe_is_bounded(in_repo, monkeypatch):
     """specky runs on other people's repos, which have more than 40 commits. The probe answers
     "is the hook working now", so it must not walk history to do it."""

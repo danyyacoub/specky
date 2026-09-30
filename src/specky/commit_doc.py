@@ -37,6 +37,7 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Sequence
 
@@ -119,6 +120,32 @@ def hook_disabled() -> bool:
 # at the top of `main()` so that commit's own post-commit firing recognizes itself and returns
 # immediately instead of generating a doc *for* the doc-sync commit and recursing forever.
 _AUTO_COMMIT_MARKER = "docs: sync specky docs [skip specky]"
+
+# Bracketed tags in a commit subject that mean "no history doc, ever", matched case-insensitively
+# anywhere in the subject: CI's own `[skip ci]`/`[ci skip]` conventions and specky's `[skip
+# specky]` opt-out (the marker above already covers specky's own commits; this is for everyone
+# else's). The tag must be bracketed so prose like "skip specky parsing" can't silence a commit.
+_SKIP_SUBJECT_TAG = re.compile(
+    r"\[(?:skip ci|ci skip|skip specky|specky skip)\]", re.IGNORECASE
+)
+
+
+def never_documented(
+    subject: str, author_name: str = "", author_email: str = "", ignore: tuple[str, ...] = ()
+) -> bool:
+    """True when a commit must never get a history doc — shared by `pending_commits`, `check` and
+    `doctor`, so a doc deleted on purpose stays gone instead of being regenerated.
+
+    Skipped: specky's own doc-sync commits, subjects carrying a skip tag (`[skip ci]`/`[ci skip]`
+    cover the commits CI makes on its own; `[skip specky]` is the deliberate opt-out), bot
+    authors (`github-actions[bot]`, `dependabot[bot]` and friends, recognised by the `[bot]`
+    marker rather than a name list), and subjects matching a `[history] ignore` glob.
+    """
+    if subject.startswith(_AUTO_COMMIT_MARKER) or _SKIP_SUBJECT_TAG.search(subject):
+        return True
+    if "[bot]" in author_name.lower() or "[bot]" in author_email.lower():
+        return True
+    return any(fnmatch(subject, pattern) for pattern in ignore)
 
 # Where a fire that couldn't commit (git midway through a rebase or a cherry-pick) leaves the list of
 # paths for the next fire to commit. Under `.specky/`, so it's gitignored and per-checkout.
@@ -724,6 +751,9 @@ class HistoryConfig:
     consolidate: str = HISTORY_CONSOLIDATE
     window_days: int = HISTORY_WINDOW_DAYS
     long_lived: tuple[str, ...] = ()
+    # Subject globs for commits that never get a history doc ("chore: bump*", "docs:*"). Deleting
+    # such a doc then sticks: the commit stays off `pending_commits` instead of regenerating.
+    ignore: tuple[str, ...] = ()
 
     @classmethod
     def load(cls, repo_root: Path) -> HistoryConfig:
@@ -736,10 +766,12 @@ class HistoryConfig:
         except (TypeError, ValueError):
             days = HISTORY_WINDOW_DAYS
         branches = table.get("long_lived", ())
+        ignored = table.get("ignore", ())
         return cls(
             consolidate=mode if mode in HISTORY_CONSOLIDATE_MODES else HISTORY_CONSOLIDATE,
             window_days=days,
             long_lived=tuple([branches] if isinstance(branches, str) else branches),
+            ignore=tuple([ignored] if isinstance(ignored, str) else ignored),
         )
 
 
@@ -928,8 +960,9 @@ def pending_commits(
     history_dir = paths.history_dir(repo_root)
 
     # `git log` rather than `rev-list` for the subject line, which the progress and --dry-run
-    # output both want; the revision walking is identical.
-    args = ["git", "log", "--reverse", "--no-merges", "--format=%H%x1f%s"]
+    # output both want; the revision walking is identical. Author fields ride along for
+    # `never_documented`'s bot check.
+    args = ["git", "log", "--reverse", "--no-merges", "--format=%H%x1f%s%x1f%aN%x1f%aE"]
     if depth:
         # git applies `-n` before `--reverse`, so this is the newest `depth` commits, reversed.
         args += [f"-n{depth}"]
@@ -946,10 +979,11 @@ def pending_commits(
         args, cwd=repo_root, capture_output=True, text=True, errors="replace", check=True
     ).stdout
     index = HistoryIndex(history_dir)
+    ignore = HistoryConfig.load(repo_root).ignore
     pending = []
     for line in log.splitlines():
-        sha, _, subject = line.partition("\x1f")
-        if subject.startswith(_AUTO_COMMIT_MARKER):
+        sha, subject, name, email = (line.split("\x1f") + ["", ""])[:4]
+        if never_documented(subject, name, email, ignore):
             continue
         doc = index.doc_for(sha)
         wanted = _is_legacy(doc) if legacy else doc is None
