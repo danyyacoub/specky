@@ -9,7 +9,8 @@ tags: [documentation]
 
 Every commit ends up in an AI-written history entry in `specs/history/` (`<docs root>/history/` —
 see [documentation/doc-adoption.md](doc-adoption.md)). A branch's recent commits share one entry
-(see One entry per branch below). The entry has a fixed structure because three readers use
+(see One entry per branch below); some commits are never documented at all (see Never documented
+below). The entry has a fixed structure because three readers use
 different parts of it:
 
 - A **headline** is the doc's title: one line in its users' terms about what the product now does
@@ -17,7 +18,9 @@ different parts of it:
   ([rendering/home-activity-brief.md](../rendering/home-activity-brief.md)), and the viewer's
   History group shows them instead of "Commit 02738efb".
 - An **`impact`** is one of `feature`, `improvement`, `fix` or `internal`. `internal` means no
-  behaviour a user can observe, and the brief folds those commits away.
+  behaviour a user can observe. The brief folds those commits away, counting them rather than
+  listing them ("+2 internal"), and the viewer's sidebar does the same: an `internal` entry keeps
+  its page, reachable by link and by search, but adds no row to the nav trail.
 - **What changed** and **Why** sections hold the prose the Spec Assistant retrieves when asked why
   something changed. `Why` is left out when neither the commit message nor the diff states a
   reason, rather than letting the model make one up.
@@ -32,6 +35,25 @@ Docs written before entries existed are named `<sha8>.md` and record one `sha:`.
 read everywhere, and nothing renames them. Docs older still (`# Commit <sha8>` and one paragraph)
 are shown by their first sentence. `specky sync --refresh-history` rewrites them in the new shape
 ([cli/sync.md](../cli/sync.md)).
+
+### Never documented
+
+One predicate, `never_documented`, decides which commits can be pending at all, and
+`pending_commits`, the hook, `specky sync`, `specky check`'s undocumented list and `specky doctor`'s
+backlog probe all share it. Because the rule is shared, deleting a history doc for one of these
+commits stays deleted instead of being regenerated on the next fire.
+
+- specky's own doc-sync commits, and any subject carrying a bracketed skip tag — `[skip specky]`
+is the deliberate opt-out, and `[skip ci]`/`[ci skip]` are honoured so CI's own commits don't get
+documented just because CI makes them;
+- commits authored by a `[bot]` account (`github-actions[bot]`, `dependabot[bot]`, …) —
+machine-made changes carry no business logic to record;
+- subjects matching a `[history] ignore` glob in `specky.toml` (or `[tool.specky.history]` in
+`pyproject.toml`) — e.g. `ignore = ["chore: bump*", "docs:*"]` retires a whole class of commits.
+
+The activity brief drops the subject-level skips — skip tags and `[history] ignore` matches —
+entirely: they are no line and not even counted as automated. Bot-authored commits still count as
+automated there, as before.
 
 ### One entry per branch
 
