@@ -1,22 +1,23 @@
 ---
-commits: [86954aae0ea324b9a3dbf81d74c39d6bd1b13b45, 091fadbcb35487ceac59bba0843b2451adf98b3a]
+commits: [86954aae0ea324b9a3dbf81d74c39d6bd1b13b45, 091fadbcb35487ceac59bba0843b2451adf98b3a, 3372b4f4594b69f58e692eb2d020c27ba6a4cfe5]
 branch: main
-impact: improvement
-features: [specs/rendering/matrix-tables.md, specs/rendering/html-viewer-shell.md]
+impact: fix
+features: [specs/rendering/matrix-tables.md, specs/rendering/html-viewer-shell.md, specs/rendering/home-activity-brief.md]
 ---
 
-# Sidebar now lists a domain's workflows before its features
+# Activity brief reads the docs when a checkout has no real git history
 
-- **Date:** 2026-09-30T11:27:25+02:00 → 2026-09-30T14:59:51+02:00
+- **Date:** 2026-09-30T11:27:25+02:00 → 2026-09-30T15:00:01+02:00
 - **Author:** dany <dany.yacoub@gmail.com>
 - **Commits:**
     - `86954aae` feat(rendering): add ```matrix scenario tables that run as tests
     - `091fadbc` feat(viewer): sort workflows before features in each sidebar domain
+    - `3372b4f4` feat(rendering): brief recent activity from the docs when git history is synthetic
 
 ## What changed
 
-Docs can include a ```matrix block declaring typed inputs, expected outputs and optional formulas, one row per case. `specky tests` turns each block into a parametrized test reading rows from a `.matrix.json` refreshed on every run (even without `--force`), and `specky tests --check` writes nothing and exits 1 when that data is behind the docs. In the HTML viewer's sidebar, each domain now groups its docs as workflows first, then features, then untyped docs, each group alphabetical; previously all docs in a domain were listed together alphabetically by title.
+The home page's recent-activity brief now copes with a checkout whose git history isn't the repo's — the deployed docs image, where the docs tree is copied into a fresh `git init` of one synthetic commit. Where it previously reported that single commit as the only work ever done, it now reads the history docs themselves: each in-window doc is one change under its recorded author, newest 10 at most, and the header says the answers came from the docs. The same applies when there are docs and no commits at all. Docs can also include a ```matrix block declaring typed inputs, expected outputs and optional formulas, one row per case; `specky tests` turns each block into a parametrized test reading rows from a `.matrix.json` refreshed on every run, and `specky tests --check` writes nothing and exits 1 when that data is behind the docs. In the HTML viewer's sidebar, each domain now groups its docs as workflows first, then features, then untyped docs, each group alphabetical.
 
 ## Why
 
-Rows that state their inputs and expected outputs are independent statements of the answer, whereas formula-derived rows are confidently wrong whenever the formula is and would pin that on the code; keeping the generated data refreshed lets a doc edit reach an already-wired test without regenerating it. A domain's workflows are its guided paths, so they lead the sidebar group ahead of the feature reference material.
+A docs image loses the git history the brief was built on, so a synthetic commit was being reported as the only work ever done; the docs still record what changed and who wrote it. A domain's workflows are its guided paths, so they lead the sidebar group ahead of the feature reference material, and matrix rows that state their inputs and expected outputs are independent statements of the answer, whereas formula-derived rows are confidently wrong whenever the formula is.
