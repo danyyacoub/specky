@@ -7,6 +7,8 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.2.2]
+
 ### Added
 - **Business logic only.** A history entry is now written only for a commit that changes the
   product's rules or behaviour; tests, docs, tooling, CI, infrastructure, dependency and version
