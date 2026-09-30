@@ -2339,6 +2339,11 @@ APP_JS_BLOCKS = (
 _DOMAIN_ORDER_FIRST = "root"
 _DOMAIN_ORDER_LAST = "history"
 
+# Within a domain's sidebar group, docs sort by type before their title: a domain's workflows
+# are its guided paths, so they lead; its features (the reference material) follow; and docs
+# with no type — or a type outside this map — sort last. Anything not listed gets one bucket.
+_NAV_TYPE_ORDER = {"workflow": 0, "feature": 1}
+
 # Curated icon per known domain (directory under specs/); any domain not listed here
 # (domains aren't a closed set — they're just directory names) falls back to a generic
 # folder icon rather than guessing.
@@ -3102,7 +3107,12 @@ def _render_rail(
         {
             "name": domain,
             "icon": _icon_for_domain(domain),
-            "docs": sorted(domains[domain], key=lambda d: d["nav_title"]),
+            # Workflows first, then features, then everything else — a domain's how-to trail
+            # reads before its feature reference, and each group stays alphabetical.
+            "docs": sorted(
+                domains[domain],
+                key=lambda d: (_NAV_TYPE_ORDER.get(d["doc_type"], 2), d["nav_title"]),
+            ),
             # "history" is the changelog trail, one entry per branch or commit — collapsed
             # by default so it doesn't crowd out the rest of the nav. NAV_JS re-opens the
             # group when the page you're on is one of them.
