@@ -7,6 +7,16 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Added
+- **Docs-only activity brief.** When a checkout's git history isn't the repo's — the deployed
+  docs site is the case: the docs tree copied into a fresh `git init` of one synthetic commit —
+  the home page's Recent activity reads the history docs directly instead of reporting the
+  synthetic commit as the only work that ever happened. Each in-window doc is one change under
+  its recorded author (newest 10), the header says the answers came from the docs, and the same
+  fallback covers a checkout with docs and no commits at all.
+
 ### Changed
 - **History entries per branch.** With the hook on every commit, a branch's commits now share one
   history entry instead of getting one each. Each new commit rewrites the entry to describe the
