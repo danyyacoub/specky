@@ -33,6 +33,7 @@ import json
 import os
 import shlex
 import shutil
+import socket
 import sqlite3
 import subprocess
 import time
@@ -102,6 +103,24 @@ class ToolLoopUnsupported(RuntimeError):
     """
 
 
+class ProviderUnreachable(RuntimeError):
+    """The request never got an answer: the endpoint's host doesn't resolve, or the connection was
+    refused, dropped or timed out.
+
+    Raised in place of the SDK's bare "Connection error.", which names neither where the request was
+    going nor what stopped it. Behind a deployed `specky serve` that message is all the reader sees,
+    and "which host, and why" is the whole diagnosis.
+    """
+
+
+def _root_cause(exc: BaseException) -> BaseException:
+    """The innermost exception in the chain. The SDK's connection error wraps httpx's, which wraps
+    the transport's, which wraps the one that says what happened (`socket.gaierror` and friends)."""
+    while (inner := exc.__cause__ or exc.__context__) is not None:
+        exc = inner
+    return exc
+
+
 # What a `converse` is handed. `tools` is only read for `.name`, `.description` and `.schema`, and
 # `invoke(name, arguments) -> str` runs one and returns its result as text — so this module never
 # learns what any particular tool *means*, which is what keeps `specky.tools` out of its imports and
@@ -143,6 +162,25 @@ class _MessagesAPIProvider:
     def _client(self):
         raise NotImplementedError
 
+    def _create(self, client, kwargs: dict):
+        """`client.messages.create`, with a failed connection explained instead of passed on as the
+        SDK's "Connection error.". A timeout is one too (`APITimeoutError` subclasses it), and gets
+        the same treatment: its own message doesn't say where it was waiting either."""
+        import anthropic
+
+        try:
+            return client.messages.create(**kwargs)
+        except anthropic.APIConnectionError as exc:
+            raise ProviderUnreachable(self._unreachable(exc)) from exc
+
+    def _unreachable(self, exc) -> str:
+        url = exc.request.url
+        cause = _root_cause(exc)
+        # The resolver's own wording differs by platform ("nodename nor servname provided" on macOS,
+        # "Name or service not known" on Linux) and says the same thing less plainly.
+        why = "no such host" if isinstance(cause, socket.gaierror) else str(cause) or str(exc)
+        return f"couldn't reach {url.scheme}://{url.host}{url.path}: {why}"
+
     def generate(self, prompt: str, *, prefix: str = "", task: str = "") -> str:
         client = self._client()
         # The stable half goes in `system` with a cache breakpoint on it. A prefix shorter than the
@@ -162,7 +200,7 @@ class _MessagesAPIProvider:
             kwargs["system"] = [
                 {"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}
             ]
-        response = client.messages.create(**kwargs)
+        response = self._create(client, kwargs)
         if response.stop_reason == "max_tokens":
             raise TruncatedResponse(
                 f"{self.model} hit the {self.max_tokens}-token output limit — "
@@ -226,7 +264,7 @@ class _MessagesAPIProvider:
             if forcing:
                 kwargs["tool_choice"] = {"type": "tool", "name": final_tool}
 
-            response = client.messages.create(**kwargs)
+            response = self._create(client, kwargs)
             said = "".join(block.text for block in response.content if block.type == "text")
             if on_turn:
                 on_turn(sent, len(said))
@@ -370,6 +408,24 @@ class BedrockProvider(_MessagesAPIProvider):
             aws_region=self.aws_region or None,
             aws_profile=self.aws_profile or None,
             timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+
+    def _unreachable(self, exc) -> str:
+        """Mantle is a separate endpoint (`bedrock-mantle.<region>.api.aws`) from bedrock-runtime,
+        in fewer regions — a region that runs Bedrock needn't have a Mantle host at all, and then
+        the name simply doesn't resolve. Two regions over, the same config works, so say which
+        region was asked and how to see what another one serves."""
+        reason = super()._unreachable(exc)
+        if not isinstance(_root_cause(exc), socket.gaierror):
+            return reason
+        # The region is in the host rather than only in `aws_region`, which can be left empty for
+        # AWS_REGION or the profile to decide.
+        host = exc.request.url.host
+        region = host.split(".")[1] if host.startswith("bedrock-mantle.") else "this region"
+        return (
+            f"{reason} — Bedrock Mantle, which the bedrock provider calls, may not be offered in "
+            f"{region}. Point `aws_region` in [ai] (or SPECKY_AI_AWS_REGION) at a region that "
+            "serves your model; GET /v1/models on a region's Mantle host lists what it serves"
         )
 
 

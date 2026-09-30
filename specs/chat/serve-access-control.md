@@ -23,6 +23,8 @@ related: [chat/local-rag-server]
 
 A deployed server usually wants other models than a laptop, and a container built from the repo has no `specky.toml` at all (it's gitignored). So the Spec Assistant's provider can come from the environment too: `SPECKY_AI_PROVIDER` and its keys make the whole `[ai]` table, and `SPECKY_AI_CHAT_MODEL` / `SPECKY_AI_DRAFT_MODEL` route its answers and its drafts to their own models ([provider cost controls](../ai/provider-cost-controls.md)). A server should use an API provider — `bedrock` on AWS needs no key at all, since the container's IAM role is its credential: `provider = "agent"` needs a coding agent logged in on the machine, and it has no tool channel, so drafts lose their code-reading steps.
 
+When the provider fails there, the reader's panel and the server's logs both say why. A request that was itself wrong — no question, a body that isn't JSON, a draft step that can't be taken — is a 400 with words the reader can act on. Anything else failed on the server's side and comes back as a 500 carrying the error. That covers a provider that can't be reached or refuses the call, a search index that was never built, and a broken config. The traceback also goes to stderr, where a container's log driver picks it up, since the access log is kept quiet. An unreachable provider names the URL it was calling and the cause, rather than the SDK's bare "Connection error." ([Bedrock provider](../integration/bedrock-provider.md) for the region case).
+
 ## What the open default costs
 
 With `allow_origins = ["*"]` and no token, any page open in a reader's browser can POST to the port and read answers derived from this repo's docs. Bound to `127.0.0.1` that's limited to software already running on the machine; bound wider it's anyone who can reach the port. The default is open on purpose — it's what makes a site served from any other port work untouched — and `allow_origins`/`token` are how a repo whose docs aren't for everyone narrows it.
@@ -37,6 +39,8 @@ With `allow_origins = ["*"]` and no token, any page open in a reader's browser c
 | Viewer served by some unrelated web server | Its API calls fall back to the chat port and stay there |
 | Viewer opened from `file://` | Chat reaches `127.0.0.1:<port>` cross-origin, allowed by default |
 | `GET /search` with no `q` | 400 saying `q is required` |
+| POST `/chat` with an empty question | 400 saying `question is required` |
+| The provider can't be reached or fails | 500 carrying the error; `specky serve: POST /chat failed` and the traceback on stderr |
 | `GET /search?limit=100000` | Clamped to 100 rows |
 | `allow_origins` narrowed, request from elsewhere | 403, no CORS headers, no provider call |
 | `token` set, header missing or wrong | 403 on the API; static files still served |
@@ -52,6 +56,8 @@ With `allow_origins = ["*"]` and no token, any page open in a reader's browser c
 | Given | When | Then |
 |---|---|---|
 | Default config | POST `/chat` from any origin | 200, `Access-Control-Allow-Origin: *` |
+| Default config | POST `/chat` with `{"question": "  "}` | 400, `question is required`, provider not called |
+| A provider whose endpoint doesn't resolve | POST `/chat` | 500 naming the unreachable URL; the traceback is on stderr |
 | `allow_origins = ["https://docs.example"]` | POST from `https://evil.example` | 403, no CORS header, provider not called |
 | Same config | POST from `https://docs.example` | 200, origin echoed, `Vary: Origin` |
 | `token = "s3cret"` | POST without the header | 403 naming `X-Specky-Token` |

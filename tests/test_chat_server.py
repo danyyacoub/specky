@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from specky import chat_server, db
+from specky.ai_provider import ProviderUnreachable
 from specky.chat_server import (
     INTENT_EXPLORE,
     INTENT_SPEC,
@@ -873,6 +874,35 @@ def test_a_draft_error_is_a_400_the_panel_can_show(tmp_repo, drafting):
         status, _, raw = _request(port, "POST", "/draft", body={"action": "explode"})
     assert status == 400
     assert "Unknown draft action" in json.loads(raw)["error"]
+
+
+def test_a_chat_without_a_question_is_a_400(tmp_repo, answering):
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(port, "POST", "/chat", body={"question": "  "})
+    assert (status, json.loads(raw)) == (400, {"error": "question is required"})
+    assert answering == []
+
+
+def test_a_server_side_failure_is_a_500_and_its_traceback_is_logged(
+    tmp_repo, monkeypatch, capsys
+):
+    """An unreachable provider isn't the reader's mistake. It used to come back as a 400 whose body
+    was the only record of it — the access log is silenced, so a deployed server's logs said
+    nothing."""
+
+    def unreachable(*_args, **_kwargs):
+        raise ProviderUnreachable(
+            "couldn't reach https://bedrock-mantle.eu-west-3.api.aws: no such host"
+        )
+
+    monkeypatch.setattr(chat_server, "answer_question", unreachable)
+    with _running(tmp_repo) as port:
+        status, _, raw = _request(port, "POST", "/chat", body={"question": "q"})
+    assert status == 500
+    assert "bedrock-mantle.eu-west-3.api.aws" in json.loads(raw)["error"]
+    logged = capsys.readouterr().err
+    assert "specky serve: POST /chat failed" in logged
+    assert "Traceback" in logged and "ProviderUnreachable" in logged
 
 
 def test_draft_obeys_the_origin_and_token_policy(tmp_repo, drafting):

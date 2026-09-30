@@ -57,8 +57,10 @@ import mimetypes
 import os
 import re
 import secrets
+import sys
 import threading
 import tomllib
+import traceback
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -464,6 +466,11 @@ def draft_step(repo_root: Path, body: dict) -> dict:
     )
 
 
+class BadRequest(ValueError):
+    """The request was wrong, so it's a 400. Its own class rather than a bare ValueError so one
+    raised deep in retrieval or a provider still counts as the server's failure — a 500, logged."""
+
+
 @dataclass(frozen=True)
 class ServeConfig:
     """`[serve]` from specky.toml, with CLI flags taking precedence.
@@ -663,7 +670,7 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
                     return
                 question = body.get("question", "").strip()
                 if not question:
-                    raise ValueError("question is required")
+                    raise BadRequest("question is required")
                 result = answer_question(
                     repo_root,
                     question,
@@ -674,8 +681,17 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
                 if "answer" in result:
                     conversations.record(session, question, result["answer"])
                 self._json(200, result)
-            except Exception as exc:
+            except (json.JSONDecodeError, BadRequest, spec_draft.DraftError) as exc:
+                # The request itself, or a draft step the reader can redo: their words to act on.
                 self._json(400, {"error": str(exc)})
+            except Exception as exc:
+                # Anything else broke on this side — the provider unreachable or refusing, no index,
+                # a bad config — and asking again won't fix it. The traceback goes to stderr because
+                # `log_message` keeps the access log quiet, and behind a deployed server the logs
+                # are the only place an operator can read one.
+                print(f"specky serve: POST {path} failed", file=sys.stderr, flush=True)
+                traceback.print_exc()
+                self._json(500, {"error": str(exc)})
 
         def _search(self, query: str, limit: int) -> None:
             """The viewer's search box, answered from the FTS5 index instead of the payload the

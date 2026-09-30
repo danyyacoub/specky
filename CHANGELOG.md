@@ -7,6 +7,15 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+### Fixed
+- **A Spec Assistant that can't reach its provider says why.** The SDK's bare "Connection error."
+  now names the URL it was calling and the cause. On `bedrock`, a Mantle host that doesn't resolve
+  names the region and points at `aws_region` / `SPECKY_AI_AWS_REGION`, since a region can run
+  Bedrock with no Mantle endpoint (eu-west-3 has none).
+- **`specky serve` tells a server's failure from a bad request.** Only a bad request (no question,
+  a body that isn't JSON, a draft step that can't be taken) is a 400 now. Anything else is a 500
+  whose traceback goes to stderr, so a deployed server's logs show it.
+
 ## [0.2.2]
 
 ### Added

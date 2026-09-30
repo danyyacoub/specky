@@ -1,3 +1,4 @@
+import socket
 import subprocess
 
 import pytest
@@ -385,6 +386,47 @@ def test_bedrock_without_the_aws_sdk_names_the_install(monkeypatch):
     )
     with pytest.raises(RuntimeError, match=r"specky\[bedrock\]"):
         ai_provider.BedrockProvider().generate("prompt")
+
+
+def _unreachable_client(url: str, cause: BaseException):
+    """A client whose request dies the way the SDK's does: a bare APIConnectionError, raised from
+    the transport's own error."""
+    import anthropic
+    import httpx
+
+    class Messages:
+        def create(self, **kwargs):
+            try:
+                raise cause
+            except BaseException as inner:
+                raise anthropic.APIConnectionError(request=httpx.Request("POST", url)) from inner
+
+    return type("Client", (), {"messages": Messages()})()
+
+
+def test_bedrock_in_a_region_without_mantle_names_the_region(monkeypatch):
+    """The SDK says only "Connection error." — behind a deployed `specky serve` in eu-west-3 that was
+    the whole message, when the cause was that Mantle has no host in that region."""
+    url = "https://bedrock-mantle.eu-west-3.api.aws/anthropic/v1/messages"
+    client = _unreachable_client(url, socket.gaierror(8, "nodename nor servname provided"))
+    monkeypatch.setattr(ai_provider.BedrockProvider, "_client", lambda self: client)
+
+    with pytest.raises(ai_provider.ProviderUnreachable) as caught:
+        load_provider({"provider": "bedrock", "aws_region": "eu-west-3"}).generate("prompt")
+    message = str(caught.value)
+    assert f"couldn't reach {url}: no such host" in message
+    assert "may not be offered in eu-west-3" in message
+    assert "SPECKY_AI_AWS_REGION" in message
+
+
+def test_an_unreachable_endpoint_is_named_with_its_cause(monkeypatch):
+    url = "https://api.anthropic.com/v1/messages"
+    client = _unreachable_client(url, ConnectionRefusedError(61, "Connection refused"))
+    monkeypatch.setattr(ai_provider.AnthropicProvider, "_client", lambda self: client)
+
+    with pytest.raises(ai_provider.ProviderUnreachable) as caught:
+        load_provider({"provider": "anthropic"}).generate("prompt")
+    assert str(caught.value) == f"couldn't reach {url}: [Errno 61] Connection refused"
 
 
 def test_bedrock_has_tools_but_no_batch():
