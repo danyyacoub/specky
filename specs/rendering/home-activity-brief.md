@@ -10,8 +10,8 @@ sources: [src/specky/activity.py, src/specky/html_render.py, src/specky/commit_d
 ## What It Does
 
 The viewer's home page has a **Recent activity** section: what changed on the team's mainline over
-the last week, and who changed it. It's written for a product owner who wants the shape of the
-work, not its commits. It has two parts:
+ the last week, and who changed it. It's written for a product owner who wants the shape of the
+ work, not its commits. It has two parts:
 
 - **What changed, by feature** — a digest that needs no clicking. Every shipped change is listed
   under the feature doc it is about, each with its impact, its headline and its *What changed*
@@ -88,9 +88,9 @@ No model is called to build it; it is git and the committed docs only.
    the history docs' `features:`, then feature docs the change edited, and only when neither says
    anything, the two docs that cover its code most strongly.
 7. **Digest** — each shipped change's documented, non-`internal` lines, grouped by feature. A line
-   goes under the first doc its own entry's `features:` names that has a page on the site, else
-   the first of its change's chips that does, else Other. It is listed once, never under two
-   features, so the digest doesn't read as more work than there was. A legacy doc's paragraph is
+   goes under the first doc its own entry’s `features:` names that has a page on the site, else
+   the first of its change’s chips that does, else Other. It is listed once, never under two
+   features, so the digest doesn’t read as more work than there was. A legacy doc’s paragraph is
    already its line, so it shows no second paragraph.
 8. **Render** — the digest first, then people by most recent activity, each row closed until
    clicked:
