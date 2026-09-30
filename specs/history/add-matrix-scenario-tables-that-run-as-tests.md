@@ -1,13 +1,13 @@
 ---
-commits: [86954aae0ea324b9a3dbf81d74c39d6bd1b13b45, 091fadbcb35487ceac59bba0843b2451adf98b3a, 3372b4f4594b69f58e692eb2d020c27ba6a4cfe5, b09bcde09a6396dd92ff2898fb0a5f1100520c62, 3437ecd376e081a909520e776f496cec8fa533d1, e5eb576b67661c2959cf599f1774fd244cc8f0aa]
+commits: [86954aae0ea324b9a3dbf81d74c39d6bd1b13b45, 091fadbcb35487ceac59bba0843b2451adf98b3a, 3372b4f4594b69f58e692eb2d020c27ba6a4cfe5, b09bcde09a6396dd92ff2898fb0a5f1100520c62, 3437ecd376e081a909520e776f496cec8fa533d1, e5eb576b67661c2959cf599f1774fd244cc8f0aa, a55aa8c006a4aa35894e9984c3111747c3db9694]
 branch: main
 impact: feature
-features: [specs/rendering/matrix-tables.md, specs/rendering/html-viewer-shell.md, specs/rendering/home-activity-brief.md, specs/documentation/auto-commit-docs.md]
+features: [specs/rendering/matrix-tables.md, specs/rendering/html-viewer-shell.md, specs/rendering/home-activity-brief.md, specs/documentation/auto-commit-docs.md, specs/documentation/business-logic-filtering.md]
 ---
 
-# specky 0.2.1 ships docs-only brief, matrix tests, sidebar order and never-documented commits
+# specky records only commits that change business logic, skipping machine-made and non-product work
 
-- **Date:** 2026-09-30T11:27:25+02:00 → 2026-09-30T16:11:03+02:00
+- **Date:** 2026-09-30T11:27:25+02:00 → 2026-09-30T17:21:56+02:00
 - **Author:** dany <dany.yacoub@gmail.com>
 - **Commits:**
     - `86954aae` feat(rendering): add ```matrix scenario tables that run as tests
@@ -16,11 +16,12 @@ features: [specs/rendering/matrix-tables.md, specs/rendering/html-viewer-shell.m
     - `b09bcde0` chore: release 0.2.0
     - `3437ecd3` feat(history): never document skipped, bot, or ignored commits
     - `e5eb576b` chore: release 0.2.1
+    - `a55aa8c0` feat(history): document only commits that change business logic
 
 ## What changed
 
-The home page's recent-activity brief now copes with a checkout whose git history isn't the repo's — the deployed docs image, where the docs tree is copied into a fresh `git init` of one synthetic commit: instead of reporting that commit as the only work ever done, it reads the history docs themselves, one change per in-window doc under its recorded author, at most 10, with the header saying the answers came from the docs (the same when there are docs and no commits at all). Docs can include a ```matrix block declaring typed inputs, expected outputs and optional formulas, one row per case; `specky tests` turns each block into a parametrized test reading rows from a `.matrix.json` refreshed on every run, and `specky tests --check` writes nothing and exits 1 when that data is behind the docs. In the HTML viewer's sidebar, each domain groups workflows first, then features, then untyped docs, alphabetically within each group, and history entries marked `impact: internal` keep their page but drop out of the sidebar. Some commits are never documented at all: one shared rule now excludes bracketed skip tags (`[skip specky]`, `[skip ci]`, `[ci skip]`), `[bot]`-authored commits and subjects matching a new `[history] ignore` glob list in `specky.toml` or `pyproject.toml` from `pending_commits`, the hook, `specky sync`, `specky check` and `specky doctor`, so a doc deleted for such a commit stays deleted; the activity brief drops those skip-tagged and ignored commits entirely, while bot commits still count as automated. This release sets the version to 0.2.1 across the package and plugin manifest.
+specky now documents a commit only when it changes the product's rules or behaviour. Commits touching no business file — tests, docs, CI, infrastructure, dependency and version bumps, editor and agent config — are never pending and cost no AI call; a built-in list decides which files count, and `[history] paths` narrows it while `[history] exclude_paths` adds globs, with `!glob` to re-include. For any other commit, the first micro-doc call can answer `{"skip": true}`, which stops it before classification and any feature-doc update, leaves an entry it would have extended as it was, and records it in `specs/history/skipped.txt` so it is never asked about again; deleting that line re-queues it, and an amend or rebase carries it along. The `document-commits` skill records a skip with `specky record-commit <sha>` and `{"skip": true}` on stdin. The prompts read only the business files' part of the diff plus a list of those files. This joins the earlier rules that already exclude bracketed skip tags (`[skip specky]`, `[skip ci]`, `[ci skip]`), `[bot]`-authored commits and subjects matching `[history] ignore` globs from `pending_commits`, the hook, `specky sync`, `specky check` and `specky doctor`, all of which now also apply to the activity brief and drop skipped commits entirely while bot commits still count as automated. `specky sync`'s estimate is now one to three AI calls per commit, was two to three. The release also ships the docs-only activity brief for git histories that aren't the repo's, ```matrix scenario tables run as parametrized tests (`specky tests`, with `--check` writing nothing and exiting 1 when stale), workflows-before-features sidebar ordering with internal-history pages dropping out of the sidebar, and version 0.2.1 across package and plugin manifest.
 
 ## Why
 
-A docs image loses the git history the brief was built on, so a synthetic commit was being reported as the only work ever done; the docs still record what changed and who wrote it. A domain's workflows are its guided paths, so they lead the sidebar group ahead of the feature reference material, and matrix rows that state their inputs and expected outputs are independent statements of the answer, whereas formula-derived rows are confidently wrong whenever the formula is. Machine-made and deliberately skipped commits carry nothing worth recording, so one rule keeps them out of the backlog everywhere and lets a deleted doc stay deleted.
+Every commit cost two or three provider calls, and most came back as `impact: internal` entries (version bumps, tests, terraform, docs plumbing) that then had to be deleted by hand, with a growing list of subject globs to keep them from coming back. A commit touching no business file now costs no call and is never asked about again, so the backlog holds only work that changed what the product does.

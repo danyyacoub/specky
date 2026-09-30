@@ -33,6 +33,7 @@ per-host agent templated under [integrations/](../integrations/).
 | [documentation/doc-ownership.md](documentation/doc-ownership.md) | Add optional owner field to docs so readers know who to ask about them |
 | [documentation/acceptance-test-scaffolding.md](documentation/acceptance-test-scaffolding.md) | Generate pytest test scaffolds from Given/When/Then acceptance test tables in documentation |
 | [documentation/history-consolidation.md](documentation/history-consolidation.md) | Fold a branch's recent commits into a single history entry that each new commit rewrites to describe the whole change, with window, long-lived branch, and opt-out controls. |
+| [documentation/business-logic-filtering.md](documentation/business-logic-filtering.md) | Only document commits that change product rules or behaviour, skipping tests/docs/CI/infra commits with no provider call and a skippable per-commit decision |
 
 ## Cli
 
