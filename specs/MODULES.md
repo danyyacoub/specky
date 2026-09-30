@@ -92,6 +92,7 @@ command that calls a model goes through this layer.
 | [rendering/html-viewer-shell.md](rendering/html-viewer-shell.md) | Interactive HTML viewer with tag/type filtering and cross-doc navigation |
 | [rendering/cross-doc-links.md](rendering/cross-doc-links.md) | Resolve in-body doc links to rendered pages/sections instead of .md repo paths, with heading anchors and link rewriting for viewer, export and chat answers |
 | [rendering/home-activity-brief.md](rendering/home-activity-brief.md) | Home page brief of who changed what on the mainline: merged branches as one change, told by their history docs, agents and bots left out |
+| [rendering/workflow-stepper.md](rendering/workflow-stepper.md) | Promote a workflow doc's numbered happy-path lists into step-by-step steppers, including after a lead-in sentence or under subheadings. |
 
 ## Integration
 
