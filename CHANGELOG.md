@@ -7,6 +7,8 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.2.1]
+
 ### Added
 - **Never-documented commits.** One shared rule decides which commits never get a history doc —
   for `pending_commits`, the hook, `specky sync`, `specky check` and `specky doctor` alike — so a
