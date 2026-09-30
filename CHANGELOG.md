@@ -7,6 +7,27 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+### Added
+- **Business logic only.** A history entry is now written only for a commit that changes the
+  product's rules or behaviour; tests, docs, tooling, CI, infrastructure, dependency and version
+  bumps, refactors and cosmetic UI are not recorded, and cost far less to leave out:
+  - A commit whose files are all non-business is never pending and costs no AI call. A built-in
+    list covers docs, tests, CI, infrastructure, manifests and lockfiles, editor and agent config,
+    and the docs root; `[history] paths` narrows which files can count at all (`["api/*"]`), and
+    `[history] exclude_paths` adds globs, with `!glob` to re-include.
+  - Every other commit's micro-doc call decides first. A `{"skip": true}` answer ends it there — no
+    classification, no feature-doc update, no entry, and an entry it would have extended is left
+    as it was. The commit goes to `<docs root>/history/skipped.txt` so it is never asked about
+    again; an amend or rebase carries its line along, and deleting the line re-queues it.
+  - The prompts read only the business files' part of the diff, with a list of those files.
+  - The `document-commits` skill records a skip with `specky record-commit <sha>` and
+    `{"skip": true}` on stdin.
+
+### Changed
+- **The activity brief ignores commits with no business logic** — no business file, or in the
+  skip ledger — the same way it ignores skip-tagged ones.
+- **`specky sync`'s estimate** is now one to three AI calls per commit (was two to three).
+
 ## [0.2.1]
 
 ### Added

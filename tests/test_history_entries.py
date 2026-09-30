@@ -184,6 +184,28 @@ def test_an_extension_that_isnt_json_keeps_what_the_entry_says(in_repo, monkeypa
 # --- a feature branch ----------------------------------------------------------------------
 
 
+def test_a_step_with_no_business_logic_leaves_the_entry_as_it_was(in_repo, monkeypatch):
+    """A "fix the test" step on a branch is skipped: the entry keeps its words and its commits,
+    and the step goes to the skip ledger instead of into `commits:`."""
+    git(in_repo, "checkout", "-q", "-b", "feat/refunds")
+    first = commit(in_repo, "feat: refund limits")
+    replies = RoutingProvider(summary=SUMMARY)
+    monkeypatch.setattr(commit_doc, "load_provider_from_toml", lambda _p, _c="": replies)
+    commit_doc.sync(assume_yes=True)
+    entry = paths.history_dir(in_repo) / "feat-refunds.md"
+    before = entry.read_text()
+
+    step = commit(in_repo, "fix the flaky test")
+    replies._summary = json.dumps({"skip": True})
+    commit_doc.sync(assume_yes=True)
+
+    assert entry.read_text() == before
+    assert history(in_repo)["feat-refunds.md"].commits == [first]
+    assert commit_doc.HistoryIndex(paths.history_dir(in_repo)).skipped(step)
+    assert step not in {sha for sha, _ in commit_doc.pending_commits(in_repo)}
+
+
+
 def test_a_branchs_commits_share_one_entry_named_for_it(in_repo, provider):
     git(in_repo, "checkout", "-q", "-b", "feat/refund-limits")
     shas = [commit(in_repo, m) for m in ("feat: refund limits per plan", "wip", "fix typo")]

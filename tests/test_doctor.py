@@ -481,6 +481,26 @@ def test_skipped_commits_dont_count_as_a_backlog(in_repo):
     assert "of the last 1 documentable commits" in checks[0].detail  # still just the initial one
 
 
+def test_commits_with_no_business_logic_dont_count_as_a_backlog(in_repo, business_gate):
+    """Neither a commit touching no business file nor one a provider judged not to be business
+    logic ever gets a doc, so neither is a backlog."""
+    from specky import commit_doc, paths
+
+    (in_repo / "app.py").write_text("LIMIT = 1\n")
+    git(in_repo, "add", "app.py")
+    git(in_repo, "commit", "-q", "-m", "cap refunds")
+    judged = git(in_repo, "rev-parse", "HEAD").strip()
+    commit_doc.HistoryIndex(paths.history_dir(in_repo)).skip(judged, "cap refunds")
+    (in_repo / "tests").mkdir()
+    (in_repo / "tests" / "test_app.py").write_text("x\n")
+    git(in_repo, "add", "tests")
+    git(in_repo, "commit", "-q", "-m", "add a test")
+
+    checks = _by_section(doctor.run_checks())["docs"]
+    # The initial commit is a README alone, so nothing is left to document at all.
+    assert checks[0].detail == "no commits to document yet"
+
+
 def test_the_backlog_probe_is_bounded(in_repo, monkeypatch):
     """specky runs on other people's repos, which have more than 40 commits. The probe answers
     "is the hook working now", so it must not walk history to do it."""

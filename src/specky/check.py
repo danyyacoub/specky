@@ -22,7 +22,14 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from specky import facts, lint, paths
-from specky.commit_doc import HistoryConfig, HistoryIndex, _is_revision, never_documented
+from specky.commit_doc import (
+    LOG_FORMAT,
+    HistoryConfig,
+    HistoryIndex,
+    _is_revision,
+    candidates,
+    never_documented,
+)
 from specky.db import connect
 from specky.paths import read_table as _read_table
 from specky.staleness import days_behind
@@ -265,16 +272,19 @@ def _changed_files(repo_root: Path, base: str) -> list[str]:
 
 def _undocumented_commits(repo_root: Path, base: str) -> list[tuple[str, str]]:
     history = HistoryIndex(paths.history_dir(repo_root))
-    ignore = HistoryConfig.load(repo_root).ignore
+    config = HistoryConfig.load(repo_root)
     # The empty tree isn't a commit, so there's no range to exclude — that case is "all of it".
     revs = "HEAD" if base == EMPTY_TREE else f"{base}..HEAD"
     # --no-merges: a merge never gets a history doc (see `commit_doc.pending_commits`), so asking
     # for one here would fail every pull request that lands with a merge commit.
-    log = _git(repo_root, "log", "--reverse", "--no-merges", "--format=%H%x1f%s%x1f%aN%x1f%aE", revs)
+    log = _git(
+        repo_root, "log", "--reverse", "--no-merges", "--name-only", f"--format={LOG_FORMAT}", revs
+    )
     pending = []
-    for line in log.splitlines():
-        sha, subject, name, email = (line.split("\x1f") + ["", ""])[:4]
-        if never_documented(subject, name, email, ignore) or history.doc_for(sha):
+    for sha, subject, name, email, files in candidates(log):
+        if never_documented(subject, name, email, config, files):
+            continue
+        if history.doc_for(sha) or history.skipped(sha):
             continue
         pending.append((sha, subject))
     return pending

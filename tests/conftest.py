@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from specky.commit_doc import MICRO_DOC_PREFIX
+from specky.commit_doc import NON_BUSINESS_PATHS as SHIPPED_NON_BUSINESS_PATHS
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +49,25 @@ def _one_entry_per_commit(monkeypatch):
     from specky import commit_doc
 
     monkeypatch.setattr(commit_doc, "HISTORY_CONSOLIDATE", "off")
+
+
+@pytest.fixture(autouse=True)
+def _every_file_is_business(monkeypatch):
+    """Most tests commit a README or a `.txt` and mean "a commit". The built-in list of files that
+    are never business logic would drop those before anything under test runs, so it's empty
+    unless a test asks for it with `business_gate`. The docs root stays excluded: it's the repo's.
+    """
+    from specky import commit_doc
+
+    monkeypatch.setattr(commit_doc, "NON_BUSINESS_PATHS", ())
+
+
+@pytest.fixture
+def business_gate(monkeypatch):
+    """`commit_doc.NON_BUSINESS_PATHS` as shipped, for the tests about which files count."""
+    from specky import commit_doc
+
+    monkeypatch.setattr(commit_doc, "NON_BUSINESS_PATHS", SHIPPED_NON_BUSINESS_PATHS)
 
 
 @pytest.fixture

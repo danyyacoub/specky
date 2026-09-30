@@ -7,20 +7,21 @@ tags: [documentation]
 
 ## What It Does
 
-Every commit ends up in an AI-written history entry in `specs/history/` (`<docs root>/history/` —
-see [documentation/doc-adoption.md](doc-adoption.md)). A branch's recent commits share one entry
-(see One entry per branch below); some commits are never documented at all (see Never documented
-below). The entry has a fixed structure because three readers use
-different parts of it:
+Every commit that changes business logic ends up in an AI-written history entry in
+`specs/history/` (`<docs root>/history/` — see [documentation/doc-adoption.md](doc-adoption.md)).
+Everything else — tests, docs, tooling, infrastructure, version bumps — is not recorded at all (see
+Business logic only below). A branch's recent commits share one entry (see One entry per branch
+below). The entry has a fixed structure because three readers use different parts of it:
 
 - A **headline** is the doc's title: one line in its users' terms about what the product now does
   differently. The home page's activity brief lists these
   ([rendering/home-activity-brief.md](../rendering/home-activity-brief.md)), and the viewer's
   History group shows them instead of "Commit 02738efb".
-- An **`impact`** is one of `feature`, `improvement`, `fix` or `internal`. `internal` means no
-  behaviour a user can observe. The brief folds those commits away, counting them rather than
-  listing them ("+2 internal"), and the viewer's sidebar does the same: an `internal` entry keeps
-  its page, reachable by link and by search, but adds no row to the nav trail.
+- An **`impact`** is one of `feature`, `improvement` or `fix`. Entries written before business
+  logic was the bar can also say `internal`, meaning no behaviour a user can observe. The brief
+  folds those away, counting them rather than listing them ("+2 internal"), and the viewer's
+  sidebar does the same: an `internal` entry keeps its page, reachable by link and by search, but
+  adds no row to the nav trail.
 - **What changed** and **Why** sections hold the prose the Spec Assistant retrieves when asked why
   something changed. `Why` is left out when neither the commit message nor the diff states a
   reason, rather than letting the model make one up.
@@ -36,12 +37,53 @@ read everywhere, and nothing renames them. Docs older still (`# Commit <sha8>` a
 are shown by their first sentence. `specky sync --refresh-history` rewrites them in the new shape
 ([cli/sync.md](../cli/sync.md)).
 
+### Business logic only
+
+A history entry is for a product owner reading what the product now does, so only business logic
+gets one: the product's domain rules, calculations, workflows, statuses, validations, permissions,
+integrations with other systems, and what its API or screens do. Refactoring that keeps behaviour,
+tests, documentation, tooling, build, CI, infrastructure and deployment, dependency and version
+bumps, logging and purely cosmetic UI (logos, colours, spacing) get none. Deciding that is also
+what keeps the cost down: a commit that isn't business logic costs at most one short call, and
+usually none.
+
+1. **By its files, for free.** A commit whose files are all non-business is never pending, and no
+   provider is asked about it. Built in as non-business: Markdown and other docs, tests
+   (`tests/`, `test_*.py`, `*.test.*`, `*.spec.*`, `__tests__/`, fixtures), CI (`.github/`,
+   `.gitlab-ci.yml`, …), infrastructure (`infra/`, `terraform/`, `*.tf`, Dockerfiles,
+   `docker-compose*`, `k8s/`, `helm/`), manifests and lockfiles (`package.json`,
+   `package-lock.json`, `pnpm-lock.yaml`, `*.lock`, `pyproject.toml`, `requirements*.txt`, …), editor
+   and agent config (`.vscode/`, `.claude/`, `specky.toml`, …), and the docs root itself. Two
+   `[history]` keys adjust it; both take fnmatch globs, where `*` also matches `/`:
+
+   | Key | Default | Meaning |
+   |---|---|---|
+   | `paths` | `[]` (every file) | An allowlist: only files matching one of these can be business logic, e.g. `["api/*", "frontend/*"]` |
+   | `exclude_paths` | `[]` | More non-business globs, applied after the built-in ones; the last glob that matches a file wins, and `!glob` re-includes, e.g. `["scripts/*", "!skills/*.md"]` |
+
+2. **By one triage call.** Every other commit's micro-doc call first decides whether it is
+   business logic. If it isn't, the model replies only `{"skip": true}` — a few output tokens —
+   and that is the end of it: no classification, no feature doc, no history entry. A commit that
+   would have extended an entry leaves the entry exactly as it was. The call sees only the business
+   files' part of the diff and a list of those files, so a commit that updates its specs and tests
+   alongside a two-line rule change spends the prompt on the rule; classification and the
+   feature-doc update read the same filtered diff.
+
+3. **The skip ledger** records each commit the call skipped, in `<docs root>/history/skipped.txt`,
+   one `<sha> <subject>` line each, sorted by sha so two branches' additions rarely conflict.
+   Without it a skipped commit would stay pending, be asked about again on every fire, and use up
+   the per-fire cap. It is committed with the doc-sync commit, but its commits are left out of the
+   `Specky-Documents` trailer, since no feature doc describes their code. An amend or a rebase
+   moves a line onto the commit's new sha, at no cost. It isn't a `.md` file, so the viewer, the
+   indexer and the activity brief never show it. Deleting a line has the next fire or
+   `specky sync` document that commit again.
+
 ### Never documented
 
 One predicate, `never_documented`, decides which commits can be pending at all, and
-`pending_commits`, the hook, `specky sync`, `specky check`'s undocumented list and `specky doctor`'s
-backlog probe all share it. Because the rule is shared, deleting a history doc for one of these
-commits stays deleted instead of being regenerated on the next fire.
+`pending_commits`, the hook, `specky sync`, `specky check`'s undocumented list, `specky doctor`'s
+backlog probe and the activity brief all share it. Because the rule is shared, deleting a history
+doc for one of these commits stays deleted instead of being regenerated on the next fire.
 
 - specky's own doc-sync commits, and any subject carrying a bracketed skip tag — `[skip specky]`
 is the deliberate opt-out, and `[skip ci]`/`[ci skip]` are honoured so CI's own commits don't get
@@ -49,11 +91,14 @@ documented just because CI makes them;
 - commits authored by a `[bot]` account (`github-actions[bot]`, `dependabot[bot]`, …) —
 machine-made changes carry no business logic to record;
 - subjects matching a `[history] ignore` glob in `specky.toml` (or `[tool.specky.history]` in
-`pyproject.toml`) — e.g. `ignore = ["chore: bump*", "docs:*"]` retires a whole class of commits.
+`pyproject.toml`) — e.g. `ignore = ["chore: bump*", "docs:*"]` retires a whole class of commits;
+- commits whose files include no business file (see Business logic only above).
 
-The activity brief drops the subject-level skips — skip tags and `[history] ignore` matches —
-entirely: they are no line and not even counted as automated. Bot-authored commits still count as
-automated there, as before.
+Commits in the skip ledger are never pending either, and `check` and `doctor` don't count them.
+
+The activity brief drops everything but the bot rule entirely — skip tags, `[history] ignore`
+matches, commits with no business file and commits in the skip ledger are no line and not even
+counted as automated. Bot-authored commits still count as automated there, as before.
 
 ### One entry per branch
 
@@ -310,6 +355,9 @@ flowchart TD
 | **Consolidation off** | `[history] consolidate = "off"`, a detached HEAD, or a commit older than the window | One entry per commit, named for its subject |
 | **Merge skipped** | A merge commit lands | It is never pending, costs no provider call, and `specky check` / `specky doctor` don't count it as undocumented |
 | **Commit opted out** | A subject carries `[skip specky]`/`[skip ci]`/`[ci skip]`, is authored by a `[bot]`, or matches a `[history] ignore` glob | It is never pending — in the hook, in `specky sync`, and in `check`/`doctor`'s undocumented counts — and a history doc deleted for it stays deleted |
+| **No business file** | Every file a commit changes is non-business (built-in globs, the docs root, `[history] exclude_paths`, or outside `[history] paths`) | It is never pending and costs no provider call; `check`, `doctor` and the activity brief ignore it |
+| **Judged not business logic** | The micro-doc call answers `{"skip": true}` | No classification or feature-doc call follows and no entry is written or extended; the commit goes to `skipped.txt`, which the doc-sync commit carries, and it is never asked about again |
+| **Skip follows a rewrite** | A skipped commit is amended or rebased | Its `skipped.txt` line moves to the new sha; no provider call is made |
 | **Reply not structured** | The model's answer isn't the JSON asked for | The entry is written in the legacy one-paragraph shape instead of being dropped; `--refresh-history` picks it up later |
 | **Classified late, linked anyway** | Classification raises for a commit | The history entry is still written, without `features:`; the error is reported |
 | **Backlog closed late** | A commit arrived by a route no hook fires for (cherry-pick, `git am`, squash-merge, a contributor with no hook) | The next fire of *any* hook documents it, up to the per-fire cap |
@@ -345,6 +393,15 @@ flowchart TD
 | `[history] consolidate = "off"` | Two commits on a feature branch are documented | Each has its own entry, named for its subject |
 | `[history] ignore = ["chore: bump*"]` | A `chore: bump …` commit lands, and its history doc is later deleted | It never appears in `specky pending`, and the deletion is never regenerated |
 | A commit whose subject ends `[ci skip]`, or authored by `dependabot[bot]` | The hook fires | No history doc is written and nothing is reported pending |
+| A commit changing only `tests/test_refunds.py`, `README.md`, `package-lock.json` and `infra/lb.tf` | `specky sync` runs | It is not pending, and no provider is called for it |
+| `[history] paths = ["api/*"]` | A commit changing only `scripts/export.py` lands | It is not pending; a commit changing `api/refunds.py` is |
+| `[history] exclude_paths = ["scripts/*", "!skills/*.md"]` | Files are checked | `scripts/export.py` and `README.md` are not business logic; `skills/refunds/SKILL.md` and `api/refunds.py` are |
+| A commit changing `specs/billing/refunds.md`, `tests/test_refunds.py` and `src/refunds.py` | Its micro-doc is asked for | The prompt carries `src/refunds.py`'s diff and none of the other two files' |
+| A pending commit whose micro-doc reply is `{"skip": true}` | `specky sync --commit` runs | No history doc, no classification call, no feature doc; `skipped.txt` lists it and is in the doc-sync commit, which has no `Specky-Documents` trailer; a second sync makes no call |
+| A branch's entry, and a later commit on it whose reply is `{"skip": true}` | The commit is documented | The entry is byte-for-byte unchanged and the commit is in `skipped.txt` |
+| A commit in `skipped.txt` | Its line is deleted | The commit is pending again |
+| A commit in `skipped.txt` is amended | `specky commit-doc --rewritten` gets `<old> <new>` | `skipped.txt` names the new sha instead of the old, and the new sha isn't pending |
+| A pending commit | `specky record-commit <sha>` gets `{"skip": true}` on stdin | No history doc is written, the commit is in `skipped.txt` and no longer pending |
 | Commits on a branch authored 30 days ago | `specky sync --since …` documents them | One entry per commit, their micro-docs fetched concurrently |
 | A branch's entry extended by a fire | The doc-sync commit is made | Its `Specky-Documents` trailer names the commit that fire documented, not the entry's first |
 | One doc-sync commit documenting two commits and updating a feature doc, with the trailer | `specky index` runs | `doc_files` pairs both commits' files with the feature doc |

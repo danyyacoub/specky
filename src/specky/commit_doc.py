@@ -41,7 +41,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Sequence
 
-from specky import frontmatter, paths
+from specky import frontmatter, gitlog, paths
 from specky.ai_provider import (
     HANDOFF_MARKER,
     ConfigError,
@@ -131,21 +131,64 @@ _SKIP_SUBJECT_TAG = re.compile(
 
 
 def never_documented(
-    subject: str, author_name: str = "", author_email: str = "", ignore: tuple[str, ...] = ()
+    subject: str,
+    author_name: str = "",
+    author_email: str = "",
+    config: HistoryConfig | None = None,
+    files: Sequence[str] | None = None,
 ) -> bool:
-    """True when a commit must never get a history doc — shared by `pending_commits`, `check` and
-    `doctor`, so a doc deleted on purpose stays gone instead of being regenerated.
+    """True when a commit must never get a history doc — shared by `pending_commits`, `check`,
+    `doctor` and the activity brief, so a doc deleted on purpose stays gone instead of being
+    regenerated.
 
     Skipped: specky's own doc-sync commits, subjects carrying a skip tag (`[skip ci]`/`[ci skip]`
     cover the commits CI makes on its own; `[skip specky]` is the deliberate opt-out), bot
     authors (`github-actions[bot]`, `dependabot[bot]` and friends, recognised by the `[bot]`
-    marker rather than a name list), and subjects matching a `[history] ignore` glob.
+    marker rather than a name list), subjects matching a `[history] ignore` glob, and commits
+    whose `files` include no business file (`HistoryConfig.touches_business`). `files=None` means
+    the caller doesn't know them, and only the other rules apply.
     """
+    config = config or HistoryConfig()
     if subject.startswith(_AUTO_COMMIT_MARKER) or _SKIP_SUBJECT_TAG.search(subject):
         return True
     if "[bot]" in author_name.lower() or "[bot]" in author_email.lower():
         return True
-    return any(fnmatch(subject, pattern) for pattern in ignore)
+    if any(fnmatch(subject, pattern) for pattern in config.ignore):
+        return True
+    return files is not None and not config.touches_business(files)
+
+
+# Files that are never business logic, whatever the repo: a commit touching only these is never
+# documented, and no provider is asked about it. fnmatch globs, where `*` crosses `/` — so a
+# directory is listed twice, once at the root and once anywhere below it. `[history] exclude_paths`
+# adds to this list and can re-include with `!glob`; `[history] paths` narrows what can count at
+# all. The docs root is added per repo (`HistoryConfig.load`).
+NON_BUSINESS_PATHS = (
+    # Documentation
+    "*.md", "*.mdx", "*.rst", "docs/*",
+    # Tests
+    "test/*", "tests/*", "*/test/*", "*/tests/*", "*/__tests__/*", "test_*.py", "*/test_*.py",
+    "*_test.*", "*.test.*", "*.spec.*", "conftest.py", "*/conftest.py", "*/fixtures/*",
+    "*/testdata/*",
+    # CI
+    ".github/*", ".gitlab-ci.yml", ".gitlab/*", ".circleci/*", ".buildkite/*", "Jenkinsfile",
+    "azure-pipelines.yml",
+    # Infrastructure and deployment
+    "infra/*", "terraform/*", "*.tf", "*.tfvars", "Dockerfile", "*/Dockerfile", "*.dockerfile",
+    ".dockerignore", "docker-compose*", "k8s/*", "helm/*",
+    # Manifests and lockfiles: version bumps and dependency changes
+    "package.json", "*/package.json", "package-lock.json", "*/package-lock.json",
+    "pnpm-lock.yaml", "yarn.lock", "*.lock", "pyproject.toml", "*/pyproject.toml", "setup.cfg",
+    "requirements*.txt", "*/requirements*.txt", "go.sum", "Cargo.toml",
+    # Tool and editor configuration
+    ".gitignore", "*/.gitignore", ".gitattributes", ".editorconfig", ".pre-commit-config.yaml",
+    ".claude/*", ".devin/*", ".vscode/*", ".idea/*", "specky.toml", ".mcp.json",
+)
+
+# Where commits a provider (or the session agent) judged not to be business logic are recorded,
+# under the history dir. Without it such a commit stays pending, and every fire pays to ask again.
+# Not a `.md` file, so the viewer, the indexer and the activity brief's doc count never see it.
+SKIPPED_LEDGER = "skipped.txt"
 
 # Where a fire that couldn't commit (git midway through a rebase or a cherry-pick) leaves the list of
 # paths for the next fire to commit. Under `.specky/`, so it's gitignored and per-checkout.
@@ -154,6 +197,10 @@ DEFERRED_LEDGER = "deferred-docs"
 # Diffs are truncated to this many characters before going into a prompt — long enough for
 # context, short enough to keep prompt cost/latency predictable regardless of commit size.
 DIFF_TRUNCATE_CHARS = 8000
+
+# How many of a commit's files the micro-doc prompt lists by name: the list is what shows the model
+# the parts of a large diff that truncation cut off.
+PROMPT_FILES_LISTED = 50
 
 # How many commits' micro-doc summaries `sync()` asks for at once, and the commit count above
 # which it stops to confirm first. Adopting specky on an existing repo means one `specky sync`
@@ -228,12 +275,17 @@ class Commit:
     diff: str
 
 
-def _commit_info(rev: str = "HEAD", with_diff: bool = True) -> Commit:
+def _commit_info(
+    rev: str = "HEAD", with_diff: bool = True, config: HistoryConfig | None = None
+) -> Commit:
     """Metadata for one revision, plus its diff unless the caller has no use for it.
 
     `with_diff=False` exists for `apply_rewrites`, which re-renders a doc's metadata block for a
     new sha and never prompts: a rebase of 50 commits shouldn't pay for 50 `git show` calls to
     produce diffs nothing reads.
+
+    With a `config`, the diff keeps only its business files (`business_diff`), which is what every
+    prompt then reads.
     """
     sha, author, date, message = subprocess.run(
         ["git", "log", "-1", "--format=%H%x1f%an <%ae>%x1f%aI%x1f%B", rev],
@@ -258,12 +310,41 @@ def _commit_info(rev: str = "HEAD", with_diff: bool = True) -> Commit:
         if with_diff
         else ""
     )
+    if config is not None:
+        diff = business_diff(diff, config)
     return Commit(sha=sha, author=author, date=date, message=message.strip(), diff=diff)
 
 
+_DIFF_FILE = re.compile(r"^diff --git a/(.*?) b/(.*)$")
+
+
+def business_diff(diff: str, config: HistoryConfig) -> str:
+    """`diff` without the sections for files that aren't business logic.
+
+    The prompt budget (`DIFF_TRUNCATE_CHARS`) is spent in diff order, and a commit that updates its
+    specs, snapshots and lockfile alongside a two-line rule change can spend all of it before the
+    rule. A section is kept when either side of it is a business file, so a rename out of `tests/`
+    still shows.
+    """
+    kept: list[str] = []
+    keep = True
+    for line in diff.splitlines(keepends=True):
+        if match := _DIFF_FILE.match(line.rstrip("\n")):
+            keep = config.is_business_file(match[1]) or config.is_business_file(match[2])
+        if keep:
+            kept.append(line)
+    return "".join(kept)
+
+
+def diff_files(diff: str) -> list[str]:
+    """The files a (possibly filtered) diff has sections for, in order."""
+    return [m[2] for line in diff.splitlines() if (m := _DIFF_FILE.match(line))]
+
+
 # What a commit did to the product, as the micro-doc reports it. `internal` is everything a user
-# can't observe — the home page's activity brief folds those away, so a product owner reading it
-# sees behaviour first.
+# can't observe. New entries are never `internal` — a commit with no business logic in it is
+# skipped instead (`MicroDoc.skip`) — but entries written before that still say it, and the brief
+# still folds them away.
 IMPACTS = ("feature", "improvement", "fix", "internal")
 
 # The micro-doc instruction, identical for every commit, so it rides as the cacheable prefix.
@@ -273,16 +354,25 @@ IMPACTS = ("feature", "improvement", "fix", "internal")
 # what/why prose when asked why something changed, and a feature page lists the commits that
 # `features:` ties to it. `why` may be empty on purpose — a motivation the commit doesn't state is
 # one the model would have to invent.
+#
+# Triage comes first, and a commit with no business logic in it is answered `{"skip": true}` and
+# nothing else: a few output tokens, and no classification or feature-doc call after it. Only
+# business logic is recorded; a product owner reading the history wants the rules, not the chores.
 MICRO_DOC_PREFIX = (
     "You write the history entry for one git commit. Two readers use it: a product owner scanning "
     "what changed recently, and an assistant answering what the product does and why it changed.\n\n"
-    "Reply with only a JSON object:\n"
+    "First decide whether the commit changes business logic: the product's domain rules, "
+    "calculations, workflows, statuses, validations, permissions, integrations with other "
+    "systems, or what its API or screens do. These are not business logic: refactoring that keeps "
+    "behaviour, tests, documentation, tooling, build, CI, infrastructure and deployment, "
+    "dependency and version bumps, logging, and purely cosmetic UI (logos, colours, spacing). If "
+    'the commit has no business logic in it, reply with only {"skip": true}.\n\n'
+    "Otherwise reply with only a JSON object:\n"
     '{"headline": "...", "impact": "...", "what_changed": "...", "why": "..."}\n\n'
     "- headline: at most 80 characters, present tense, what the product now does differently, in "
     "its users' terms. No file, function or class names.\n"
     "- impact: exactly one of feature (a new capability), improvement (existing behaviour "
-    "changed), fix (wrong behaviour corrected), internal (no behaviour a user can observe: "
-    "refactoring, tests, tooling, build, dependencies, documentation).\n"
+    "changed), fix (wrong behaviour corrected).\n"
     "- what_changed: 1-3 sentences on behaviour before and after. Name the commands, flags, "
     "settings and screens a user would recognise; leave implementation detail out.\n"
     "- why: 1-2 sentences on the motivation, as the commit message or diff states it. An empty "
@@ -292,9 +382,14 @@ MICRO_DOC_PREFIX = (
 
 def micro_doc_prompt(commit: Commit) -> tuple[str, str]:
     """`(cacheable prefix, this commit's half)`, shared by the serial and batched paths."""
+    changed = diff_files(commit.diff)
+    files = "\n".join(f"- {f}" for f in changed[:PROMPT_FILES_LISTED]) or "(none)"
+    if len(changed) > PROMPT_FILES_LISTED:
+        files += f"\n- … and {len(changed) - PROMPT_FILES_LISTED} more"
     return (
         MICRO_DOC_PREFIX,
         f"Commit message:\n{commit.message}\n\n"
+        f"Files changed:\n{files}\n\n"
         f"Diff (may be truncated):\n{commit.diff[:DIFF_TRUNCATE_CHARS]}",
     )
 
@@ -317,7 +412,8 @@ MICRO_DOC_EXTEND_PREFIX = MICRO_DOC_PREFIX + (
     "included: keep what still holds, fold in what this commit adds or changes, and drop what it "
     "reverted. Work in progress, review fixes and typo fixes are steps, not changes: don't mention "
     "them on their own. impact is the whole change's: feature if any of it adds a capability, "
-    "else improvement, else fix, else internal."
+    'else improvement, else fix. Reply {"skip": true} when this commit adds no business logic to '
+    "the change (only tests, docs, tooling and the like): the entry then stays as it is."
 )
 
 
@@ -345,6 +441,9 @@ class MicroDoc:
 
     `commits` is every commit it covers, oldest first: one for a legacy doc (its `sha:`), one or
     more for an entry. `branch` is set on an entry later commits of that branch may extend.
+
+    `skip` is a reply saying the commit has no business logic in it: nothing is written for it but
+    a line in the skip ledger (see `HistoryIndex.skip`).
     """
 
     headline: str = ""
@@ -354,6 +453,7 @@ class MicroDoc:
     features: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
     branch: str = ""
+    skip: bool = False
 
     def text(self) -> str:
         """The prose, as one searchable block — what the index and the Spec Assistant read."""
@@ -366,6 +466,8 @@ def parse_micro_doc(reply: str) -> MicroDoc:
     answer = leading_json_object(strip_code_fence(reply))
     if answer is None:
         return MicroDoc(what=reply.strip())
+    if answer.get("skip") is True:
+        return MicroDoc(skip=True)
     impact = str(answer.get("impact", "")).strip().lower()
     return MicroDoc(
         # One line, whatever came back: it becomes the doc's H1, and a newline in it would end the
@@ -428,6 +530,7 @@ class HistoryIndex:
         self.history_dir = history_dir
         self._entries: dict[Path, tuple[list[str], str]] | None = None
         self._members: dict[str, Path] = {}
+        self._skipped: dict[str, str] | None = None  # the skip ledger: sha -> subject
 
     def _load(self) -> dict[Path, tuple[list[str], str]]:
         if self._entries is None:
@@ -466,6 +569,61 @@ class HistoryIndex:
 
     def branch_entries(self, branch: str) -> list[tuple[Path, list[str]]]:
         return [(p, shas) for p, (shas, b) in self._load().items() if b == branch]
+
+    @property
+    def ledger(self) -> Path:
+        return self.history_dir / SKIPPED_LEDGER
+
+    def _load_skipped(self) -> dict[str, str]:
+        if self._skipped is None:
+            text = self.ledger.read_text(errors="replace") if self.ledger.is_file() else ""
+            self._skipped = parse_ledger(text)
+        return self._skipped
+
+    def skipped(self, sha: str) -> bool:
+        """Whether `sha` was judged not to be business logic, and so needs no doc."""
+        return sha in self._load_skipped()
+
+    def skip(self, sha: str, subject: str) -> Path:
+        """Record `sha` in the skip ledger, and return the ledger's path."""
+        self._load_skipped()[sha] = " ".join(subject.split())
+        return self._write_skipped()
+
+    def remap_skipped(self, mapping: Mapping[str, str]) -> Path | None:
+        """Move ledger lines onto the shas an amend or a rebase gave their commits — None when
+        none of `mapping` was in the ledger."""
+        skipped = self._load_skipped()
+        moved = {old: new for old, new in mapping.items() if old in skipped}
+        if not moved:
+            return None
+        for old, new in moved.items():
+            skipped[new] = skipped.pop(old)
+        return self._write_skipped()
+
+    def _write_skipped(self) -> Path:
+        # Sorted by sha rather than appended: two branches adding lines then insert them at
+        # different places, which git merges cleanly, where two appends conflict at the end.
+        self.history_dir.mkdir(parents=True, exist_ok=True)
+        skipped = sorted(self._load_skipped().items())
+        lines = "".join(f"{sha} {subject}\n" for sha, subject in skipped)
+        self.ledger.write_text(_LEDGER_HEADER + lines)
+        return self.ledger
+
+
+_LEDGER_HEADER = (
+    "# Commits specky judged not to be business logic, so they get no history doc.\n"
+    "# Delete a line to have that commit documented by the next hook fire or `specky sync`.\n"
+)
+
+
+def parse_ledger(text: str) -> dict[str, str]:
+    """`{sha: subject}` from a skip ledger's text."""
+    skipped: dict[str, str] = {}
+    for line in text.splitlines():
+        sha, _, subject = line.strip().partition(" ")
+        if sha and not sha.startswith("#"):
+            skipped[sha] = subject
+    return skipped
 
 
 def history_doc_for(history_dir: Path, sha: str) -> Path | None:
@@ -754,6 +912,11 @@ class HistoryConfig:
     # Subject globs for commits that never get a history doc ("chore: bump*", "docs:*"). Deleting
     # such a doc then sticks: the commit stays off `pending_commits` instead of regenerating.
     ignore: tuple[str, ...] = ()
+    # Which files can be business logic (see `is_business_file`): `paths` is an allowlist ("api/*",
+    # "frontend/*"), empty for everything; `exclude_paths` follows `NON_BUSINESS_PATHS`, last match
+    # wins, and a `!glob` in it re-includes what an earlier glob excluded.
+    paths: tuple[str, ...] = ()
+    exclude_paths: tuple[str, ...] = NON_BUSINESS_PATHS
 
     @classmethod
     def load(cls, repo_root: Path) -> HistoryConfig:
@@ -765,14 +928,42 @@ class HistoryConfig:
             days = int(table.get("window_days", HISTORY_WINDOW_DAYS))
         except (TypeError, ValueError):
             days = HISTORY_WINDOW_DAYS
-        branches = table.get("long_lived", ())
-        ignored = table.get("ignore", ())
+
+        def globs(key: str) -> tuple[str, ...]:
+            value = table.get(key, ())
+            return tuple([value] if isinstance(value, str) else value)
+
         return cls(
             consolidate=mode if mode in HISTORY_CONSOLIDATE_MODES else HISTORY_CONSOLIDATE,
             window_days=days,
-            long_lived=tuple([branches] if isinstance(branches, str) else branches),
-            ignore=tuple([ignored] if isinstance(ignored, str) else ignored),
+            long_lived=globs("long_lived"),
+            ignore=globs("ignore"),
+            paths=globs("paths"),
+            # The docs tree is what specky writes: a commit to it is documentation, never the
+            # business logic it describes.
+            exclude_paths=(
+                *NON_BUSINESS_PATHS, f"{paths.docs_prefix(repo_root)}*", *globs("exclude_paths")
+            ),
         )
+
+    def is_business_file(self, path: str) -> bool:
+        """Whether a change to `path` can be business logic: inside `paths` when that's set, and
+        not excluded by the last `exclude_paths` glob that matches it."""
+        if self.paths and not any(fnmatch(path, glob) for glob in self.paths):
+            return False
+        excluded = False
+        for glob in self.exclude_paths:
+            if glob.startswith("!"):
+                if fnmatch(path, glob[1:]):
+                    excluded = False
+            elif fnmatch(path, glob):
+                excluded = True
+        return not excluded
+
+    def touches_business(self, files: Sequence[str]) -> bool:
+        """Whether a commit changing `files` can be business logic — False for a commit that
+        changes no file at all."""
+        return any(self.is_business_file(f) for f in files)
 
 
 def _now() -> datetime:
@@ -932,12 +1123,12 @@ def pending_commits(
     This is specky's source of truth for "what is undocumented", and both callers are the same
     pass over it: `sync()` unbounded, and a hook fire bounded by `depth`/`HOOK_CATCHUP_MAX`.
 
-    Skipped: commits that already have a history doc (see `history_doc_for`), specky's own
-    doc-sync commits — `main()` refuses to document those when the hook fires, and a backfill has
-    no business paying to document them either — and merge commits. A clean merge's
-    `git show` is an empty combined diff, so its micro-doc was a paid call that said "merged a
-    branch"; what the branch did is already in the docs of the commits it brought in, which is
-    where the activity brief reads it from.
+    Skipped: commits that already have a history doc (see `history_doc_for`), commits in the skip
+    ledger (judged not to be business logic, `HistoryIndex.skipped`), everything `never_documented`
+    — which includes a commit touching no business file, so it never costs a provider call — and
+    merge commits. A clean merge's `git show` is an empty combined diff, so its micro-doc was a paid
+    call that said "merged a branch"; what the branch did is already in the docs of the commits it
+    brought in, which is where the activity brief reads it from.
 
     `legacy` inverts the doc test for `sync --refresh-history`: only commits whose history doc is
     in the pre-headline shape (see `MicroDoc`), which are the ones a refresh rewrites.
@@ -961,8 +1152,8 @@ def pending_commits(
 
     # `git log` rather than `rev-list` for the subject line, which the progress and --dry-run
     # output both want; the revision walking is identical. Author fields ride along for
-    # `never_documented`'s bot check.
-    args = ["git", "log", "--reverse", "--no-merges", "--format=%H%x1f%s%x1f%aN%x1f%aE"]
+    # `never_documented`'s bot check, and the files for its business-logic one.
+    args = ["git", "log", "--reverse", "--no-merges", "--name-only", f"--format={LOG_FORMAT}"]
     if depth:
         # git applies `-n` before `--reverse`, so this is the newest `depth` commits, reversed.
         args += [f"-n{depth}"]
@@ -979,17 +1170,30 @@ def pending_commits(
         args, cwd=repo_root, capture_output=True, text=True, errors="replace", check=True
     ).stdout
     index = HistoryIndex(history_dir)
-    ignore = HistoryConfig.load(repo_root).ignore
+    config = HistoryConfig.load(repo_root)
     pending = []
-    for line in log.splitlines():
-        sha, subject, name, email = (line.split("\x1f") + ["", ""])[:4]
-        if never_documented(subject, name, email, ignore):
+    for sha, subject, name, email, files in candidates(log):
+        if never_documented(subject, name, email, config, files):
             continue
         doc = index.doc_for(sha)
-        wanted = _is_legacy(doc) if legacy else doc is None
+        wanted = _is_legacy(doc) if legacy else doc is None and not index.skipped(sha)
         if wanted:
             pending.append((sha, subject))
     return pending[:limit] if limit else pending
+
+
+# The `git log --name-only` format every "which commits need a doc" walk reads with `candidates`:
+# `pending_commits`, `check` and `doctor`, which must agree on the answer.
+LOG_FORMAT = "%x01%H%x1f%s%x1f%aN%x1f%aE"
+
+
+def candidates(log: str) -> list[tuple[str, str, str, str, list[str]]]:
+    """`(sha, subject, author name, author email, files)` per commit of a `LOG_FORMAT` log."""
+    out = []
+    for lines in gitlog.blocks(log):
+        sha, subject, name, email = (lines[0].split("\x1f") + ["", "", ""])[:4]
+        out.append((sha, subject, name, email, [f for f in lines[1:] if f]))
+    return out
 
 
 def handoff_line(todo: Sequence[tuple[str, str]]) -> str:
@@ -1012,13 +1216,16 @@ def record_commit(
 
     The `document-commits` skill's half of `_sync_one`: the session agent writes the reply and any
     feature doc itself, and this records it exactly as a provider's reply would have been — same
-    parse, same entry (extended or new, as `entry_plan` told the skill), same index rows.
+    parse, same entry (extended or new, as `entry_plan` told the skill), same index rows. A
+    `{"skip": true}` reply goes to the skip ledger instead, whose path is returned.
     """
     commit = _commit_info(sha, with_diff=False)
     doc = parse_micro_doc(reply)
+    index = HistoryIndex(paths.history_dir(repo_root))
+    if doc.skip:
+        return index.skip(commit.sha, _subject(commit))
     if feature:
         doc.features = [feature]
-    index = HistoryIndex(paths.history_dir(repo_root))
     branch = branch_context(repo_root)
     target = branch.open_entry(index, commit.sha) if branch else None
     path = _record_entry(repo_root, commit, doc, branch, index, target)
@@ -1119,6 +1326,13 @@ def _sync_one(
             else generate_micro_doc(commit, provider)
         )
     doc = parse_micro_doc(summary)
+    if doc.skip:
+        # No business logic: no classification, no feature doc, no entry — and an entry this
+        # commit would have extended stays exactly as it was. The ledger line is what keeps it off
+        # the pending list, so it's never paid for twice.
+        ledger = index.skip(commit.sha, _subject(commit))
+        print(f"{label}: skipped, not business logic")
+        return [ledger]
 
     # Classified before the history doc is written, so the doc can say which feature it belongs to:
     # `features:` is committed, where the `commit_links` row below lives in a gitignored database a
@@ -1158,6 +1372,11 @@ def _refresh_one(repo_root: Path, commit: Commit, reply: str, label: str) -> Pat
     """
     doc = parse_micro_doc(reply)
     old = history_doc_for(paths.history_dir(repo_root), commit.sha)
+    if doc.skip and old is not None:
+        # A refresh rewrites a doc's words; deleting a doc somebody may have read or linked to is a
+        # decision for a person, so it only says so.
+        print(f"{label}: left {old} alone — judged not business logic, delete it if that's right")
+        return old
     old_doc = read_history(old.read_text()) if old else None
     doc.features = old_doc[1].features if old_doc else []
     if not doc.features:
@@ -1226,9 +1445,10 @@ def _batch_summaries(commits: list[Commit], provider: Provider) -> dict[str, str
 
 
 def _call_estimate(commits: int) -> str:
-    """Two provider calls per commit (micro-doc + classification), plus a third for each commit
-    that turns out to affect a documented feature — hence a range, not a number."""
-    return f"~{2 * commits}-{3 * commits} AI calls"
+    """One provider call per commit (the micro-doc, which also decides whether it's business logic
+    at all), a second to classify each that is, and a third for each that turns out to affect a
+    documented feature — hence a range, not a number."""
+    return f"~{commits}-{3 * commits} AI calls"
 
 
 def _confirm(count: int, assume_yes: bool, estimate: str) -> None:
@@ -1368,17 +1588,21 @@ def _write_docs(
     index = HistoryIndex(paths.history_dir(repo_root))
     branch = None if refresh else branch_context(repo_root)
     serial = {sha for sha, _ in pending if branch is not None and branch.joins(sha)}
+    # Every prompt reads the business files' diff only (see `business_diff`).
+    config = HistoryConfig.load(repo_root)
 
     # With `--batch`, every commit's summary is fetched up front in one request; the per-chunk
     # `_prefetch_summaries` below then has nothing left to ask for and the loop is unchanged.
     batched: dict[str, str] = {}
     if batch and (upfront := [sha for sha, _ in pending if sha not in serial]):
-        batched = _batch_summaries([_commit_info(sha) for sha in upfront], provider)
+        batched = _batch_summaries([_commit_info(sha, config=config) for sha in upfront], provider)
 
     written: list[Path] = []
     documented: list[str] = []
     for start in range(0, total, SYNC_CONCURRENCY):
-        chunk = [_commit_info(sha) for sha, _ in pending[start : start + SYNC_CONCURRENCY]]
+        chunk = [
+            _commit_info(sha, config=config) for sha, _ in pending[start : start + SYNC_CONCURRENCY]
+        ]
         summaries = _prefetch_summaries(
             [c for c in chunk if c.sha not in batched and c.sha not in serial], provider
         )
@@ -1404,7 +1628,10 @@ def _write_docs(
                         branch=branch,
                         index=index,
                     )
-                documented.append(commit.sha)
+                # A skipped commit has no doc whose code it could be credited with, so it stays out
+                # of the `Specky-Documents` trailer.
+                if not index.skipped(commit.sha):
+                    documented.append(commit.sha)
             except Exception as exc:
                 print(f"{label}: skipped ({exc})")
     # Deduped: commits sharing an entry, like commits updating one feature doc, write it again.
@@ -1667,21 +1894,21 @@ def apply_rewrites(repo_root: Path, stdin_text: str) -> list[tuple[Path, Path]]:
     - An **entry** stays where it is: its name isn't a sha, so only its `commits:` change, every
       rewritten one at once (an interactive squash maps two onto one, and they become one).
     - A **legacy doc** is named for its sha, so it moves to the new one's name.
+    - A line of the **skip ledger** moves onto the new sha, so the commit stays skipped.
 
     Pairs whose old doc doesn't exist are left for the ordinary catch-up to document.
 
-    Returns `(old path, new path)` per doc, the same path twice for an entry. Both halves of a
-    rename matter to the caller: it has to be *committed*, and staging only the new file would leave
-    the old one — a doc for a sha that is no longer in the history — to come back with the next
-    checkout.
+    Returns `(old path, new path)` per doc, the same path twice for an entry or the ledger. Both
+    halves of a rename matter to the caller: it has to be *committed*, and staging only the new
+    file would leave the old one — a doc for a sha that is no longer in the history — to come back
+    with the next checkout.
     """
     history_dir = paths.history_dir(repo_root)
     index = HistoryIndex(history_dir)
     moved: list[tuple[Path, Path]] = []
     entries: dict[Path, dict[str, str]] = {}  # entry -> its old sha -> new sha
-    for old_sha, new_sha in _rewrite_pairs(stdin_text):
-        if old_sha == new_sha:
-            continue
+    pairs = [(old, new) for old, new in _rewrite_pairs(stdin_text) if old != new]
+    for old_sha, new_sha in pairs:
         old_doc = index.doc_for(old_sha)
         if old_doc is None:
             continue
@@ -1716,6 +1943,15 @@ def apply_rewrites(repo_root: Path, stdin_text: str) -> list[tuple[Path, Path]]:
             _repoint_rows(repo_root, old_sha, new_sha)
         moved.append((entry, entry))
         print(f"specky commit-doc: {entry.name} follows {len(mapping)} rewritten commit(s)")
+
+    # A commit judged not to be business logic is still that after an amend or a rebase: its
+    # ledger line follows it, or the new sha would be pending and paid for all over again.
+    skipped = {old: new for old, new in pairs if index.skipped(old)}
+    if skipped:
+        landed = {c.sha for c in _members_info(repo_root, list(skipped.values()))}
+        ledger = index.remap_skipped({o: n for o, n in skipped.items() if n in landed})
+        if ledger is not None:
+            moved.append((ledger, ledger))
     return moved
 
 

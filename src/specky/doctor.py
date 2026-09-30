@@ -38,8 +38,10 @@ from specky.commit_doc import (
     DISABLE_HOOK_ENV,
     HOOK_MARKER,
     HOOK_MODES,
+    LOG_FORMAT,
     HistoryConfig,
     HistoryIndex,
+    candidates,
     hook_disabled,
     hook_mode,
     hooks_dir,
@@ -513,18 +515,22 @@ def _pending(repo_root: Path) -> list[Check]:
 def _backlog(repo_root: Path) -> list[Check]:
     """Whether the hook is producing docs *now*, over a fixed window of recent commits."""
     history = HistoryIndex(paths.history_dir(repo_root))
-    ignore = HistoryConfig.load(repo_root).ignore
+    config = HistoryConfig.load(repo_root)
     log = _run(
         # --no-merges: merges are never documented, by design (see `pending_commits`).
-        ["git", "log", f"-{BACKLOG_PROBE_COMMITS}", "--no-merges", "--format=%H%x1f%s%x1f%aN%x1f%aE"],
+        [
+            "git", "log", f"-{BACKLOG_PROBE_COMMITS}", "--no-merges", "--name-only",
+            f"--format={LOG_FORMAT}",
+        ],
         cwd=repo_root,
     ).stdout
     considered = 0
     missing = 0
-    for line in log.splitlines():
-        sha, subject, name, email = (line.split("\x1f") + ["", ""])[:4]
-        if never_documented(subject, name, email, ignore):
-            continue  # specky's own commits, skip-tagged, CI bots and configured subjects
+    for sha, subject, name, email, files in candidates(log):
+        # specky's own commits, skip-tagged, CI bots, configured subjects, no business files, and
+        # commits already judged not to be business logic
+        if never_documented(subject, name, email, config, files) or history.skipped(sha):
+            continue
         considered += 1
         if history.doc_for(sha) is None:
             missing += 1

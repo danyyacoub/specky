@@ -257,7 +257,7 @@ def test_dry_run_lists_the_commits_and_contacts_no_provider(in_repo, monkeypatch
     assert commit_doc.sync(dry_run=True) == []
 
     out = capsys.readouterr().out
-    assert "2 commits to document, ~4-6 AI calls" in out
+    assert "2 commits to document, ~2-6 AI calls" in out
     assert "[2/2] " in out and "add refunds" in out
     assert not (in_repo / "specs" / "history").exists()
 

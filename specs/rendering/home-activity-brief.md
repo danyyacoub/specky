@@ -23,9 +23,12 @@ Three things decide what appears:
   commits that share one entry share one line. Commits whose `impact` is `internal` are counted
   ("+2 internal") rather than listed.
 - **People, not agents.** Coding agents and bots are not people here: Claude co-author trailers,
-  Copilot, Cursor, `[bot]` accounts, and specky's own doc-sync commits all drop out. Commits that
-  are never documented — skip-tagged subjects or `[history] ignore` matches — are not work at
-  all: no line, and not even counted as automated.
+  Copilot, Cursor, `[bot]` accounts, and specky's own doc-sync commits all drop out.
+- **Business logic only.** Commits that are never documented — skip-tagged subjects,
+  `[history] ignore` matches, commits that touch no business file, and commits in the skip ledger
+  ([documentation/auto-commit-docs.md](../documentation/auto-commit-docs.md)) — are not work at
+  all: no line, and not even counted as automated. The ledger is read from the working tree and,
+  for work in progress, from the branch's own tree.
 
 No model is called to build it; it is git and the committed docs only.
 
@@ -121,6 +124,7 @@ No model is called to build it; it is git and the committed docs only.
 | A commit by `dependabot[bot]` | The brief is collected | No one is credited, and the automated count is 1 |
 | Every work commit followed by specky's doc-sync commit | The brief is collected | No line is a doc-sync commit, and a merge's commit count excludes them |
 | A commit with no history doc | The brief is collected | Its line is its subject, with no history link, and the undocumented count is 1 |
+| A commit changing only a test file, a commit in `skipped.txt` on `main`, and a branch commit in the branch's own `skipped.txt` | The brief is collected | None is a line or a person, and neither the automated nor the undocumented count moves |
 | A legacy history doc "Refunds are capped. They used to be unlimited." | The brief is collected | The line is "Refunds are capped." |
 | A history doc rewritten in the working tree but not committed | The brief is collected | The line is the rewritten headline |
 | An unmerged branch whose history docs are committed only on it | The brief is collected from `main` | Its author has it In progress, with the headlines from those docs |

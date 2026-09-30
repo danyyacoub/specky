@@ -178,6 +178,33 @@ def test_commits_that_are_never_documented_never_show_as_work(repo):
     assert found.automated == 0
 
 
+def test_commits_with_no_business_logic_never_show_as_work(repo, business_gate):
+    """A commit touching no business file, and one a provider judged not to be business logic
+    (the skip ledger — on the mainline, or only on the branch it was judged on), are not work:
+    no line, not counted, the same as for `pending_commits`."""
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_refunds.py").write_text("x")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "cover refunds")
+    judged = work(repo, "rename a helper")
+    commit_doc.HistoryIndex(paths.history_dir(repo)).skip(judged, "rename a helper")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", commit_doc._AUTO_COMMIT_MARKER)
+    git(repo, "checkout", "-q", "-b", "feat/tidy")
+    on_branch = work(repo, "tidy the refund module", BOB)
+    commit_doc.HistoryIndex(paths.history_dir(repo)).skip(on_branch, "tidy the refund module")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", commit_doc._AUTO_COMMIT_MARKER, who=BOB)
+    git(repo, "checkout", "-q", "main")
+    work(repo, "Cap refunds", headline="Refunds are capped")
+
+    found = brief(repo)
+    texts = [line.text for p in found.people for c in p.shipped for line in c.lines]
+    assert texts == ["Refunds are capped"]
+    assert "Bob" not in names(found)
+    assert (found.automated, found.undocumented) == (0, 0)
+
+
 # --- where the words come from ------------------------------------------------------------
 
 

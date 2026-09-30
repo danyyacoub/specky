@@ -295,7 +295,10 @@ def _record_commit(args: argparse.Namespace) -> None:
     if not reply.strip():
         raise SystemExit("specky record-commit: expected the micro-doc JSON on stdin")
     path = record_commit(repo_root(), args.sha, reply, feature=args.feature)
-    print(f"specky record-commit: wrote {path}")
+    if path.suffix == ".md":
+        print(f"specky record-commit: wrote {path}")
+    else:
+        print(f"specky record-commit: {args.sha[:8]} is not business logic, recorded in {path}")
 
 
 def _install_git_hook(args: argparse.Namespace) -> None:

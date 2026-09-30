@@ -242,6 +242,166 @@ def test_deleting_an_ignored_commits_doc_sticks(in_repo):
     assert sha not in [s for s, _ in commit_doc.pending_commits(in_repo)]
 
 
+# --- business logic only --------------------------------------------------------------------
+#
+# Only business logic gets a history doc. A commit touching no business file is dropped before any
+# provider call; any other commit's micro-doc call can answer `{"skip": true}`, which stops it there
+# and puts it in the skip ledger so it isn't paid for again.
+
+SKIP = json.dumps({"skip": True})
+
+
+def _commit_files(repo: Path, message: str, files: dict[str, str]) -> str:
+    for name, text in files.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(text)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", message)
+    return git(repo, "rev-parse", "HEAD").strip()
+
+
+def test_a_commit_touching_only_non_business_files_is_never_pending(in_repo, business_gate):
+    chores = _commit_files(
+        in_repo,
+        "update tests, docs and the lockfile",
+        {
+            "tests/test_refunds.py": "x",
+            "README.md": "y",
+            "package-lock.json": "{}",
+            "infra/lb.tf": "z",
+        },
+    )
+    mixed = _commit_files(
+        in_repo, "cap refunds", {"src/refunds.py": "LIMIT = 1", "tests/test_limit.py": "x"}
+    )
+
+    shas = [s for s, _ in commit_doc.pending_commits(in_repo)]
+    assert chores not in shas
+    assert mixed in shas
+    assert chores not in [s for s, _ in _undocumented_commits(in_repo, "HEAD~2")]
+
+
+def test_the_docs_tree_is_never_business_logic(in_repo):
+    sha = _commit_files(in_repo, "document refunds", {"specs/billing/refunds.md": "# Refunds\n"})
+
+    assert sha not in [s for s, _ in commit_doc.pending_commits(in_repo)]
+
+
+def test_history_paths_is_an_allowlist(in_repo, business_gate):
+    (in_repo / "specky.toml").write_text('[history]\npaths = ["api/*"]\n')
+    script = _commit_files(in_repo, "add a data script", {"scripts/export.py": "x"})
+    rule = _commit_files(in_repo, "cap refunds", {"api/refunds.py": "LIMIT = 1"})
+
+    shas = [s for s, _ in commit_doc.pending_commits(in_repo)]
+    assert script not in shas
+    assert rule in shas
+
+
+def test_exclude_paths_adds_to_the_defaults_and_a_bang_re_includes(tmp_repo, business_gate):
+    (tmp_repo / "specky.toml").write_text(
+        '[history]\nexclude_paths = ["scripts/*", "!skills/*.md"]\n'
+    )
+    config = commit_doc.HistoryConfig.load(tmp_repo)
+
+    assert not config.is_business_file("scripts/export.py")
+    assert config.is_business_file("skills/refunds/SKILL.md")
+    assert not config.is_business_file("README.md")
+    assert not config.is_business_file("api/tests/test_refunds.py")
+    assert config.is_business_file("api/refunds.py")
+    assert not config.touches_business([])
+
+
+def test_a_skip_reply_writes_no_doc_and_asks_nothing_more(in_repo, monkeypatch):
+    sha = _commit(in_repo, "rename a helper")
+    classification = json.dumps(
+        {"skip": False, "domain": "billing", "topic": "refunds", "type": "feature", "tags": []}
+    )
+    provider = RoutingProvider(summary=SKIP, classification=classification)
+    _use_provider(monkeypatch, provider)
+
+    commit_doc.sync(assume_yes=True, commit=True)
+
+    history = paths.history_dir(in_repo)
+    assert commit_doc.history_doc_for(history, sha) is None
+    assert not list(history.glob("*.md"))
+    assert all(p.startswith(commit_doc.MICRO_DOC_PREFIX) for p in provider.prompts), (
+        "no classification and no feature doc for a commit with no business logic"
+    )
+    assert not (in_repo / "specs" / "billing").exists()
+    assert commit_doc.pending_commits(in_repo) == []
+    # The ledger is committed with the doc-sync commit, which credits no code to a skipped commit.
+    assert f"{sha} rename a helper" in (history / commit_doc.SKIPPED_LEDGER).read_text()
+    assert "specs/history/skipped.txt" in git(in_repo, "show", "--name-only", "--format=", "HEAD")
+    assert commit_doc.DOCUMENTS_TRAILER not in git(in_repo, "log", "-1", "--format=%B")
+
+    calls = len(provider.prompts)
+    commit_doc.sync(assume_yes=True)
+    assert len(provider.prompts) == calls, "a skipped commit is never paid for twice"
+
+
+def test_deleting_a_ledger_line_makes_the_commit_pending_again(in_repo):
+    sha = _commit(in_repo, "rename a helper")
+    index = commit_doc.HistoryIndex(paths.history_dir(in_repo))
+    ledger = index.skip(sha, "rename a helper")
+    assert sha not in [s for s, _ in commit_doc.pending_commits(in_repo)]
+
+    ledger.write_text("\n".join(l for l in ledger.read_text().splitlines() if sha not in l))
+
+    assert sha in [s for s, _ in commit_doc.pending_commits(in_repo)]
+
+
+def test_record_commit_takes_a_skip_from_the_session_agent(in_repo):
+    sha = _commit(in_repo, "bump the linter")
+
+    path = commit_doc.record_commit(in_repo, sha, SKIP)
+
+    assert path.name == commit_doc.SKIPPED_LEDGER
+    assert sha not in [s for s, _ in commit_doc.pending_commits(in_repo)]
+    assert not list(paths.history_dir(in_repo).glob("*.md"))
+
+
+def test_a_rebase_carries_a_skipped_commit_onto_its_new_sha(in_repo):
+    sha = _commit(in_repo, "rename a helper")
+    commit_doc.HistoryIndex(paths.history_dir(in_repo)).skip(sha, "rename a helper")
+    git(in_repo, "commit", "-q", "--amend", "-m", "rename a helper, again")
+    new_sha = git(in_repo, "rev-parse", "HEAD").strip()
+
+    [(old, new)] = commit_doc.apply_rewrites(in_repo, f"{sha} {new_sha}\n")
+
+    assert old == new == paths.history_dir(in_repo) / commit_doc.SKIPPED_LEDGER
+    text = new.read_text()
+    assert new_sha in text and sha not in text
+    assert new_sha not in [s for s, _ in commit_doc.pending_commits(in_repo)]
+
+
+def test_the_prompts_see_only_the_business_files_diff(in_repo, business_gate, monkeypatch):
+    _commit_files(
+        in_repo,
+        "cap refunds",
+        {
+            "specs/billing/refunds.md": "SPEC_TEXT\n",
+            "tests/test_refunds.py": "TEST_TEXT\n",
+            "src/refunds.py": "RULE_TEXT = 1\n",
+        },
+    )
+    provider = RoutingProvider(summary=STRUCTURED)
+    _use_provider(monkeypatch, provider)
+
+    commit_doc.sync(assume_yes=True)
+
+    [micro] = [p for p in provider.prompts if p.startswith(commit_doc.MICRO_DOC_PREFIX)]
+    assert "RULE_TEXT" in micro and "- src/refunds.py" in micro
+    assert "TEST_TEXT" not in micro and "SPEC_TEXT" not in micro
+    classify = [p for p in provider.prompts if not p.startswith(commit_doc.MICRO_DOC_PREFIX)]
+    assert classify and all("TEST_TEXT" not in p for p in classify)
+
+
+def test_a_skip_reply_is_parsed_as_a_skip():
+    assert commit_doc.parse_micro_doc('```json\n{"skip": true}\n```').skip
+    assert not commit_doc.parse_micro_doc(STRUCTURED).skip
+    assert not commit_doc.parse_micro_doc('{"skip": "no"}').skip
+
+
 def test_refresh_rewrites_only_legacy_docs_and_keeps_their_link(in_repo, monkeypatch):
     legacy_sha = _commit(in_repo, "legacy one")
     modern_sha = _commit(in_repo, "modern one")

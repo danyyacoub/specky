@@ -5,9 +5,10 @@ description: Write specky's history docs for the commits it reports as pending, 
 
 # Document Commits
 Document the commits specky is waiting on, in this session, instead of specky launching a headless
-copy of this agent to do it. Each commit goes into a history entry under `specs/history/`. A
-branch's recent commits share one entry, and each commit rewrites it to describe the whole change.
-A commit that changes a documented feature also gets that feature doc updated.
+copy of this agent to do it. Only business logic is recorded. Each commit that has some goes into
+a history entry under `specs/history/`. A branch's recent commits share one entry, and each commit
+rewrites it to describe the whole change. A commit that changes a documented feature also gets that
+feature doc updated. A commit with no business logic in it is only marked as skipped.
 
 specky hands this over only when `[ai] provider = "agent"` and the commit came from inside that
 agent's own session. Everywhere else (a terminal commit, CI, an API provider) its git hook still
@@ -33,9 +34,11 @@ run_specky() { if command -v specky >/dev/null 2>&1; then specky "$@"; else uv r
 ```bash
 run_specky pending --json
 ```
-`commits` lists the commits to document, oldest first. `rules` is the exact instruction specky
-gives a provider for a history entry, and `rules_extend` the one for a commit joining an entry
-that already exists. Follow them to the letter. If `commits` is empty, say so and stop.
+`commits` lists the commits to document, oldest first. Commits that touch no business file (only
+tests, docs, CI, infrastructure, lockfiles and the like) are already left out. `rules` is the exact
+instruction specky gives a provider for a history entry, and `rules_extend` the one for a commit
+joining an entry that already exists. Follow them to the letter. If `commits` is empty, say so and
+stop.
 
 Each commit's `extends` says which entry it joins:
 - `null`: it gets its own entry. Write the JSON for this commit alone, following `rules`.
@@ -52,14 +55,21 @@ Work through at most 5 commits unless the user asked for more. Older ones stay p
 ### 2. For each commit, oldest first
 1. **Read it.** Run `git show --stat --patch <sha>`. On a large diff, the stat and the parts that
    change behaviour are enough.
-2. **Write the micro-doc** as the JSON object `rules` asks for, with keys `headline`, `impact`,
+2. **Decide whether it's business logic**, as `rules` defines it. If it isn't (a refactor, tests,
+   tooling, infrastructure, a version bump, a cosmetic UI tweak), record it as skipped and go on to
+   the next commit. Steps 3–5 don't apply to it:
+   ```bash
+   run_specky record-commit <sha> <<'JSON'
+   {"skip": true}
+   JSON
+   ```
+3. **Write the micro-doc** as the JSON object `rules` asks for, with keys `headline`, `impact`,
    `what_changed` and `why`. Describe what the product does differently, in its users' terms.
    Leave `why` empty when neither the commit message nor the diff states a motivation. If the
    commit joins an entry (`extends` isn't `null`), write it for the whole change, as
    `rules_extend` says.
-3. **Find the feature it belongs to**, if any. Check `specs/MODULES.md`, then run `search_docs` (or
-   `run_specky search "<terms>"`) with the commands, settings or screens the commit changed. A
-   commit with `impact: internal` usually belongs to none.
+4. **Find the feature it belongs to**, if any. Check `specs/MODULES.md`, then run `search_docs` (or
+   `run_specky search "<terms>"`) with the commands, settings or screens the commit changed.
    - If it changes behaviour an existing doc describes, update that doc. Follow steps 2–9 of the
      `document-domain` skill (`skills/document-domain/SKILL.md`), touching only the sections the
      commit made wrong or incomplete. Its Constants rules matter most here: keep every threshold,
@@ -68,8 +78,8 @@ Work through at most 5 commits unless the user asked for more. Older ones stay p
      has one, and state a rule another doc owns by linking to it (One owner per rule).
    - If it adds a feature no doc covers, write one the same way, including its `MODULES.md` row.
    - Otherwise leave the feature docs alone.
-4. **Record it.** Pass the JSON on stdin, and `--feature` with the repo-relative path of the doc
-   from 3, if there is one:
+5. **Record it.** Pass the JSON on stdin, and `--feature` with the repo-relative path of the doc
+   from 4, if there is one:
    ```bash
    run_specky record-commit <sha> --feature specs/<domain>/<topic>.md <<'JSON'
    {"headline": "...", "impact": "...", "what_changed": "...", "why": "..."}
@@ -87,9 +97,10 @@ disagrees with the doc owning it — and mention anything left in the report. It
 never blocks the commit.
 
 ### 4. Commit the docs
-Stage exactly what this run wrote: the history entries `record-commit` printed, any feature doc
-you changed, and `specs/MODULES.md` / `specs/GLOSSARY.md` / `specs/TAGS.md` if you changed them.
-Then commit, listing the full shas of the commits you recorded:
+Stage exactly what this run wrote: the history entries `record-commit` printed,
+`specs/history/skipped.txt` if you skipped a commit, any feature doc you changed, and
+`specs/MODULES.md` / `specs/GLOSSARY.md` / `specs/TAGS.md` if you changed them. Then commit, listing the full shas of the commits you recorded
+an entry for (not the skipped ones):
 
 ```bash
 git add <those paths>
@@ -101,5 +112,6 @@ The `Specky-Documents` trailer tells `specky check` which commits' code the feat
 describe. Leave any other uncommitted work alone.
 
 ### 5. Report
-For each commit: its short sha, the headline you wrote, and the feature doc it linked to, if any.
+For each commit: its short sha, and either the headline you wrote and the feature doc it linked to,
+if any, or that it was skipped as not business logic.
 Also report which feature docs were created or updated, and how many commits are still pending.

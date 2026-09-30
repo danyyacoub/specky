@@ -46,6 +46,7 @@ from typing import Callable
 from specky import gitlog, paths
 from specky.check import CheckConfig, covering_docs
 from specky.commit_doc import (
+    SKIPPED_LEDGER,
     HistoryConfig,
     HistoryIndex,
     MicroDoc,
@@ -54,6 +55,7 @@ from specky.commit_doc import (
     history_names,
     is_legacy_name,
     never_documented,
+    parse_ledger,
     read_history,
 )
 
@@ -79,9 +81,11 @@ _AGENT_EMAILS = frozenset(
 )
 _AGENT_EMAIL_SUFFIXES = ("+copilot@users.noreply.github.com",)
 
+# Ends in \x02 because `_log` asks for `--name-only` too: the body can span lines, so the file
+# list after it is only parseable from a marker no commit message contains.
 _FIELDS = (
     "%H%x1f%P%x1f%aN%x1f%aE%x1f%cI%x1f"
-    "%(trailers:key=Co-authored-by,valueonly,separator=%x1e)%x1f%s%x1f%S%x1f%b"
+    "%(trailers:key=Co-authored-by,valueonly,separator=%x1e)%x1f%s%x1f%S%x1f%b%x02"
 )
 _IDENTITY = re.compile(r"^(?P<name>.*?)\s*<(?P<email>[^>]*)>\s*$")
 
@@ -198,6 +202,7 @@ class _Commit:
     subject: str
     source: str
     body: str
+    files: list[str] | None = None  # None when unknown, as for a merge
 
 
 def is_agent(name: str, email: str, ignore: tuple[str, ...] = ()) -> bool:
@@ -241,9 +246,12 @@ def _log(repo_root: Path, args: list[str]) -> list[_Commit]:
     """Newest first in `--topo-order`: no commit before its children. Callers wanting oldest first
     reverse the list rather than sorting by date — rebased commits share a committer timestamp, so
     a date sort would put a branch's commits in no particular order."""
-    out = gitlog.run(repo_root, ["log", "--topo-order", f"--format=%x01{_FIELDS}", *args])
+    out = gitlog.run(
+        repo_root, ["log", "--topo-order", "--name-only", f"--format=%x01{_FIELDS}", *args]
+    )
     commits = []
     for record in out.split(gitlog.RECORD):
+        record, _, names = record.partition("\x02")
         fields = record.split("\x1f", 8)
         if len(fields) < 9:
             continue
@@ -258,6 +266,8 @@ def _log(repo_root: Path, args: list[str]) -> list[_Commit]:
                 subject=subject,
                 source=source,
                 body=body.strip(),
+                # None for a merge: `--name-only` lists nothing for one, which isn't "no files".
+                files=None if len(parents.split()) > 1 else [f for f in names.splitlines() if f],
             )
         )
     return commits
@@ -551,11 +561,11 @@ def _stated_features(commits: list[_Commit], docs: dict[str, tuple[str, MicroDoc
 
 
 def _walk_mainline(
-    repo_root: Path, tip: str, since: str, ignore: tuple[str, ...] = ()
+    repo_root: Path, tip: str, since: str, config: HistoryConfig | None = None
 ) -> tuple[list[tuple[_Commit, list[_Commit]]], dict[str, list[str]]]:
     """The window's changes, oldest first — `(first-parent commit, the work it brought in)` — and
     the files each first-parent commit changed. Commits `never_documented` (specky's own,
-    skip-tagged, CI bots, configured ignores) are not work."""
+    skip-tagged, configured ignores, no business file) are not work."""
     spine = [
         line.split("\x1f")
         for line in gitlog.run(
@@ -578,8 +588,10 @@ def _walk_mainline(
     groups = []
     for head, brought_in in _group_merges([sha for sha, _ in spine], introduced):
         # No author here on purpose: a bot's commit is still a change to count as automated —
-        # `humans()` drops it from the people. Only the subject-level skips mean "not work".
-        work = [c for c in brought_in if not never_documented(c.subject, ignore=ignore)]
+        # `humans()` drops it from the people. The subject and file rules mean "not work".
+        work = [
+            c for c in brought_in if not never_documented(c.subject, config=config, files=c.files)
+        ]
         if work:
             groups.append((head, work))
     return groups, files
@@ -620,7 +632,7 @@ def _group_merges(
 
 
 def _unmerged_branches(
-    repo_root: Path, tip: str, since: str, mainline_name: str, ignore: tuple[str, ...] = ()
+    repo_root: Path, tip: str, since: str, mainline_name: str, config: HistoryConfig | None = None
 ) -> dict[str, list[_Commit]]:
     """`{branch: its commits in the window, oldest first}` for work the mainline can't reach yet.
 
@@ -644,9 +656,9 @@ def _unmerged_branches(
     )
     for c in reversed(log):  # `_log` is newest first
         ref = c.source.removeprefix("refs/remotes/").removeprefix("refs/heads/")
-        # Subject-level skips only, as in `_walk_mainline`: bot-authored commits still count
+        # Subject and file rules only, as in `_walk_mainline`: bot-authored commits still count
         # as automated work rather than vanishing silently.
-        if never_documented(c.subject, ignore=ignore) or short(ref) in LONG_LIVED:
+        if never_documented(c.subject, config=config, files=c.files) or short(ref) in LONG_LIVED:
             continue
         if short(ref) != short(mainline_name):
             branches.setdefault(ref, []).append(c)
@@ -730,9 +742,20 @@ def collect(
         return activity
 
     since = f"--since={(now - timedelta(days=cfg.days)).isoformat()}"
-    ignore = HistoryConfig.load(repo_root).ignore
-    groups, files = _walk_mainline(repo_root, tip, since, ignore)
-    branches = _unmerged_branches(repo_root, tip, since, activity.branch, ignore)
+    config = HistoryConfig.load(repo_root)
+    groups, files = _walk_mainline(repo_root, tip, since, config)
+    branches = _unmerged_branches(repo_root, tip, since, activity.branch, config)
+    # Commits a provider judged not to be business logic aren't work either — wherever the ledger
+    # saying so lives: the working tree, or an unmerged branch's own tree.
+    skipped = _skipped(repo_root, list(branches))
+    groups = [
+        (head, work) for head, brought_in in groups
+        if (work := [c for c in brought_in if c.sha not in skipped])
+    ]
+    branches = {
+        ref: work for ref, commits in branches.items()
+        if (work := [c for c in commits if c.sha not in skipped])
+    }
     docs = _history_docs(
         repo_root,
         [(tip, c.sha) for _, work in groups for c in work]
@@ -803,3 +826,18 @@ def collect(
     )
     activity.people = _by_person(items, people)
     return activity
+
+
+def _skipped(repo_root: Path, trees: list[str]) -> set[str]:
+    """Every sha in the skip ledger: the working tree's, and each of `trees`' own, in one
+    `cat-file --batch` — an unmerged branch's ledger lines exist only on that branch."""
+    history = HistoryIndex(paths.history_dir(repo_root))
+    found: dict[str, str] = {}
+    if history.ledger.is_file():
+        found.update(parse_ledger(history.ledger.read_text(errors="replace")))
+    ledger = paths.history_prefix(repo_root) + SKIPPED_LEDGER
+    for text in _read_blobs(repo_root, [f"{tree}:{ledger}" for tree in trees]):
+        if text is not None:
+            found.update(parse_ledger(text))
+    return set(found)
+
