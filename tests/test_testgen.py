@@ -291,11 +291,11 @@ def test_the_cli_wires_force_through(tmp_repo, write_doc, monkeypatch, capsys):
     run_index(tmp_repo)
     monkeypatch.chdir(tmp_repo)
 
-    cli._tests(argparse.Namespace(force=False, emit="pytest"))
+    cli._tests(argparse.Namespace(force=False, emit="pytest", check=False))
     assert "wrote tests/spec/test_billing_refund_flow.py" in capsys.readouterr().out
-    cli._tests(argparse.Namespace(force=False, emit="pytest"))
+    cli._tests(argparse.Namespace(force=False, emit="pytest", check=False))
     assert "pass --force" in capsys.readouterr().out
-    cli._tests(argparse.Namespace(force=True, emit="pytest"))
+    cli._tests(argparse.Namespace(force=True, emit="pytest", check=False))
     assert "wrote tests/spec/test_billing_refund_flow.py" in capsys.readouterr().out
 
 

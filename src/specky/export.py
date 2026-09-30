@@ -164,6 +164,12 @@ tbody tr:nth-child(even) { background: #fafbfc; }
 figure.tw { margin: 0 0 1em; overflow-x: auto; }
 figure.flow { margin: 0 0 1em; text-align: center; }
 figure.flow svg { max-width: 100%; height: auto; }
+/* ```matrix scenario tables (`matrix.render_figure`): stated outputs set off from the inputs, and
+   a stated value the block's own formula disputes underlined, as in the viewer. */
+figure.matrix .mx-first { border-left: 2px solid #c9ccd2; }
+figure.matrix td.mx-exp { font-weight: 600; }
+figure.matrix td.mx-bad { color: #b42318; text-decoration: underline wavy; }
+figure.matrix figcaption { font-size: .85em; color: #63666d; margin-top: .4em; }
 /* The viewer's workflow stepper (`html_render._step_list`), flattened for print: the same
    numbered steps, without the chip and rail that assume a screen and a color scheme. */
 ol.steps { counter-reset: step; list-style: none; padding-left: 0; }

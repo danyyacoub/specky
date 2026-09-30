@@ -7,7 +7,7 @@ tags: [cli, documentation]
 
 ## What It Does
 
-Every generated documentation file carries a `## Acceptance Tests` table listing scenarios as Given/When/Then rows. The `specky tests` command reads those tables, parses each row as a test case, and generates a pytest file with one skipped test function per scenario — no assertions, just a function that names the expected behaviour and waits for you to fill in the proof.
+Every generated documentation file carries a `## Acceptance Tests` table listing scenarios as Given/When/Then rows. The `specky tests` command reads those tables, parses each row as a test case, and generates a pytest file with one skipped test function per scenario — no assertions, just a function that names the expected behaviour and waits for you to fill in the proof. A ` ```matrix ` block in the same section is read too: it becomes one parametrized test per block, run over the rows the doc states. Those rows live in a `.matrix.json` beside the scaffold that every run rewrites, even without `--force`, so a doc edit reaches a test someone already wired; `specky tests --check` fails when that data is behind the docs.
 
 ## How It Works
 
@@ -21,6 +21,8 @@ Every generated documentation file carries a `## Acceptance Tests` table listing
 
 5. **Preserve edits** — Existing files are never overwritten unless you pass `--force`. This protects hand-written test bodies while allowing regeneration of untouched stubs.
 
+6. **Refresh matrix data** — Each ` ```matrix ` block's rows (stated inputs and expected outputs, never computed ones) go to `tests/spec/test_<domain>_<topic>.matrix.json`, which the scaffold reads at import time. This file is the doc's, not yours: every run rewrites it when it differs, and a data file whose doc no longer states a matrix is emptied. `--check` compares instead of writing, for CI.
+
 ## Outcomes
 
 | Result | Meaning |
@@ -28,6 +30,7 @@ Every generated documentation file carries a `## Acceptance Tests` table listing
 | Written | New test file created, or existing file regenerated with `--force` |
 | Skipped | File already exists and `--force` was not passed; no changes made |
 | Counted | Total scenarios in each file, reported in the summary |
+| Refreshed | A `.matrix.json` rewritten because the doc's matrix rows changed |
 
 ## Acceptance Tests
 
@@ -39,3 +42,6 @@ Every generated documentation file carries a `## Acceptance Tests` table listing
 | Force regenerate | Test file exists and has been hand-edited | `specky tests --force` runs | File overwritten with fresh scaffold; hand-written tests lost |
 | No force | Test file exists and untouched | `specky tests` (no flag) runs | File left alone; skipped in report |
 | History excluded | Docs in `specs/history/` carry Acceptance Tests tables | `specky tests` runs | No tests written for history docs; path excluded before parsing |
+| Matrix block | Doc's Acceptance Tests has a ` ```matrix ` block with rows | `specky tests` runs | One parametrized skipped test per block, reading its rows from `test_<slug>.matrix.json`; malformed block skipped (lint reports it) |
+| Matrix row edited | Scaffold exists and is wired; a row's expected value changes in the doc | `specky tests` runs (no `--force`) | Scaffold left alone; `.matrix.json` rewritten, so the wired test now checks the new value |
+| Matrix data stale | A doc's matrix changed since the last `specky tests` | `specky tests --check` runs | Nothing written; the stale data file named; exit 1 |

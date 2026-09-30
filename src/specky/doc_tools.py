@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from specky import catalog, frontmatter, paths, source
+from specky import catalog, frontmatter, matrix, paths, source
 from specky.db import connect, fts_match_query
 from specky.generator import modules_purposes
 from specky.testgen import PLACEHOLDERS, section, tables
@@ -237,9 +237,10 @@ def doc_behaviours(repo_root: Path, path: str) -> list[dict]:
     """Every behaviour a doc states, one row each, with a stable id.
 
     The numbered steps of How It Works (`STEP-n`), and the rows of its Outcomes (`OUT-n`), Edge
-    Cases (`EDGE-n`) and Acceptance Tests (`AT-n`) tables. Each row is `{id, section, text,
-    fields}`: `fields` maps a table's header to that row's cell, `text` is the same row flattened
-    for a reader. Placeholder rows ("n/a", "TBD") are not behaviours and get no id.
+    Cases (`EDGE-n`) and Acceptance Tests (`AT-n`) tables — a ```matrix row under Acceptance Tests
+    counts as one too. Each row is `{id, section, text, fields}`: `fields` maps a table's header to
+    that row's cell, `text` is the same row flattened for a reader. Placeholder rows ("n/a", "TBD")
+    are not behaviours and get no id.
     """
     doc, _ = resolve_doc(repo_root, path)
     _, body = frontmatter.parse(doc.read_text())
@@ -264,6 +265,21 @@ def doc_behaviours(repo_root: Path, path: str) -> list[dict]:
                 fields = {h: c for h, c in zip(header, cells)}
                 text = " · ".join(f"{h}: {c}" for h, c in fields.items() if c)
                 rows.append({"id": f"{prefix}-{n}", "section": label, "text": text, "fields": fields})
+        if prefix == "AT":
+            # A ```matrix row is an acceptance test too: its inputs and the outputs it states.
+            for block in matrix.parse_blocks("\n".join(lines)):
+                for row in block.rows:
+                    n += 1
+                    given = {c.name: matrix.fmt(v) for c, v in zip(block.inputs, row.inputs)}
+                    then = {name: matrix.fmt(v) for name, v in row.expected}
+                    text = (
+                        f"{row.label} · given "
+                        + ", ".join(f"{k} = {v}" for k, v in given.items())
+                        + " · expect "
+                        + ", ".join(f"{k} = {v}" for k, v in then.items())
+                    )
+                    fields = {"Scenario": row.label, **given, **{f"→ {k}": v for k, v in then.items()}}
+                    rows.append({"id": f"AT-{n}", "section": label, "text": text, "fields": fields})
     return rows
 
 

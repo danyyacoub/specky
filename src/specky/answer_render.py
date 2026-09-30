@@ -24,12 +24,16 @@ from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 
-from specky import diagram_render, html_render, paths
+from specky import diagram_render, html_render, matrix, paths
 
 # Each fence is a `node` subprocess (diagram_render.render_mermaid_svg), so one answer must not be
 # able to fan out into a dozen of them. The prompt asks for at most one; this is the bound that
 # doesn't depend on the model honouring it. Fences past it are left as their own source text.
 MAX_ANSWER_DIAGRAMS = 2
+
+# Same bound for ```matrix``` fences — cheaper than a diagram (in-process eval, no subprocess),
+# but an answer isn't the place for a wall of tables.
+MAX_ANSWER_MATRICES = 4
 
 # What a model may put in the panel. Deliberately the vocabulary python-markdown emits, plus the
 # few inline tags a model reaches for by hand — not "HTML minus the dangerous bits", which is the
@@ -218,4 +222,5 @@ def render_answer(repo_root: Path, markdown_text: str) -> str:
     body, _source, _rendered = diagram_render.render_mermaid_blocks(
         html_render._wrap_tables(fragment), limit=MAX_ANSWER_DIAGRAMS
     )
+    body, _, _ = matrix.render_matrix_blocks(body, limit=MAX_ANSWER_MATRICES)
     return body

@@ -151,6 +151,28 @@ GLOSSARY.md so a scenario is unambiguous.}
 - Each scenario is concrete: real-ish values, named entities, expected outputs.
 - Cover: happy path, at least one edge case, and every tolerance/threshold/boundary the domain has.
 - Use the exact vocabulary from `GLOSSARY.md`, and state the formula inline when a `Then` is a computed number.
+- **When the criteria are enumerable input→output cases** (a calculation or decision rule: these inputs produce these outputs — variances, pricing, matching verdicts, scoring), prefer a ` ```matrix ` block over a G/W/T table. It declares typed `inputs:` and `expect:` columns (`number`, `text`, `bool`, `enum[a, b]`), then one row per case stating its inputs and the outputs you worked out by hand — never copy an output from a formula, because a row is only worth something as an independent statement of the answer. Add `formulas:` when the rule is expressible (`+ - * / %`, comparisons, `and`/`or`/`not`, `min`, `max`, `abs`, `round`, `if`, `coalesce`) so `specky lint` checks every row against it. An empty input cell is a missing value; an empty expected cell isn't asserted. `specky tests` turns each block into a parametrized test. Example:
+  ````
+  ```matrix
+  name: price_variance
+  inputs:
+    ordered: number
+    delivered: number
+    billed_qty: number
+    billed_price: number
+    ref_price: number
+  expect:
+    qty_var: number
+    impact: number
+  formulas:
+    price_var = (billed_price - ref_price) * billed_qty
+    qty_var = max(0, billed_qty - coalesce(delivered, ordered)) * ref_price
+    impact = price_var + qty_var
+  ---
+  | Two-component over-billing | 100 | 95 | 98 | 33 | 32 | 96 | 194 |
+  | No delivery document | 100 | | 110 | 32 | 32 | 320 | 320 |
+  ```
+  ````
 - Prefer scenarios that map to (or already have) real tests in the codebase's test suite — link them when they exist.
 
 **Constants rules** (the `## Constants & Invariants` section):

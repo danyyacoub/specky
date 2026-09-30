@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from specky import catalog, facts, paths
+from specky import catalog, facts, matrix, paths
 from specky.testgen import split_sections, tables
 
 # Headings whose tables name states — statuses, outcomes, verdicts. The first column of such a table
@@ -74,6 +74,15 @@ class TagProblem:
 
 
 @dataclass(frozen=True)
+class MatrixProblem:
+    doc: str
+    problem: str
+
+    def as_dict(self) -> dict:
+        return {"doc": self.doc, "problem": self.problem}
+
+
+@dataclass(frozen=True)
 class Claim:
     doc: str
     value: str
@@ -99,10 +108,16 @@ class LintReport:
     undefined_terms: list[UndefinedTerm] = field(default_factory=list)
     tag_problems: list[TagProblem] = field(default_factory=list)
     conflicts: list[Conflict] = field(default_factory=list)
+    matrix_problems: list[MatrixProblem] = field(default_factory=list)
 
     @property
     def findings(self) -> int:
-        return len(self.undefined_terms) + len(self.tag_problems) + len(self.conflicts)
+        return (
+            len(self.undefined_terms)
+            + len(self.tag_problems)
+            + len(self.conflicts)
+            + len(self.matrix_problems)
+        )
 
     def as_dict(self) -> dict:
         return {
@@ -111,6 +126,7 @@ class LintReport:
             "undefined_terms": [t.as_dict() for t in self.undefined_terms],
             "tag_problems": [t.as_dict() for t in self.tag_problems],
             "conflicts": [c.as_dict() for c in self.conflicts],
+            "matrix_problems": [m.as_dict() for m in self.matrix_problems],
         }
 
 
@@ -334,6 +350,44 @@ def conflicting_constants(
     return [Conflict(key, tuple(bucket.values())) for key, bucket in sorted(found.items())]
 
 
+def matrix_problems(docs: list[Doc], scope: set[str]) -> list[MatrixProblem]:
+    """Malformed ```matrix blocks, rows whose formulas can't evaluate, and rows
+    whose stated outputs a formula disputes.
+
+    The renderer already falls back to source text for a bad block, so nothing
+    here refuses — it reports, which is lint's whole contract. A disputed value
+    is the finding worth having: either the doc's arithmetic is wrong or its
+    formula is, and the generated test would pin whichever the row states.
+    """
+    out = []
+    for doc in docs:
+        if doc.path not in scope:
+            continue
+        for i, source in enumerate(matrix.block_sources(doc.body)):
+            where = f"matrix #{i + 1}"
+            try:
+                m = matrix.parse(source)
+            except matrix.MatrixError as exc:
+                out.append(MatrixProblem(doc.path, f"{where}: {exc}"))
+                continue
+            for row in m.rows:
+                try:
+                    wrong = matrix.check_row(m, row)
+                except matrix.MatrixError as exc:
+                    out.append(MatrixProblem(doc.path, f"{where} row {row.label!r}: {exc}"))
+                    continue
+                stated = dict(row.expected)
+                out += [
+                    MatrixProblem(
+                        doc.path,
+                        f"{where} row {row.label!r}: {name} states {matrix.fmt(stated[name])}, "
+                        f"formula gives {matrix.fmt(got)}",
+                    )
+                    for name, got in wrong.items()
+                ]
+    return out
+
+
 def _clip(line: str, limit: int = 140) -> str:
     line = " ".join(line.split())
     return line if len(line) <= limit else line[: limit - 1] + "…"
@@ -362,6 +416,7 @@ def run_lint(repo_root: Path, only: set[str] | None = None) -> LintReport:
         undefined_terms=undefined_terms(docs, glossary, scope, glossary_text),
         tag_problems=tag_problems(docs, registry, scope),
         conflicts=conflicting_constants(docs, glossary, scope),
+        matrix_problems=matrix_problems(docs, scope),
     )
 
 
@@ -432,6 +487,17 @@ def section_lines(report: LintReport, *, prefix: str = "") -> list[str]:
             lines += [f"    {c.doc}: {c.value} — {c.line}" for c in conflict.claims]
         if len(report.conflicts) > LIST_LIMIT:
             lines.append(f"  … and {len(report.conflicts) - LIST_LIMIT} more")
+    if report.matrix_problems:
+        lines += [
+            "",
+            f"{prefix}{len(report.matrix_problems)} ```matrix problem(s) — a block that doesn't "
+            "parse renders as its source text, a disputed value renders underlined:",
+        ]
+        lines += [
+            f"  {m.doc}: {m.problem}" for m in report.matrix_problems[:LIST_LIMIT]
+        ]
+        if len(report.matrix_problems) > LIST_LIMIT:
+            lines.append(f"  … and {len(report.matrix_problems) - LIST_LIMIT} more")
     return lines
 
 

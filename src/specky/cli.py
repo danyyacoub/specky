@@ -155,8 +155,17 @@ def _cost(args: argparse.Namespace) -> None:
 
 def _tests(args: argparse.Namespace) -> None:
     from specky.db import repo_root
-    from specky.testgen import emit, report_lines
+    from specky.testgen import emit, report_lines, stale_matrix_files
 
+    if args.check:
+        stale = stale_matrix_files(repo_root())
+        for path in stale:
+            print(f"specky tests: {path} is behind the docs")
+        if stale:
+            print("specky tests: run `specky tests` to refresh the ```matrix data")
+            raise SystemExit(1)
+        print("specky tests: ```matrix data is up to date")
+        return
     for line in report_lines(emit(repo_root(), force=args.force)):
         print(f"specky tests: {line}")
 
@@ -556,7 +565,7 @@ def build_parser() -> argparse.ArgumentParser:
     cost_cmd.add_argument("--json", action="store_true", help="Machine-readable output")
     tests_cmd = command(
         "tests",
-        "Write pytest scaffolds from the Given/When/Then tables in specs/",
+        "Write pytest scaffolds from the Given/When/Then tables and ```matrix blocks in specs/",
         _tests,
     )
     tests_cmd.add_argument(
@@ -567,6 +576,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tests_cmd.add_argument(
         "--force", action="store_true", help="Overwrite scaffolds that already exist"
+    )
+    tests_cmd.add_argument(
+        "--check",
+        action="store_true",
+        help="Write nothing; exit 1 if a ```matrix data file is behind the docs (for CI)",
     )
     export_cmd = command(
         "export",

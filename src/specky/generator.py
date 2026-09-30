@@ -129,8 +129,12 @@ Numbered steps explaining the process. Each step is one sentence with a bold lab
 Table of possible outcomes/results, if the feature has distinct outcomes/statuses.
 {constants_and_notes}
 ## Acceptance Tests
-Given/When/Then table pinning down expected behaviour. If nothing testable, say so explicitly rather than
-omitting the section.
+Given/When/Then table pinning down expected behaviour. Where the criteria are enumerable
+input→output cases (a calculation or decision rule: these inputs give these outputs), use a
+```matrix fenced block instead — `inputs:` and `expect:` columns typed number, text, bool or
+enum[a, b], then `---` and one row per case stating its inputs and its expected outputs, worked
+out by hand. Optional `formulas:` lines (`name = expression`) restate the rule so lint can check
+every row against it. If nothing testable, say so explicitly rather than omitting the section.
 
 {style}"""
 

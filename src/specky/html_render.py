@@ -55,7 +55,7 @@ from urllib.parse import unquote
 import markdown as md
 from jinja2 import Environment
 
-from specky import activity, diagram_render, paths
+from specky import activity, diagram_render, matrix, paths
 from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
 from specky.staleness import days_behind
@@ -2654,7 +2654,8 @@ def render_doc_body(
     content: str, glossary: dict[str, str], doc_type: str = ""
 ) -> tuple[str, bool, bool]:
     """A doc's markdown as the HTML every specky renderer shows: glossary terms wrapped, tables in
-    a scrollable figure, ```mermaid``` fences replaced by static SVG.
+    a scrollable figure, ```mermaid``` fences replaced by static SVG, ```matrix``` fences as
+    scenario tables.
 
     Returns `(html, any mermaid source, any of it rendered)` — the two flags drive the one-time
     "run `specky setup-diagrams`" hint. `specky export` shares this so a stakeholder's single-page
@@ -2667,7 +2668,9 @@ def render_doc_body(
     body_html = _wrap_tables(link_glossary(markdown_html(content), glossary))
     if doc_type == "workflow":
         body_html = _step_list(body_html)
-    return diagram_render.render_mermaid_blocks(body_html)
+    body_html, has_source, has_rendered = diagram_render.render_mermaid_blocks(body_html)
+    body_html, _, _ = matrix.render_matrix_blocks(body_html)
+    return body_html, has_source, has_rendered
 
 
 # --- in-body links and heading anchors ---------------------------------------------------
@@ -3129,7 +3132,9 @@ def _write_assets(site_dir: Path, search_entries: list[dict], hover: dict[str, s
     """
     assets = site_dir / "assets"
     assets.mkdir(parents=True, exist_ok=True)
-    (assets / "site.css").write_text("\n".join((CSS, diagram_render.DIAGRAM_CSS)))
+    (assets / "site.css").write_text(
+        "\n".join((CSS, diagram_render.DIAGRAM_CSS, matrix.MATRIX_CSS))
+    )
     (assets / "app.js").write_text("\n".join(APP_JS_BLOCKS))
     # ASCII-escaped on purpose: a <script src> carries no encoding of its own, so an em dash
     # in a doc title travels as \\uXXXX rather than relying on the page's charset reaching
