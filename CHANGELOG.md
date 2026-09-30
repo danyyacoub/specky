@@ -7,6 +7,8 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.2.3]
+
 ### Fixed
 - **A Spec Assistant that can't reach its provider says why.** The SDK's bare "Connection error."
   now names the URL it was calling and the cause. On `bedrock`, a Mantle host that doesn't resolve
