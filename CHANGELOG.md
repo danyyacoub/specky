@@ -22,11 +22,19 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
   - The prompts read only the business files' part of the diff, with a list of those files.
   - The `document-commits` skill records a skip with `specky record-commit <sha>` and
     `{"skip": true}` on stdin.
+- **What changed, by feature, on the home page.** Recent activity opens with a digest of every
+  shipped change grouped under the feature it is about, each with its headline and What changed
+  paragraph, who made it and when; the per-person rows follow under "By person".
 
 ### Changed
+- **The activity window defaults to 7 days** (was 14). `[activity] days` still overrides it.
 - **The activity brief ignores commits with no business logic** — no business file, or in the
   skip ledger — the same way it ignores skip-tagged ones.
 - **`specky sync`'s estimate** is now one to three AI calls per commit (was two to three).
+
+### Fixed
+- **Code spans in the activity brief pair by backtick run.** One stray ```` ``` ```` in a model's
+  prose no longer shifts every later span, which had rendered the rest of the text as code.
 
 ## [0.2.1]
 

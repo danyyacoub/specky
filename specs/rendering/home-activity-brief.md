@@ -9,10 +9,17 @@ sources: [src/specky/activity.py, src/specky/html_render.py, src/specky/commit_d
 
 ## What It Does
 
-The viewer's home page has a **Recent activity** section: who changed what on the team's mainline
-over the last two weeks. It's written for a product owner who wants the shape of the work, not its
-commits. There's one collapsed row per person, with how much they shipped, what's still in
-progress, and the features they touched. Opening a row lists each change in plain language.
+The viewer's home page has a **Recent activity** section: what changed on the team's mainline over
+the last week, and who changed it. It's written for a product owner who wants the shape of the
+work, not its commits. It has two parts:
+
+- **What changed, by feature** — a digest that needs no clicking. Every shipped change is listed
+  under the feature doc it is about, each with its impact, its headline and its *What changed*
+  paragraph, then who made it, when, and its pull request. A change whose doc names no feature
+  with a page on the site goes under **Other changes**, which comes last. Features are ordered by
+  their newest change, and changes newest first; past 5, a feature's list ends in "+N more".
+- **By person** — one collapsed row per person, with how much they shipped, what's still in
+  progress, and the features they touched. Opening a row lists each change by its headline.
 
 Three things decide what appears:
 
@@ -80,7 +87,13 @@ No model is called to build it; it is git and the committed docs only.
 6. **Chips** — the feature and workflow docs a change touched. The strongest evidence comes first:
    the history docs' `features:`, then feature docs the change edited, and only when neither says
    anything, the two docs that cover its code most strongly.
-7. **Render** — people appear by most recent activity, each row closed until clicked:
+7. **Digest** — each shipped change's documented, non-`internal` lines, grouped by feature. A line
+   goes under the first doc its own entry's `features:` names that has a page on the site, else
+   the first of its change's chips that does, else Other. It is listed once, never under two
+   features, so the digest doesn't read as more work than there was. A legacy doc's paragraph is
+   already its line, so it shows no second paragraph.
+8. **Render** — the digest first, then people by most recent activity, each row closed until
+   clicked:
    - Within a person, changes made only of `internal` commits sink below the rest.
    - Lists past 15 items and changes with more than 3 lines finish with a native "+N more"
      disclosure, which needs no script.
@@ -93,7 +106,7 @@ No model is called to build it; it is git and the committed docs only.
 | Key | Default | Meaning |
 |---|---|---|
 | `branch` | auto-detected | The mainline to walk; a name that isn't a revision leaves the section out with a message, rather than showing another branch under this name |
-| `days` | `14` | How far back the window reaches |
+| `days` | `7` | How far back the window reaches |
 | `ignore_authors` | `[]` | Extra fnmatch patterns, matched against `Name <email>`, for identities that aren't people (a CI user, a team's own bot) |
 | `enabled` | `true` | `false` leaves the section out |
 
@@ -125,6 +138,10 @@ No model is called to build it; it is git and the committed docs only.
 | Every work commit followed by specky's doc-sync commit | The brief is collected | No line is a doc-sync commit, and a merge's commit count excludes them |
 | A commit with no history doc | The brief is collected | Its line is its subject, with no history link, and the undocumented count is 1 |
 | A commit changing only a test file, a commit in `skipped.txt` on `main`, and a branch commit in the branch's own `skipped.txt` | The brief is collected | None is a line or a person, and neither the automated nor the undocumented count moves |
+| No `[activity] days` | The brief is collected | The window is 7 days |
+| A doc with a headline, a What changed paragraph and `features: [specs/billing/refunds.md]` | The brief is collected | Its line carries that paragraph and that feature |
+| Shipped changes about two features with pages, one about a feature without a page, and one whose line names none but whose change edited a feature doc | The digest is built | Each feature's changes are under it, newest first; the unknown feature's change is under Other, which is last; the last one goes under the doc its change edited; `internal` and undocumented lines are not in it |
+| A merged pull request about `billing/refunds`, and a direct commit about no feature | The home page is rendered | The digest shows the Refunds heading before Other changes, each change's headline and What changed text, no `internal` line, and the per-person rows below it |
 | A legacy history doc "Refunds are capped. They used to be unlimited." | The brief is collected | The line is "Refunds are capped." |
 | A history doc rewritten in the working tree but not committed | The brief is collected | The line is the rewritten headline |
 | An unmerged branch whose history docs are committed only on it | The brief is collected from `main` | Its author has it In progress, with the headlines from those docs |

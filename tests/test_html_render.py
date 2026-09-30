@@ -15,6 +15,26 @@ from specky.html_render import (
     rewrite_links,
 )
 
+# --- inline markdown in the activity brief -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Pass `--limit` to cap it", "Pass <code>--limit</code> to cap it"),
+        ("**Refunds** are `a < b`", "Refunds are <code>a &lt; b</code>"),
+        # A stray fence must not shift the spans after it into the prose.
+        (
+            "Docs can hold a ```matrix block; `specky tests` runs it",
+            "Docs can hold a matrix block; <code>specky tests</code> runs it",
+        ),
+        ("A ``span with ` inside`` works", "A <code>span with ` inside</code> works"),
+    ],
+)
+def test_inline_pairs_backtick_runs_of_the_same_length(text, expected):
+    assert html_render._inline(text) == expected
+
+
 GLOSSARY = {
     "feature doc": "A reference doc for one bounded capability.",
     "feature": "A bounded capability.",

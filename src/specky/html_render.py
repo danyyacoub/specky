@@ -606,6 +606,39 @@ body.nav-collapsed .sidebar { display: none; }
 .change-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .change-meta.branch { margin: 0 0 4px; }
 .change-meta code, .brief code { font-size: 0.75rem; }
+/* The digest: what shipped, grouped by feature, each change with its text. */
+.digest { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.digest-group {
+  border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface);
+  padding: 12px 14px 10px;
+}
+.doc .activity h3.digest-feature {
+  display: flex; align-items: baseline; gap: 8px; font-size: 0.9375rem; margin: 0 0 6px;
+}
+.doc .digest-feature a { color: var(--text-primary); text-decoration: none; }
+.doc .digest-feature a:hover { color: var(--accent); text-decoration: underline; }
+.digest-n {
+  font-size: 0.6875rem; font-weight: 600; color: var(--text-tertiary);
+  background: var(--surface-secondary); border-radius: 999px; padding: 1px 7px;
+}
+.digest-items { list-style: none; margin: 0; padding: 0; }
+.digest-item { padding: 8px 0; border-top: 1px solid var(--border); }
+.digest-items > .digest-item:first-child { border-top: none; padding-top: 2px; }
+.doc .digest-item p { margin: 0; }
+.digest-head { font-size: 0.875rem; font-weight: 600; line-height: 1.45; }
+.doc .digest-head a { color: var(--text-primary); text-decoration: none; }
+.doc .digest-head a:hover { color: var(--accent); text-decoration: underline; }
+.doc .digest-item p.digest-what {
+  font-size: 0.875rem; line-height: 1.55; color: var(--text-secondary); margin-top: 2px;
+}
+.doc .digest-item p.digest-meta {
+  font-size: 0.75rem; color: var(--text-tertiary); margin-top: 4px;
+}
+.digest-what code { font-size: 0.75rem; }
+.doc .activity h3.activity-sub {
+  font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--text-tertiary); margin: 0 0 8px;
+}
 .activity details.more > summary {
   font-size: 0.75rem; color: var(--accent); cursor: pointer; margin: 4px 0; list-style: none;
 }
@@ -2880,15 +2913,28 @@ ACTIVITY_ITEMS_SHOWN = 15
 ACTIVITY_LINES_SHOWN = 3
 ACTIVITY_CHIPS_SHOWN = 4
 ACTIVITY_PERSON_CHIPS = 3
+# Changes shown per feature in the digest before its "+N more".
+DIGEST_ITEMS_SHOWN = 5
 
 
-_CODE_SPAN = re.compile(r"`([^`]+)`")
+# A code span opens and closes on backtick runs of the same length (CommonMark's rule). Pairing
+# single backticks instead let one stray run — a model quoting a ```matrix fence mid-paragraph —
+# shift every span after it, putting the prose in code and the code in prose.
+_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 
 
 def _inline(text: str) -> str:
-    """A brief line as HTML: escaped, with the markdown a model writes into one sentence — code
-    spans and bold — rendered or dropped rather than shown as backticks and asterisks."""
-    return _CODE_SPAN.sub(r"<code>\1</code>", html.escape(text.replace("**", "")))
+    """A brief line or paragraph as HTML: escaped, with the markdown a model writes into prose —
+    code spans and bold — rendered or dropped rather than shown as backticks and asterisks."""
+
+    def prose(part: str) -> str:
+        return html.escape(part.replace("**", "").replace("`", ""))
+
+    out, pos = [], 0
+    for match in _CODE_SPAN.finditer(text):
+        out += [prose(text[pos : match.start()]), f"<code>{html.escape(match[2].strip())}</code>"]
+        pos = match.end()
+    return "".join(out) + prose(text[pos:])
 
 
 def _short_date(when: datetime) -> str:
@@ -2971,7 +3017,9 @@ def _activity_html(
             f"in the last {recent.days} days.</p>"
         )
     else:
-        body = "".join(_person_html(p, pages, doc_info) for p in recent.people)
+        people = "".join(_person_html(p, pages, doc_info) for p in recent.people)
+        digest = _digest_html(recent, pages, doc_info)
+        body = f'{digest}<h3 class="activity-sub">By person</h3>{people}' if digest else people
     notes = []
     if recent.automated:
         notes.append(f"{recent.automated} automated change(s) by bots or agents not shown")
@@ -2982,6 +3030,51 @@ def _activity_html(
         )
     foot = f'<p class="activity-foot">{" · ".join(notes)}</p>' if notes else ""
     return f'<section class="activity"><h2>Recent activity</h2>{meta}{body}{foot}</section>'
+
+
+def _digest_html(
+    recent: activity.Activity, pages: dict[str, str], doc_info: dict[str, dict]
+) -> str:
+    """What shipped in the window, grouped by feature, each change with its What changed text —
+    the overview a reader gets without opening anyone's row (see `activity.digest`)."""
+    groups = activity.digest(recent.changes, set(doc_info))
+    if not groups:
+        return ""
+    sections = []
+    for feature, entries in groups:
+        if feature:
+            info = doc_info[feature]
+            title = (
+                f'<a href="{html.escape(info["html_name"], quote=True)}">'
+                f'{html.escape(info["label"])}</a>'
+            )
+        else:
+            title = "Other changes"
+        items = []
+        for line, change in entries:
+            headline = _inline(line.text)
+            if page := pages.get(line.history_path):
+                headline = f'<a href="{html.escape(page, quote=True)}">{headline}</a>'
+            badge = (
+                f'<span class="impact impact-{line.impact}">{line.impact}</span>'
+                if line.impact
+                else ""
+            )
+            what = f'<p class="digest-what">{_inline(line.what)}</p>' if line.what else ""
+            label = html.escape(change.label)
+            if change.pr_url and label:
+                label = f'<a href="{html.escape(change.pr_url, quote=True)}">{label}</a>'
+            facts = [html.escape(", ".join(change.people)), _short_date(change.date), label]
+            items.append(
+                f'<li class="digest-item"><p class="digest-head">{badge}{headline}</p>{what}'
+                f'<p class="digest-meta">{" · ".join(f for f in facts if f)}</p></li>'
+            )
+        sections.append(
+            f'<section class="digest-group"><h3 class="digest-feature">{title}'
+            f'<span class="digest-n">{len(entries)}</span></h3>'
+            f'{_more(items, DIGEST_ITEMS_SHOWN, "ul", "digest-items")}</section>'
+        )
+    return f'<div class="digest">{"".join(sections)}</div>'
 
 
 def _change_item(

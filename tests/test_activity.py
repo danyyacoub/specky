@@ -205,6 +205,10 @@ def test_commits_with_no_business_logic_never_show_as_work(repo, business_gate):
     assert (found.automated, found.undocumented) == (0, 0)
 
 
+def test_the_window_is_a_week_by_default():
+    assert ActivityConfig().days == 7
+
+
 # --- where the words come from ------------------------------------------------------------
 
 
@@ -538,6 +542,59 @@ def test_no_pr_link_for_a_host_it_doesnt_know(repo, tmp_path):
 # --- the home page ------------------------------------------------------------------------
 
 
+def test_a_line_carries_its_what_changed_and_its_features(repo):
+    work(repo, "Cap refunds", headline="Refunds are capped", features=("specs/billing/refunds.md",))
+
+    [line] = person(brief(repo), "Alice Martin").shipped[0].lines
+    assert (line.what, line.features) == ("What.", ("specs/billing/refunds.md",))
+
+
+def _change(day: int, *lines: activity.Line, features: tuple[str, ...] = ()) -> activity.Change:
+    return activity.Change(
+        sha=f"{day:040d}",
+        date=datetime(2026, 9, day, tzinfo=timezone.utc),
+        lines=list(lines),
+        label="",
+        pr_url="",
+        commits=1,
+        people=["Alice"],
+        features=list(features),
+    )
+
+
+def _doc_line(text: str, *features: str, impact: str = "fix") -> activity.Line:
+    return activity.Line(
+        text=text,
+        detail="",
+        impact=impact,
+        history_path=f"specs/history/{text}.md",
+        what=f"{text} in words.",
+        features=features,
+    )
+
+
+def test_the_digest_groups_by_feature_newest_first_with_other_last():
+    refunds, exports = "specs/billing/refunds.md", "specs/data/exports.md"
+    changes = [
+        _change(29, _doc_line("b", refunds)),
+        _change(28, _doc_line("e", exports), _doc_line("x", "specs/gone.md")),
+        _change(27, _doc_line("u", impact="internal"), activity.Line("no doc", "", "", "")),
+        _change(26, _doc_line("a", refunds), _doc_line("o")),
+        _change(25, _doc_line("c"), features=(exports,)),
+    ]
+
+    groups = activity.digest(changes, {refunds, exports})
+
+    assert [(key, [line.text for line, _ in items]) for key, items in groups] == [
+        (refunds, ["b", "a"]),
+        (exports, ["e", "c"]),  # "c" says nothing itself, so its change's feature places it
+        # A feature the site has no page for is Other; internal and undocumented lines are out.
+        ("", ["x", "o"]),
+    ]
+
+
+
+
 def test_the_home_page_shows_people_not_agents(repo):
     _merged_pull_request(repo)
     work(repo, "Cap refunds\n\nCo-authored-by: Claude Opus 5 <noreply@anthropic.com>", headline="Refunds are capped", impact="fix")
@@ -552,3 +609,26 @@ def test_the_home_page_shows_people_not_agents(repo):
     assert '<span class="impact impact-fix">fix</span>' in home
     assert "Claude" not in home and "anthropic" not in home
     assert "Carol" not in home
+
+
+def test_the_home_page_digest_tells_each_change_under_its_feature(repo):
+    docs = repo / "specs" / "billing"
+    docs.mkdir(parents=True)
+    (docs / "refunds.md").write_text(
+        "---\ntype: feature\ntags: [billing]\n---\n\n# Refunds\n\nText.\n"
+    )
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", commit_doc._AUTO_COMMIT_MARKER)
+    _merged_pull_request(repo)
+    work(repo, "Speed up exports", headline="Exports finish sooner", impact="improvement")
+    run_index(repo)
+
+    home = (render_site(repo).parent / "index.html").read_text()
+    digest = home[home.index('<div class="digest">') : home.index('<h3 class="activity-sub">')]
+
+    assert "Refunds</a>" in digest
+    assert digest.index("Refunds</a>") < digest.index("Other changes")
+    assert "Refunds can be partial" in digest and "What." in digest
+    assert "Exports finish sooner" in digest[digest.index("Other changes") :]
+    assert "Refund helpers share one module" not in digest  # internal: counted in the rows only
+    assert home.count('<details class="person">') == 2  # the per-person rows are still there

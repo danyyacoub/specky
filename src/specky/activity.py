@@ -59,7 +59,8 @@ from specky.commit_doc import (
     read_history,
 )
 
-DEFAULT_DAYS = 14
+# A week: the brief is read as "what changed since last week", and a longer window buries it.
+DEFAULT_DAYS = 7
 
 # Tried in order when `[activity] branch` isn't set. `dev`/`develop` come first on purpose: in a
 # gitflow repo work lands there, and `main` only ever receives release merges — whose first-parent
@@ -136,6 +137,8 @@ class Line:
     detail: str  # the doc's what/why prose, for a hover; "" without a doc
     impact: str
     history_path: str  # the doc it came from, repo-relative; "" when the commit has none
+    what: str = ""  # the doc's What changed alone — the digest's paragraph
+    features: tuple[str, ...] = ()  # the doc's own `features:`, most direct first
 
 
 @dataclass
@@ -187,6 +190,9 @@ class Activity:
     automated: int = 0  # changes no human touched, left out
     undocumented: int = 0  # commits shown with their subject because they have no history doc
     shallow: bool = False
+    # Every shipped change once, newest first. `people` shares a change between everyone on it,
+    # so this is what the digest reads.
+    changes: list[Change] = field(default_factory=list)
     # The docs, not git, answered: this checkout's history isn't the one the docs were written
     # from (a docs-only image that `git init`s one synthetic commit is the case this is for).
     docs_only: bool = False
@@ -373,12 +379,18 @@ def _lines(commits: list[_Commit], docs: dict[str, tuple[str, MicroDoc]]) -> lis
 def _line(commit: _Commit, docs: dict[str, tuple[str, MicroDoc]]) -> Line:
     if commit.sha not in docs:
         return Line(text=commit.subject, detail="", impact="", history_path="")
-    path, doc = docs[commit.sha]
+    return _doc_line(*docs[commit.sha])
+
+
+def _doc_line(path: str, doc: MicroDoc) -> Line:
     return Line(
         text=brief(doc),
         detail="\n\n".join(p for p in (doc.what, doc.why) if p),
         impact=doc.impact,
         history_path=path,
+        # A legacy doc's paragraph is its whole text, and its first sentence is already the line.
+        what=doc.what if doc.headline else "",
+        features=tuple(doc.features),
     )
 
 
@@ -531,14 +543,7 @@ def _docs_only(repo_root: Path, activity: Activity, now: datetime, cfg: Activity
             Change(
                 sha=doc.commits[0] if doc.commits else "",
                 date=when,
-                lines=[
-                    Line(
-                        text=brief(doc),
-                        detail="\n\n".join(p for p in (doc.what, doc.why) if p),
-                        impact=doc.impact,
-                        history_path=str(path.relative_to(repo_root)),
-                    )
-                ],
+                lines=[_doc_line(str(path.relative_to(repo_root)), doc)],
                 label="",
                 pr_url="",
                 commits=len(doc.commits) or 1,
@@ -548,6 +553,7 @@ def _docs_only(repo_root: Path, activity: Activity, now: datetime, cfg: Activity
         )
     items.sort(key=lambda c: c.date, reverse=True)
     del items[DOCS_ONLY_MAX:]
+    activity.changes = list(items)
     activity.people = _by_person(items, people)
 
 
@@ -824,6 +830,9 @@ def collect(
     activity.undocumented = sum(
         1 for item in items for line in item.lines if not line.history_path
     )
+    activity.changes = sorted(
+        (item for item in items if isinstance(item, Change)), key=lambda c: c.date, reverse=True
+    )
     activity.people = _by_person(items, people)
     return activity
 
@@ -841,3 +850,25 @@ def _skipped(repo_root: Path, trees: list[str]) -> set[str]:
             found.update(parse_ledger(text))
     return set(found)
 
+
+def digest(changes: list[Change], known: set[str]) -> list[tuple[str, list[tuple[Line, Change]]]]:
+    """The shipped changes' documented lines, grouped by the feature doc each is about:
+    `[(doc path, [(line, its change), …]), …]`.
+
+    A line goes under the first of its own `features:` that is in `known` (the docs the site has
+    pages for), else its change's first known one, else `""` — Other. Once, never under two:
+    a digest that repeats itself reads as more work than there was. `internal` lines and lines with
+    no doc have no text to show, and stay in the per-person rows only. Newest first within a
+    group, groups by their newest line, and Other last.
+    """
+    groups: dict[str, list[tuple[Line, Change]]] = {}
+    for change in changes:
+        fallback = next((f for f in change.features if f in known), "")
+        for line in change.lines:
+            if not line.history_path or line.impact == "internal":
+                continue
+            key = next((f for f in line.features if f in known), fallback)
+            groups.setdefault(key, []).append((line, change))
+    for items in groups.values():
+        items.sort(key=lambda item: item[1].date, reverse=True)
+    return sorted(groups.items(), key=lambda g: (g[0] == "", -g[1][0][1].date.timestamp()))
