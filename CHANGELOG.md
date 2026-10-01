@@ -7,6 +7,22 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.2.4]
+
+### Fixed
+- **A workflow's steps show as steps however the section opens.** The viewer's stepper only
+  reached a numbered list sitting directly under `## How It Works`; one after a lead-in sentence
+  ("Five phases then run in order:") or under `###` subheadings stayed a plain list. Every labelled
+  list in the section is now promoted on its own, so a doc with one path per mode gets a stepper
+  for each.
+- **An agent's narration can no longer become a doc.** With an agent CLI provider (`devin -p`),
+  the doc prompt's hardcoded `specs/…` path read as a task in a repo whose docs live elsewhere:
+  the agent wrote the doc itself and replied with only its narration, which was saved over the
+  doc. The prompt now names the doc's real path under the configured root and asks for the answer
+  in the reply only; a `{"sections": …}` answer is found behind leading narration; and a body
+  with no `#` title and no `##` section is refused and parked in `.specky/pending/`, on both the
+  commit path and `specky document`.
+
 ## [0.2.3]
 
 ### Fixed
