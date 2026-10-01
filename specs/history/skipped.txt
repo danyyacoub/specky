@@ -1,0 +1,3 @@
+# Commits specky judged not to be business logic, so they get no history doc.
+# Delete a line to have that commit documented by the next hook fire or `specky sync`.
+ba276906b3d4fac797daff708758bef397d39999 chore: release 0.2.5
