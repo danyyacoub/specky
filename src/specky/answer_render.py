@@ -203,6 +203,44 @@ def _doc_page_href(repo_root: Path) -> html_render.HrefFor:
     return href_for
 
 
+# A doc path the model wrote as inline code (`specs/cli/check.md`) rather than as a link. Links and
+# `<pre>` blocks are matched first only so they can be skipped: a path inside either is already
+# handled (a link) or is code the reader is meant to see as written (a fence).
+_CODE_DOC_PATH = re.compile(
+    r"(?P<skip><a\b.*?</a>|<pre\b.*?</pre>)|<code>(?P<path>[\w.\-][\w./\-]*\.md)</code>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _link_cited_doc_paths(fragment: str, repo_root: Path) -> str:
+    """An inline-code doc path becomes a link to that doc's page, labelled with the doc's title.
+
+    The model cites its source by repo path, and `render_answer` has already pointed *links* at the
+    rendered page — but a path in backticks is not a link, so it showed the reader a `.md` file the
+    viewer doesn't serve. A path that names no doc in the tree is left as the code it was written as.
+    """
+
+    def link(match: re.Match[str]) -> str:
+        if match.group("skip") is not None:
+            return match.group(0)
+        doc = paths.doc_in_tree(repo_root, match.group("path"))
+        if doc is None or not doc.is_file():
+            return match.group(0)
+        page = html_render.page_name(doc.relative_to(repo_root).as_posix())
+        title = _doc_title(doc)
+        return f'<a href="{html.escape(page, quote=True)}">{html.escape(title)}</a>'
+
+    return _CODE_DOC_PATH.sub(link, fragment)
+
+
+def _doc_title(doc: Path) -> str:
+    """The doc's first heading, else its file name without the extension."""
+    for line in doc.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#"):
+            return line.lstrip("#").strip() or doc.stem
+    return doc.stem
+
+
 def render_answer(repo_root: Path, markdown_text: str) -> str:
     """One answer's markdown as panel HTML: sanitized, glossary-linked, tables wrapped, diagrams
     drawn.
@@ -217,6 +255,7 @@ def render_answer(repo_root: Path, markdown_text: str) -> str:
     """
     fragment = html_render.markdown_html(markdown_text)
     fragment = html_render.rewrite_links(fragment, "", _doc_page_href(repo_root))
+    fragment = _link_cited_doc_paths(fragment, repo_root)
     fragment = sanitize_fragment(fragment)
     fragment = html_render.link_glossary(fragment, dict(_glossary(str(repo_root))))
     body, _source, _rendered = diagram_render.render_mermaid_blocks(

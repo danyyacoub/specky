@@ -21,7 +21,7 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 
 5. **Answers are made safe before they are shown** — the model writes markdown, and every HTML tag and attribute it contains is checked against an allowlist first. Anything not permitted is escaped to text, before diagrams are drawn.
 
-6. **Answers are rendered like the docs** — tables gain scroll bars and zebra stripes, glossary terms get hover tooltips, and mermaid fences become static diagrams, at most 2 per answer. A table's cells wrap between words, never inside one: a table too wide for the panel scrolls sideways instead. Outside tables, a long unbroken path or hash still breaks, so it can't push the panel wider than it is.
+6. **Answers are rendered like the docs** — tables gain scroll bars and zebra stripes, glossary terms get hover tooltips, and mermaid fences become static diagrams, at most 2 per answer. A table's cells wrap between words, never inside one: a table too wide for the panel scrolls sideways instead. Outside tables, a long unbroken path or hash still breaks, so it can't push the panel wider than it is. A doc cited by its repo path, as a link or in backticks, becomes a link to that doc's page — the backticked form shows the doc's title rather than the `.md` path.
 
 7. **The panel follows the reader** — width, open state and pinned intent are remembered for the tab. A draft's current step is rebuilt on the next page, so its buttons keep working after the reader follows a cited source.
 
@@ -55,6 +55,7 @@ The Spec Assistant is the viewer's side panel for working with the docs: ask wha
 | The model's answer is a single sentence | The answer arrives | No **Read more** button is shown |
 | Reader asks "draft a spec for retry logic" | The server classifies the intent | The draft workflow starts and its first step shows as a card; no doc is written |
 | Answer contains 3 mermaid fences | System renders the answer | First 2 fences become static SVG; 3rd stays as markdown text |
+| Answer cites `specs/cli/check.md` in backticks | The answer is shown | The citation is a link to that doc's page, labelled with its title; no `.md` path is shown |
 | Model writes `<script>` tag in answer | Sanitizer processes the response | `<script>` tag and its contents are removed; text after it remains |
 | Reader resizes panel to 550px | Reader navigates to another page in the same tab | Panel reopens at 550px (width remembered in session storage) |
 | A draft is waiting on the Impact step | Reader navigates to another page | The Impact card is rebuilt there and its buttons still work |

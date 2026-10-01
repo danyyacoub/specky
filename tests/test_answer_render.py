@@ -148,6 +148,28 @@ def test_a_markdown_link_to_no_doc_keeps_only_its_words(repo, cited):
     assert "that file" in body and "<a" not in body
 
 
+def test_a_doc_path_in_backticks_links_to_its_page_under_the_docs_title(repo):
+    (repo / "specs" / "cli").mkdir()
+    (repo / "specs" / "cli" / "check.md").write_text("# Cli — Check\n")
+    body = render_answer(repo, "Source: `specs/cli/check.md`.")
+    assert 'href="cli-check.html"' in body and ">Cli — Check</a>" in body
+    assert ".md" not in body
+
+
+def test_a_backticked_path_inside_a_fence_or_a_link_is_left_alone(repo):
+    (repo / "specs" / "cli").mkdir()
+    (repo / "specs" / "cli" / "check.md").write_text("# Check\n")
+    fenced = render_answer(repo, "```\nspecs/cli/check.md\n```")
+    assert "specs/cli/check.md" in fenced and "<a" not in fenced
+    linked = render_answer(repo, "[`specs/cli/check.md`](specs/cli/check.md)")
+    assert linked.count("<a ") == 1
+
+
+def test_a_backticked_md_path_naming_no_doc_stays_code(repo):
+    body = render_answer(repo, "Edit `specs/nope/missing.md`.")
+    assert "<code>specs/nope/missing.md</code>" in body and "<a" not in body
+
+
 def test_a_page_link_the_model_wrote_is_kept(repo):
     assert 'href="cli-check.html"' in render_answer(repo, "See [check](cli-check.html).")
 
