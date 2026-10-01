@@ -6,17 +6,19 @@ tags: [rendering, documentation, search]
 # Rendering — Cross Doc Links
 
 ## What It Does
-Docs link to each other by repo path (like `../cli/check.md`), but the rendered viewer serves flat pages with no folders and no `.md` files. This feature resolves those in-body links at render time so they point at the page (or section) the target was actually rendered to, instead of 404ing. Each viewer page also ends with a **Related** block: the doc's hand-written `related:` links, then the docs that share a tag with it — derived at render time, so nobody has to write those links into anyone's frontmatter.
+
+Docs link to each other by repo path (like `../cli/check.md`), but the rendered viewer serves flat pages with no folders and no `.md` files. This feature resolves those in-body links at render time so they point at the page (or section) the target was actually rendered to, instead of 404ing. The same goes for a doc path the model cites as inline code in a Spec Assistant answer (`specs/cli/check.md`): it becomes a link to that doc's page, labelled with the doc's title. Each viewer page also ends with a **Related** block: the doc's hand-written `related:` links, then the docs that share a tag with it — derived at render time, so nobody has to write those links into anyone's frontmatter.
 
 ## How It Works
 
 1. **Pick the renderer's target** — Each renderer knows where it put a doc: the viewer serves one flat page per doc, while `specky export` serves one file with a section per doc.
 2. **Resolve each link** — A resolver looks at the link's target and anchor and returns the correct href for that renderer, or nothing if the target isn't in the output.
 3. **Unwrap dead links** — A link whose target the output doesn't contain keeps only its text; the broken anchor is dropped.
-4. **Anchor headings** — Headings get ids so `#section` links have something to land on, with the content pane offset so the fixed titlebar doesn't cover them.
-5. **Run before the sanitizer (answers only)** — Spec Assistant answers resolve links before the sanitizer runs, so a decoded `javascript:` href is still caught.
-6. **Run after body rendering** — In both the viewer and `specky export`, heading ids and link resolution are applied after the doc body is rendered, so heading ids don't interfere with the workflow stepper.
-7. **List the related docs** — Under each viewer page, a Related block lists the doc's `related:` targets first, then every other classified doc sharing at least one of its tags, most shared tags first, then by title, capped at six, each labelled with the tags it shares. Wider than `specky graph`, which only draws a tag edge from a workflow to a feature: a reader on a feature page wants its sibling features too. Derived rather than written because `related:` is reserved for a link no tag explains, because an agent writing one doc can't safely edit thirty others to add backlinks, and because a derived list can't go stale — it's recomputed from the tags on every render.
+4. **Link cited doc paths in answers** — A doc path an answer wrote as inline code, not as a link, becomes a link to that doc's page, labelled with the doc's title (its first heading, else its file name without the extension). Links and `<pre>` blocks are matched first only so they can be skipped: a path inside either is already handled (a link) or is code the reader is meant to see as written (a fence). A path that names no doc in the tree is left as the code it was written as.
+5. **Anchor headings** — Headings get ids so `#section` links have something to land on, with the content pane offset so the fixed titlebar doesn't cover them.
+6. **Run before the sanitizer (answers only)** — Spec Assistant answers resolve links, including cited inline-code doc paths, before the sanitizer runs, so a decoded `javascript:` href is still caught.
+7. **Run after body rendering** — In both the viewer and `specky export`, heading ids and link resolution are applied after the doc body is rendered, so heading ids don't interfere with the workflow stepper.
+8. **List the related docs** — Under each viewer page, a Related block lists the doc's `related:` targets first, then every other classified doc sharing at least one of its tags, most shared tags first, then by title, capped at six, each labelled with the tags it shares. Wider than `specky graph`, which only draws a tag edge from a workflow to a feature: a reader on a feature page wants its sibling features too. Derived rather than written because `related:` is reserved for a link no tag explains, because an agent writing one doc can't safely edit thirty others to add backlinks, and because a derived list can't go stale — it's recomputed from the tags on every render.
 
 ## Outcomes
 
@@ -25,6 +27,9 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 | Link targets a doc in the output | Resolved to that doc's page (viewer) or section (export) |
 | Link has a `#section` anchor | Resolved to the matching heading id on the target page or section |
 | Link targets a file the output doesn't contain | Link is unwrapped, keeping only its text |
+| An answer cites a doc path as inline code (`specs/cli/check.md`) | Linked to that doc's page, labelled with the doc's title |
+| An answer cites a path that names no doc in the tree | Left as the inline code it was written as |
+| An answer's inline-code path sits inside a link or a `<pre>` block | Left as written; links are already handled and fences are code the reader sees verbatim |
 | Answer link that isn't a `.md` path (a page name, an in-page anchor) | Kept as written; the sanitizer still vets it |
 | Answer link resolves to a `javascript:` href | Caught by the sanitizer that runs after resolution |
 | A doc shares a tag with other classified docs | Its Related block lists them after its `related:` links, labelled with the shared tags, at most six |
@@ -39,6 +44,8 @@ Docs link to each other by repo path (like `../cli/check.md`), but the rendered 
 | A doc links another doc by repo path | `specky export` renders the file | The link points at the target's section |
 | A link includes a `#section` anchor | The target doc is rendered | The link lands on the heading with that id |
 | A doc links a file not included in the export (e.g. `specs/history/` without `--include-history`) | The export renders | The link is unwrapped, keeping only its text |
+| An answer cites a doc path as inline code | The answer is rendered | The path becomes a link to that doc's page, labelled with the doc's title |
+| An answer cites a path that names no doc in the tree | The answer is rendered | The inline code is left as written |
 | An answer links a page name or an in-page anchor | The answer is rendered | The link is kept as written |
 | An answer contains a `javascript%3A…` link | The answer is rendered | The sanitizer catches the decoded href after resolution |
 | A feature tagged `refunds` with no `related:`, and a workflow also tagged `refunds` | The viewer renders | The feature's Related block links the workflow, labelled `refunds` |
