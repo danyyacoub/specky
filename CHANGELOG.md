@@ -7,6 +7,14 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.2.5]
+
+### Fixed
+- **The Spec Assistant links the docs it cites instead of naming their `.md` files.** An answer's
+  markdown links already pointed at the rendered page, but a doc path the model wrote in backticks
+  (`specs/cli/check.md`) stayed a source file the viewer doesn't serve. It now links to that doc's
+  page, labelled with the doc's title; a path that names no doc stays as code.
+
 ## [0.2.4]
 
 ### Fixed
