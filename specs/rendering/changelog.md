@@ -35,10 +35,13 @@ It appears in four places:
 
 No model is called to build it; it's the committed history docs, plus the repo's tags.
 
+A `breaking` impact marks changes users must adapt to, and within a day it is listed first.
+
 ## How It Works
 
 1. **Read the history docs.** Every doc under `<docs root>/history/` gives its date (the end of
-   its Date span), its authors, its impact, its `features:` and its words. Git isn't walked, so
+   its Date span), its authors, its impact, its `features:` and its words (headline, What changed,
+   Example). Git isn't walked, so
    the changelog is the same on a laptop and on a deployed server, whose checkout is the docs copied
    into a fresh `git init`.
 2. **Keep what's user-facing.** Docs older than the window, and docs whose impact is `internal`,
@@ -76,6 +79,7 @@ No model is called to build it; it's the committed history docs, plus the repo's
 | A deployed checkout with no git history | Days from the docs, no release markers |
 | A change from 20 days ago | On `changelog.html`, not on the home page |
 | `[changelog] enabled = false` | No `changelog.html`, no home block, no changelog search results |
+| A breaking change with an example today, and an internal change yesterday | MCP `recent_activity` has one day, today, with the breaking change and its example |
 
 ## Acceptance Tests
 
