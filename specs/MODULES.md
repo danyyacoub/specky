@@ -76,6 +76,7 @@ command that calls a model goes through this layer.
 | [chat/spec-assistant-panel.md](chat/spec-assistant-panel.md) | Spec Assistant as a full-height dock: short answers with Read more, draft step cards, intent steering |
 | [chat/spec-drafting-workflow.md](chat/spec-drafting-workflow.md) | Draft a spec change in steps — scope, impact, approved acceptance tests, final draft |
 | [chat/mcp-host-guidance.md](chat/mcp-host-guidance.md) | MCP server sends connect-time instructions and bundles an explore-docs skill so host models answer behaviour questions from docs before reading code |
+| [chat/mcp-http-transport.md](chat/mcp-http-transport.md) | Serve specky's MCP tools over HTTP at /mcp on specky serve, behind the same login as /chat, so remote agents can use a repo's docs with no checkout. |
 
 ## Search
 
