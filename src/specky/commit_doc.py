@@ -794,6 +794,39 @@ def _members_info(repo_root: Path, shas: Sequence[str]) -> list[Commit]:
     return [found[sha] for sha in dict.fromkeys(shas) if sha in found]
 
 
+# A `- **Date:**` / `- **Author:**` / `- **Message:**` line of a history doc's metadata block.
+# An entry's nested commit list is indented, so `^- ` never reaches it.
+_DOC_META = re.compile(r"^- \*\*(Date|Author|Message):\*\*\s*(.+?)\s*$", re.MULTILINE)
+_IDENTITY = re.compile(r"^(?P<name>.*?)\s*<(?P<email>[^>]*)>\s*$")
+
+
+def identity(text: str) -> tuple[str, str] | None:
+    """`"Ann <ann@x.io>"` → `("Ann", "ann@x.io")`; None for anything not in that shape."""
+    match = _IDENTITY.match(text.strip())
+    return (match["name"], match["email"]) if match else None
+
+
+def doc_stamp(text: str) -> tuple[datetime | None, list[tuple[str, str]]]:
+    """`(when, who)` from a history doc's metadata bullets — the clock and the people of a checkout
+    whose git history isn't the repo's (the activity brief's docs-only fallback, the MCP history
+    search on a deployed server).
+
+    An entry's date is a span (`first → last`); the end is when the change last moved. Authors
+    are the writer's `name <email>` list, comma-joined for a multi-commit entry.
+    """
+    meta: dict[str, str] = {}
+    for key, value in _DOC_META.findall(text):
+        meta.setdefault(key, value)
+    when: datetime | None = None
+    if raw := meta.get("Date"):
+        try:
+            when = datetime.fromisoformat(raw.rsplit("→", 1)[-1].strip())
+        except ValueError:
+            pass
+    authors = [i for a in meta.get("Author", "").split(", ") if (i := identity(a))]
+    return when, authors
+
+
 def read_history(text: str) -> tuple[str | None, MicroDoc] | None:
     """`(the first commit it records, what it says)` for a history doc — the writers in reverse.
 

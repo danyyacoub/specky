@@ -11,6 +11,16 @@ tags: [chat, ai, security]
 
 Most agents add a remote MCP server from a URL alone and can't attach a Basic auth header that way, so the logged-in viewer also hands out a **personal MCP URL**, `/mcp/k/<key>`, derived from the server's password and token. The viewer surfaces it on a **Connect an agent** page (`connect.html`, linked from the titlebar as "Connect an agent" with a plug icon), which offers one command or install button per agent. `GET /mcp/connect` returns that key to the logged-in page as a path (not an absolute URL — only the page knows the origin it was reached at, proxy and all).
 
+A deployed server has the docs but neither the code nor the repo's real git history — the image is the docs tree copied into a fresh `git init` — so the tools that make the URL MCP a knowledge graph read everything from the docs, the history docs included:
+
+- **`doc_context(topic)`** — one call for a doc and what surrounds it: a doc path, or the top `search_docs` hit for a few words (`alternatives` names the runners-up). It returns the doc's frontmatter fields, content, behaviours by id, its `neighbours` (docs linked by `related:` either way or by a shared tag, each with the reason) and its `recent` changes.
+- **`module_acceptance_tests(module, include_edge_cases)`** — every `AT-n` row (and `EDGE-n` when asked) the docs of one module state, grouped by doc. A module is a domain (a folder under the docs root) or one doc path.
+- **`search_history(query, author, module, since, impact, limit)`** — the history docs filtered by full text, author (part of a name or email), module, a window (`90m`, `24h`, `7d`, `2w` or an ISO date) and impact. Read from the history docs' own Date, Author, `impact:` and `features:`, never from `git log`.
+- **`recent_activity(since, module)`** — the same history summed up by module, with counts per author and per impact.
+- **Resources** — `specky://product`, `specky://modules`, `specky://glossary` (PRODUCT.md, MODULES.md, GLOSSARY.md) and `specky://doc/<domain>/<topic>.md`, for hosts that attach resources rather than call tools.
+
+`commits_for_doc` falls back to the history docs naming a doc when the index links no commits to it, which is the deployed case.
+
 ## How It Works
 
 1. **Route matched** — a request whose path is `/mcp` is recognised by the `serve` handler before the `/chat`, `/draft` and `/search` routes.
@@ -22,6 +32,9 @@ Most agents add a remote MCP server from a URL alone and can't attach a Basic au
 7. **Banner updated** — on startup `serve` now prints the MCP URL alongside the viewer and chat URLs.
 8. **Personal key route** — `/mcp/k/<key>` is checked by `_keyed_mcp` before the ordinary auth gate on both GET and POST: if the origin is not allowed it is refused; if the key does not verify it is a plain `404 {"error": "not found"}` with no Basic challenge (which would only make an agent prompt for a password it was never meant to need); if it verifies, the request is handled as `/mcp` (`_mcp`).
 9. **Connect page** — a logged-in `GET /mcp/connect` (after `_authenticated` and `_origin_ok`, gated by `_api_allowed`) returns `{"path": "/mcp/k/<key>"}`, or `{"path": "/mcp"}` when there is nothing to stand in for. The titlebar link and `connect.html` render that path per agent.
+10. **History read from the docs** — `search_history`, `recent_activity` and `doc_context`'s `recent` walk the history directory, read each doc's headline, What changed and Why (`commit_doc.read_history`) and its Date and Author bullets (`commit_doc.doc_stamp`), and keep the docs matching every filter given. An entry's date is a span; its end counts. A `query` ranks the history docs through the docs index first.
+11. **Module resolved** — `module_acceptance_tests` looks the domain up in `list_domains` and runs `doc_behaviours` on each doc in it; an unknown module is an error listing the real ones.
+12. **Bad input reported** — a bad `since`, path or module is a `ValueError` the tool turns into a `ToolError`, so the agent's model reads why.
 
 ## Outcomes
 
@@ -34,10 +47,16 @@ Most agents add a remote MCP server from a URL alone and can't attach a Basic au
 | `404 {"error": "not found"}` | POST to a path that is neither `/mcp` nor a known chat route; or `/mcp/k/<key>` with a wrong key (no Basic challenge) |
 | `200 {"path": …}` | Logged-in `GET /mcp/connect` passes `_api_allowed`; path is `/mcp/k/<key>` or `/mcp` |
 | MCP URL printed at startup | Always, in the `specky serve:` banner line |
+| History answered without git | `search_history` / `recent_activity` / `commits_for_doc` on a checkout whose git doesn't hold the history docs' commits |
+| Tool error naming the accepted forms | `since` is neither a duration nor an ISO date, or the module doesn't exist |
 
 ## Constants & Invariants
 
 - `MCP_PATH = "/mcp"` — the only path forwarded to the bridge; the SDK is always handed `MCP_PATH`.
+- `HISTORY_LIMIT = 10` — `search_history`'s default number of changes; any limit is clamped to `SEARCH_LIMIT_MAX = 25`.
+- `CONTEXT_NEIGHBOURS = 12`, `CONTEXT_RECENT = 5` — how many neighbours and recent changes `doc_context` returns.
+- `since` accepts `<n>m|min|h|d|w` or an ISO date/datetime; one with no offset is UTC. Dates are compared as aware datetimes, never as strings.
+- `search_history` with no query and no filter returns nothing rather than the whole history.
 - `CALL_TIMEOUT = 60.0` seconds — longest a single MCP call may take before the handler gives up.
 - `MCP_CONNECT_PATH = f"{MCP_PATH}/connect"` = `/mcp/connect` — the logged-in page's key lookup.
 - `MCP_KEY_PREFIX = f"{MCP_PATH}/k/"` = `/mcp/k/` — the personal MCP URL prefix.
@@ -88,3 +107,10 @@ Given/When/Then cases:
 | `/mcp/k/<key>` with a wrong or missing key | The request arrives from an allowed origin | `404 {"error": "not found"}` with no Basic challenge, and `routed_to_mcp` reflects the refusal |
 | A logged-in viewer page | It requests `GET /mcp/connect` | It receives `{"path": "/mcp/k/<key>"}`, or `{"path": "/mcp"}` when no key exists |
 | `Authorization` is present on an `/mcp` request | The bridge is called | The header is stripped before `mcp_bridge.handle` sees it, and the forwarded path is `MCP_PATH` |
+| A served repo whose git is one synthetic commit, with history docs | `search_history(author="ann", since="24h")` is called over `/mcp` | Ann's changes from the last day come back, read from the history docs |
+| History docs dated `11:00+02:00` and `10:00+00:00` on the same day | `search_history(since="24h")` | Both are compared in UTC; neither is misjudged by its offset |
+| A module `billing` with two docs, one stating no acceptance tests | `module_acceptance_tests("billing")` | Only the doc with tests is listed, each test with its `AT-n` id and fields |
+| `module_acceptance_tests("payments")` where no such domain exists | The tool is called | A tool error listing the modules there are |
+| A doc with a `related:` link and a tag it shares | `doc_context` on it | Both docs are in `neighbours`, with `related` and `tag: <name>` as the reasons |
+| `doc_context("panel docked")` | The words match a doc | The top search hit is returned, and the next hits are in `alternatives` |
+| A host reading resources | It reads `specky://doc/chat/panel.md` | The doc's text, through the same docs-tree containment check as `read_doc` |

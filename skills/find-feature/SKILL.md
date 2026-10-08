@@ -22,7 +22,8 @@ Docs live under the docs root (`specs/` unless `[docs] root` in `specky.toml` sa
 the repo has no such tree, say so in one line and go to step 5.
 
 ### 2. Find the doc
-- `search_docs` with the feature or symbol name as the user wrote it.
+- `doc_context` with the feature or symbol name as the user wrote it: the best doc, its neighbours
+  and its behaviours in one call. `search_docs` when you need more than the top hit.
 - Miss: retry with the terms `specs/GLOSSARY.md` uses for the concept.
 - Still miss: `list_features` and `list_domains`, pick by name.
 

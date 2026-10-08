@@ -75,8 +75,8 @@ gitignored `.devin/mcp_config.local.json`:
 
 Without either, every tool but `ping` returns an error naming `SPECKY_REPO_ROOT`.
 
-Tools exposed, all read-only: `list_domains`, `search_docs`, `read_doc`, `doc_behaviours`,
-`search_history` (the docs and their history); `list_features`, `list_workflows`, `list_tags`,
+Tools exposed, all read-only: `doc_context`, `list_domains`, `search_docs`, `read_doc`, `doc_behaviours`,
+`module_acceptance_tests`, `search_history`, `recent_activity` (the docs and their history); `list_features`, `list_workflows`, `list_tags`,
 `get_graph`, `commit_info`, `commits_for_doc` (the feature/workflow catalog);
 `render_acceptance_table` (pure formatting) and `ping`. The authoritative list is
 [`mcp_server.py`](../../src/specky/mcp_server.py).

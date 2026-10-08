@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from specky import catalog, frontmatter, matrix, paths, source
+from specky.commit_doc import doc_stamp, read_history
 from specky.db import connect, fts_match_query
 from specky.generator import modules_purposes
 from specky.testgen import PLACEHOLDERS, section, tables
@@ -285,30 +287,314 @@ def doc_behaviours(repo_root: Path, path: str) -> list[dict]:
 
 def doc_history(repo_root: Path, path: str, limit: int = HISTORY_LIMIT) -> list[dict]:
     """Commits linked to one doc, most recent first (`catalog.commits_for_doc`, capped). Raises
-    `ValueError` as `resolve_doc` does — the index keys commits by the repo-relative path."""
+    `ValueError` as `resolve_doc` does — the index keys commits by the repo-relative path.
+
+    Falls back to the history docs naming it when the index has no commits for it — a deployed
+    server's checkout, whose git is one synthetic commit, is that case."""
     _, rel_path = resolve_doc(repo_root, path)
-    return catalog.commits_for_doc(repo_root, rel_path)[:limit]
-
-
-def search_history(repo_root: Path, query: str, limit: int = HISTORY_LIMIT) -> list[dict]:
-    """Commits whose message or micro-doc summary matches `query` — why the docs say what they
-    say, and what used to be true before they did."""
-    match = topic_match(query)
-    if match is None:
-        return []
-    conn = connect(repo_root)
-    try:
-        rows = conn.execute(
-            "SELECT sha, message, summary FROM commits_fts WHERE commits_fts MATCH ? "
-            "ORDER BY rank LIMIT ?",
-            (match, _limit(limit, HISTORY_LIMIT)),
-        ).fetchall()
-    finally:
-        conn.close()
+    commits = catalog.commits_for_doc(repo_root, rel_path)
+    if commits:
+        return commits[:limit]
     return [
-        {"sha": sha[:8], "message": message, "summary": clip(summary, COMMIT_SUMMARY_CHARS)}
-        for sha, message, summary in rows
+        {
+            "sha": entry["commits"][-1] if entry["commits"] else "",
+            "author": ", ".join(entry["authors"]),
+            "date": entry["date"],
+            "message": entry["headline"],
+            "headline": entry["headline"],
+            "impact": entry["impact"],
+            "history_path": entry["path"],
+        }
+        for entry in history_entries(repo_root, module=rel_path, limit=limit)
     ]
+
+
+_DURATION = re.compile(r"^\s*(\d+)\s*(m|min|h|d|w)\s*$", re.IGNORECASE)
+_DURATION_UNITS = {"m": "minutes", "min": "minutes", "h": "hours", "d": "days", "w": "weeks"}
+
+
+def parse_since(value: str, now: datetime | None = None) -> datetime | None:
+    """The cutoff a `since` names, as an aware datetime — None for an empty one.
+
+    A duration back from `now` (`90m`, `24h`, `7d`, `2w`) or an ISO date or datetime (`2026-10-01`,
+    `2026-10-01T09:00+02:00`; one with no offset is UTC). Anything else is a `ValueError` naming
+    the forms, which the MCP tool hands the model as is.
+    """
+    value = str(value or "").strip()
+    if not value:
+        return None
+    now = now or datetime.now(timezone.utc)
+    if match := _DURATION.match(value):
+        unit = _DURATION_UNITS[match[2].lower()]
+        return now - timedelta(**{unit: int(match[1])})
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError(
+            f"since={value!r} is neither a duration (90m, 24h, 7d, 2w) nor an ISO date "
+            "(2026-10-01, 2026-10-01T09:00+02:00)"
+        ) from None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _module_filter(repo_root: Path, module: str) -> tuple[str, str] | None:
+    """`(doc path, domain prefix)` a history doc's `features` are matched against — one of the two
+    empty — or None for no module. A module is a domain (`billing`) or one doc (`billing/x.md`,
+    `specs/billing/x.md`)."""
+    module = str(module or "").strip().strip("/")
+    if not module:
+        return None
+    if module.endswith(".md"):
+        return resolve_doc(repo_root, module)[1], ""
+    prefix = paths.docs_prefix(repo_root)
+    return "", f"{prefix}{module.removeprefix(prefix)}/"
+
+
+def history_entries(
+    repo_root: Path,
+    *,
+    query: str = "",
+    author: str = "",
+    module: str = "",
+    since: str = "",
+    impact: str = "",
+    limit: int | None = HISTORY_LIMIT,
+    now: datetime | None = None,
+) -> list[dict]:
+    """The history docs matching every filter given, newest first (by rank with a `query`).
+
+    Read from the history docs themselves, never from git: a deployed server's checkout is the docs
+    copied into a fresh `git init`, so its `git log` knows none of this, while the docs carry each
+    change's date, authors, impact and the docs it touched. `author` matches any author's name or
+    email, case-insensitively; `module` takes a domain or a doc path; `since` is what
+    `parse_since` reads; `query` ranks the history docs' full text through the index. `limit=None`
+    is every match, for a caller that aggregates rather than lists.
+    """
+    cutoff = parse_since(since, now)
+    scope = _module_filter(repo_root, module)
+    author = str(author or "").strip().casefold()
+    impact = str(impact or "").strip().lower()
+    history_dir = paths.history_dir(repo_root)
+    if not history_dir.is_dir():
+        return []
+
+    ranked: list[Path] | None = None
+    if str(query or "").strip():
+        match = topic_match(str(query))
+        if match is None:
+            return []
+        prefix = paths.history_prefix(repo_root)
+        conn = connect(repo_root)
+        try:
+            rows = conn.execute(
+                f"SELECT path FROM documents_fts WHERE documents_fts MATCH ? ORDER BY {DOC_RANK}",
+                (match,),
+            ).fetchall()
+        finally:
+            conn.close()
+        ranked = [repo_root / path for (path,) in rows if path.startswith(prefix)]
+
+    entries: list[tuple[datetime | None, dict]] = []
+    for doc_path in ranked if ranked is not None else sorted(history_dir.glob("*.md")):
+        try:
+            text = doc_path.read_text(errors="replace")
+        except OSError:
+            continue  # indexed, since deleted
+        parsed = read_history(text)
+        if parsed is None:
+            continue
+        _, doc = parsed
+        when, authors = doc_stamp(text)
+        if cutoff is not None and (when is None or when < cutoff):
+            continue
+        if author and not any(author in f"{name} <{email}>".casefold() for name, email in authors):
+            continue
+        if impact and doc.impact != impact:
+            continue
+        if scope is not None:
+            exact, under = scope
+            if not any(f == exact if exact else f.startswith(under) for f in doc.features):
+                continue
+        entries.append(
+            (
+                when,
+                {
+                    "path": doc_path.relative_to(repo_root).as_posix(),
+                    "headline": doc.headline or clip(doc.what, 120),
+                    "date": when.isoformat() if when else "",
+                    "authors": [f"{name} <{email}>" for name, email in authors],
+                    "impact": doc.impact,
+                    "docs": doc.features,
+                    "commits": [sha[:8] for sha in doc.commits],
+                    "what": clip(doc.what, COMMIT_SUMMARY_CHARS),
+                    "why": clip(doc.why, COMMIT_SUMMARY_CHARS),
+                },
+            )
+        )
+    if ranked is None:
+        oldest = datetime.min.replace(tzinfo=timezone.utc)
+        entries.sort(key=lambda pair: pair[0] or oldest, reverse=True)
+    cap = None if limit is None else _limit(limit, HISTORY_LIMIT)
+    return [entry for _, entry in entries[:cap]]
+
+
+def search_history(
+    repo_root: Path,
+    query: str = "",
+    limit: int = HISTORY_LIMIT,
+    *,
+    author: str = "",
+    module: str = "",
+    since: str = "",
+    impact: str = "",
+) -> list[dict]:
+    """The changes whose history doc matches — why the docs say what they say, and what used to be
+    true before they did. `history_entries` with its filters; at least one of them is needed, or
+    every change would be an answer."""
+    if not any(str(v or "").strip() for v in (query, author, module, since, impact)):
+        return []
+    return history_entries(
+        repo_root,
+        query=query,
+        author=author,
+        module=module,
+        since=since,
+        impact=impact,
+        limit=limit,
+    )
+
+
+def module_acceptance_tests(
+    repo_root: Path, module: str, include_edge_cases: bool = False
+) -> list[dict]:
+    """The acceptance tests every doc of a module states: `[{path, title, tests}]`, each test a
+    `doc_behaviours` row (`AT-n`, plus `EDGE-n` when asked), docs stating none left out.
+
+    A module is a domain (`billing`) or one doc. An unknown one is a `ValueError` listing the
+    domains there are.
+    """
+    module = str(module or "").strip().strip("/")
+    if not module:
+        raise ValueError("a module is needed: a domain (a docs folder) or a doc path")
+    domains = list_domains(repo_root)
+    if module.endswith(".md"):
+        _, rel_path = resolve_doc(repo_root, module)
+        docs = [d for entry in domains for d in entry["docs"] if d["path"] == rel_path]
+        docs = docs or [{"path": rel_path, "title": Path(rel_path).stem}]
+    else:
+        name = module.removeprefix(paths.docs_prefix(repo_root))
+        docs = next((entry["docs"] for entry in domains if entry["domain"] == name), None)
+        if docs is None:
+            known = ", ".join(entry["domain"] for entry in domains) or "none"
+            raise ValueError(f"no module {name!r}; the modules are: {known}")
+    prefixes = ("AT-", "EDGE-") if include_edge_cases else ("AT-",)
+    found = []
+    for doc in docs:
+        tests = [
+            {"id": row["id"], "text": row["text"], "fields": row["fields"]}
+            for row in doc_behaviours(repo_root, doc["path"])
+            if row["id"].startswith(prefixes)
+        ]
+        if tests:
+            found.append({"path": doc["path"], "title": doc["title"], "tests": tests})
+    return found
+
+
+# How many neighbours and recent changes `doc_context` hands back with a doc.
+CONTEXT_NEIGHBOURS = 12
+CONTEXT_RECENT = 5
+
+
+def doc_context(repo_root: Path, topic: str) -> dict:
+    """One doc with what surrounds it in the docs graph — the knowledge-graph lookup.
+
+    `topic` is a doc path, or else anything `search_docs` ranks, whose top hit is taken. Returns the
+    doc (frontmatter fields, clipped content, its behaviours by id), its `neighbours` — docs it
+    links by `related:` either way, docs sharing a tag with it — and its `recent` changes from the
+    history docs. `alternatives` names the next search hits, when the doc was found by search.
+    """
+    topic = str(topic or "").strip()
+    if not topic:
+        raise ValueError("a topic or doc path is needed")
+    alternatives: list[dict] = []
+    try:
+        doc, rel_path = resolve_doc(repo_root, topic)
+    except ValueError:
+        if topic.endswith(".md"):
+            raise
+        hits = search_docs(repo_root, topic, limit=4)
+        if not hits:
+            raise ValueError(f"no doc matches {topic!r}; list_domains shows what there is") from None
+        doc, rel_path = resolve_doc(repo_root, hits[0]["path"])
+        alternatives = [{"path": h["path"], "title": h["title"]} for h in hits[1:]]
+    meta, body = frontmatter.parse(doc.read_text())
+    title = next((ln.lstrip("#").strip() for ln in body.splitlines() if ln.startswith("# ")), doc.stem)
+    tags = catalog.doc_tags(meta)
+
+    neighbours: dict[str, dict] = {}
+    for edge in catalog.build_graph(repo_root)["edges"]:
+        if rel_path in (edge["from"], edge["to"]):
+            other = edge["to"] if edge["from"] == rel_path else edge["from"]
+            neighbours.setdefault(other, {"path": other, "reason": edge["reason"]})
+    by_tag = catalog.list_tags(repo_root)
+    for tag in tags:
+        for sibling in by_tag.get(tag, []):
+            if sibling["path"] != rel_path:
+                neighbours.setdefault(sibling["path"], {"path": sibling["path"], "reason": f"tag: {tag}"})
+    titles = {d["path"]: d["title"] for entry in list_domains(repo_root) for d in entry["docs"]}
+    linked = [
+        {**n, "title": titles.get(n["path"], Path(n["path"]).stem)}
+        for n in list(neighbours.values())[:CONTEXT_NEIGHBOURS]
+    ]
+
+    sources = meta.get("sources", [])
+    return {
+        "path": rel_path,
+        "title": title,
+        "domain": doc.relative_to(paths.docs_root(repo_root)).parts[0],
+        "type": str(meta.get("type", "")),
+        "tags": tags,
+        "owner": str(meta.get("owner", "")),
+        "sources": list(sources) if isinstance(sources, list) else [],
+        "content": source.clip(doc.read_text(), READ_DOC_CHARS),
+        "behaviours": behaviours_text(doc_behaviours(repo_root, rel_path)),
+        "neighbours": linked,
+        "recent": history_entries(repo_root, module=rel_path, limit=CONTEXT_RECENT),
+        "alternatives": alternatives,
+    }
+
+
+def recent_activity(repo_root: Path, since: str = "7d", module: str = "") -> dict:
+    """What changed in the window, by module: the docs-only view of the home page's activity brief,
+    the same on a laptop as on a deployed server with no git history.
+
+    `{since, changes, modules: [{module, changes: [{path, headline, date, authors, impact}]}],
+    authors: {author: n}, impacts: {impact: n}}`. A change touching two modules is listed under
+    both; one touching none sits under `""`.
+    """
+    entries = history_entries(
+        repo_root, module=module, since=since or "7d", limit=None
+    )
+    prefix = paths.docs_prefix(repo_root)
+    modules: dict[str, list[dict]] = {}
+    authors: dict[str, int] = {}
+    impacts: dict[str, int] = {}
+    for entry in entries:
+        brief_row = {k: entry[k] for k in ("path", "headline", "date", "authors", "impact")}
+        names = {d.removeprefix(prefix).split("/", 1)[0] for d in entry["docs"] if "/" in d.removeprefix(prefix)}
+        for name in sorted(names) or [""]:
+            modules.setdefault(name, []).append(brief_row)
+        for who in entry["authors"]:
+            authors[who] = authors.get(who, 0) + 1
+        if entry["impact"]:
+            impacts[entry["impact"]] = impacts.get(entry["impact"], 0) + 1
+    return {
+        "since": since or "7d",
+        "changes": len(entries),
+        "modules": [{"module": name, "changes": rows} for name, rows in sorted(modules.items())],
+        "authors": dict(sorted(authors.items(), key=lambda kv: -kv[1])),
+        "impacts": impacts,
+    }
 
 
 # --- the terminal tools' payloads -----------------------------------------------------------------
@@ -543,14 +829,24 @@ class DocToolbox:
             "\n".join(f"{c['sha'][:8]} {c['date'][:10]} {c['message']}" for c in commits)
         )
 
-    def search_history(self, query: str) -> str:
+    def search_history(
+        self, query: str = "", author: str = "", module: str = "", since: str = ""
+    ) -> str:
         if not self.remaining:
             return self._exhausted()
-        commits = search_history(self.repo_root, str(query or ""))
-        if not commits:
-            return f"No commits match {query!r}."
+        try:
+            entries = search_history(
+                self.repo_root, str(query or ""), author=author, module=module, since=since
+            )
+        except ValueError as exc:
+            return f"search_history: {exc}."
+        if not entries:
+            return "No changes match."
         return self._charge(
-            "\n\n".join(f"{c['sha']} {c['message']}\n{c['summary']}" for c in commits)
+            "\n\n".join(
+                f"{e['date'][:10]} {e['headline']} ({e['path']})\n{e['what']}\n{e['why']}".rstrip()
+                for e in entries
+            )
         )
 
     # --- the terminal tools -----------------------------------------------------------------------
@@ -669,13 +965,18 @@ class DocToolbox:
             Tool(
                 name="search_history",
                 description=(
-                    "Search commit messages and their summaries — what used to be true, and why it "
-                    "changed."
+                    "Search the history of changes — what used to be true, and why it changed. "
+                    "Filter by author (name or email), module (a domain or a doc path) and since "
+                    "(24h, 7d, 2w or an ISO date); pass at least one of them or a query."
                 ),
                 schema={
                     "type": "object",
-                    "properties": {"query": {"type": "string"}},
-                    "required": ["query"],
+                    "properties": {
+                        "query": {"type": "string"},
+                        "author": {"type": "string"},
+                        "module": {"type": "string"},
+                        "since": {"type": "string"},
+                    },
                 },
                 run=self.search_history,
             ),

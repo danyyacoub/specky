@@ -52,7 +52,9 @@ from specky.commit_doc import (
     MicroDoc,
     _is_revision,
     brief,
+    doc_stamp,
     history_names,
+    identity,
     is_legacy_name,
     never_documented,
     parse_ledger,
@@ -88,7 +90,6 @@ _FIELDS = (
     "%H%x1f%P%x1f%aN%x1f%aE%x1f%cI%x1f"
     "%(trailers:key=Co-authored-by,valueonly,separator=%x1e)%x1f%s%x1f%S%x1f%b%x02"
 )
-_IDENTITY = re.compile(r"^(?P<name>.*?)\s*<(?P<email>[^>]*)>\s*$")
 
 # What a merge commit's message says about the pull request behind it, per forge. The body line is
 # the PR's title where the forge puts one there (GitHub, and GitLab's default template).
@@ -243,11 +244,6 @@ def _display_name(repo_root: Path, ref: str) -> str:
     return name if name and name != "HEAD" else ref
 
 
-def _identity(text: str) -> tuple[str, str] | None:
-    match = _IDENTITY.match(text.strip())
-    return (match["name"], match["email"]) if match else None
-
-
 def _log(repo_root: Path, args: list[str]) -> list[_Commit]:
     """Newest first in `--topo-order`: no commit before its children. Callers wanting oldest first
     reverse the list rather than sorting by date — rebased commits share a committer timestamp, so
@@ -268,7 +264,7 @@ def _log(repo_root: Path, args: list[str]) -> list[_Commit]:
                 parents=parents.split(),
                 author=(name, email),
                 date=datetime.fromisoformat(date),
-                coauthors=[i for t in trailers.split("\x1e") if t and (i := _identity(t))],
+                coauthors=[i for t in trailers.split("\x1e") if t and (i := identity(t))],
                 subject=subject,
                 source=source,
                 body=body.strip(),
@@ -491,33 +487,10 @@ def _dedupe(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
-# A `- **Date:**` / `- **Author:**` / `- **Message:**` line of a history doc's metadata block.
-# An entry's nested commit list is indented, so `^- ` never reaches it.
-_DOC_META = re.compile(r"^- \*\*(Date|Author|Message):\*\*\s*(.+?)\s*$", re.MULTILINE)
-
 # The fallback brief's cap: how many of the newest in-window docs become a change each. The git
 # walk needs no such bound — the window is small — but a docs-only reader can't tell stale from
 # recent itself, so the docs it has are bounded outright.
 DOCS_ONLY_MAX = 10
-
-
-def _doc_stamp(text: str) -> tuple[datetime | None, list[tuple[str, str]]]:
-    """`(when, who)` from a history doc's metadata bullets — the docs-only brief's only clock.
-
-    An entry's date is a span (`first → last`); the end is when the change last moved. Authors
-    are the writer's `name <email>` list, comma-joined for a multi-commit entry.
-    """
-    meta: dict[str, str] = {}
-    for key, value in _DOC_META.findall(text):
-        meta.setdefault(key, value)
-    when: datetime | None = None
-    if raw := meta.get("Date"):
-        try:
-            when = datetime.fromisoformat(raw.rsplit("→", 1)[-1].strip())
-        except ValueError:
-            pass
-    authors = [i for a in meta.get("Author", "").split(", ") if (i := _identity(a))]
-    return when, authors
 
 
 def _docs_only(repo_root: Path, activity: Activity, now: datetime, cfg: ActivityConfig) -> None:
@@ -531,7 +504,7 @@ def _docs_only(repo_root: Path, activity: Activity, now: datetime, cfg: Activity
     for path in sorted(paths.history_dir(repo_root).glob("*.md")):
         text = path.read_text(errors="replace")
         parsed = read_history(text)
-        when, authors = _doc_stamp(text)
+        when, authors = doc_stamp(text)
         if parsed is None or when is None or when < since_dt:
             continue
         _, doc = parsed

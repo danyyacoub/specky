@@ -33,7 +33,8 @@ and relay its answer. If you can't, or the subagent fails, follow the steps your
   otherwise) with markdown in it. If it doesn't, this repo doesn't use specky. Say so in one line
   and answer from the code instead. Don't run `specky index` or `specky init` to create one; that's
   the user's call (`/specky:setup`).
-- `search_docs` with the user's words. If that misses, retry with the terms `specs/GLOSSARY.md`
+- `doc_context` with the user's words (or a doc path) returns the best doc with its neighbours,
+  behaviours and recent changes in one call. For anything wider, `search_docs`. If that misses, retry with the terms `specs/GLOSSARY.md`
   uses for the concept; the docs use those exact terms.
 - For "what exists" questions ("which features touch billing?", "what workflows do we have?"), use
   `list_domains`, `list_features`, `list_workflows` or `list_tags` instead of searching.
@@ -43,12 +44,14 @@ and relay its answer. If you can't, or the subagent fails, follow the steps your
 - `read_doc` on the best one to three hits. The frontmatter carries `type`, `tags`, `related` (docs
   worth following) and `sources` (the code the doc was written from).
 - For "exactly what should happen when…" questions, `doc_behaviours` returns the doc's promises with
-  stable ids: STEP-n, OUT-n, EDGE-n, AT-n. Quote the id, e.g. "EDGE-2 in
+  stable ids: STEP-n, OUT-n, EDGE-n, AT-n; `module_acceptance_tests` lists every AT-n of a module
+  (a docs folder). Quote the id, e.g. "EDGE-2 in
   specs/billing/refund-flow.md", so the user can find it and a later change can name it.
 
 ### 3. Find the why, when asked
-`search_history` for the change by topic, or `commits_for_doc` for everything that touched one doc.
-Each commit carries its message and a summary of what changed.
+`search_history` for the change by topic, narrowed by `author`, `module` and `since` (`24h`, `7d`,
+an ISO date) when the user asks who changed what, or what changed lately; `commits_for_doc` for
+everything that touched one doc. Each change carries its headline, what changed and why.
 
 ### 4. Check the doc against the code when it matters
 Docs state intended behaviour and can lag the code. Check before the answer is used to change code,

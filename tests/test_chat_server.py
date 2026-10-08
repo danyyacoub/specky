@@ -1194,6 +1194,35 @@ def test_mcp_answers_from_the_served_repo(tmp_repo, write_doc, unpinned):
     assert {"search_docs", "read_doc", "get_graph", "commits_for_doc"} <= names
 
 
+def test_mcp_serves_module_tests_and_history_without_git_history(tmp_repo, write_doc, unpinned):
+    """A deployed server's git knows nothing of the history docs; the knowledge-graph tools still
+    answer from the docs alone."""
+    write_doc(
+        "billing/refunds.md",
+        "# Refunds\n\n## Acceptance Tests\n\n| Given | When | Then |\n|---|---|---|\n"
+        "| Paid order | Refund | Money returned |\n",
+        {"type": "feature"},
+    )
+    write_doc(
+        "history/refunds.md",
+        "# Refunds settle in five days\n\n- **Date:** 2999-01-01T00:00:00+00:00\n"
+        "- **Author:** Ann <ann@shop.io>\n\n## What changed\n\nFive days.\n",
+        {"impact": "feature", "features": ["specs/billing/refunds.md"]},
+    )
+
+    def call(id_, name, arguments):
+        return {"jsonrpc": "2.0", "id": id_, "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}}
+
+    with _running(tmp_repo, ServeConfig(username="admin", password="pw")) as port:
+        tests = _mcp(port, call(2, "module_acceptance_tests", {"module": "billing"}))
+        history = _mcp(port, call(3, "search_history", {"author": "ann", "since": "24h"}))
+    [doc] = json.loads(tests[2])["result"]["structuredContent"]["result"]
+    assert doc["tests"][0]["fields"]["Then"] == "Money returned"
+    [change] = json.loads(history[2])["result"]["structuredContent"]["result"]
+    assert change["headline"] == "Refunds settle in five days"
+
+
 def test_mcp_honours_the_token_and_the_origin_allowlist(tmp_repo, unpinned):
     config = ServeConfig(
         username="admin", password="pw", token="s3cret", allow_origins=("https://docs.example",)

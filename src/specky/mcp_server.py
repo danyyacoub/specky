@@ -27,15 +27,18 @@ from specky.db import repo_root
 # (Claude Code) list only their names, and nothing tells the model a behaviour question has a
 # cheaper, citable answer here than a read through the source.
 INSTRUCTIONS = (
-    "specky indexes this repo's functional docs (specs/<domain>/<topic>.md) and its git history. "
-    "Check it first for behaviour questions: what a feature does, how a workflow runs, its rules, "
-    "statuses and edge cases, whether something is supported, and why it changed. Use "
-    "search_docs then read_doc; doc_behaviours for the exact promises a doc makes (its "
-    "acceptance tests); search_history or commits_for_doc for why. Cite the doc path. Docs state "
-    "intended behaviour and can lag the code, so check the files in a doc's `sources` "
+    "specky indexes this repo's functional docs (specs/<domain>/<topic>.md, a domain being a "
+    "module) and the history of why they changed. Check it first for behaviour questions: what a "
+    "feature does, how a workflow runs, its rules, statuses and edge cases, whether something is "
+    "supported, and why it changed. doc_context takes a topic or a doc path and returns the doc "
+    "with its neighbours in the docs graph, its behaviours and its recent changes; search_docs and "
+    "read_doc go wider. module_acceptance_tests lists a module's acceptance tests; doc_behaviours "
+    "one doc's exact promises. search_history filters the changes by query, author, module and "
+    "since (24h, 7d, an ISO date); recent_activity sums a window up by module. Cite the doc path. "
+    "Docs state intended behaviour and can lag the code, so check the files in a doc's `sources` "
     "frontmatter before changing code on its word. Not for finding where a symbol or file lives "
-    "in the code; use code search for that. search_docs, search_history and the catalog tools "
-    "need `specky index` to have run."
+    "in the code; use code search for that. search_docs, search_history's query and the catalog "
+    "tools need `specky index` to have run."
 )
 
 # The plugin is enabled per user, so the server starts in every repo the user opens, most of which
@@ -174,6 +177,18 @@ mcp = MCPServer(
     website_url="https://github.com/danyyacoub/specky",
 )
 
+def _answer(fn, *args, **kwargs):
+    """`fn(*args, **kwargs)`, its `ValueError` (a bad path, module or `since`) as a `ToolError`, so
+    the model reads the reason rather than the SDK's generic failure."""
+    try:
+        return fn(*args, **kwargs)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+# `commits_for_doc` had no cap before it fell back to the history docs; this keeps it near enough.
+COMMITS_FOR_DOC_MAX = 200
+
 # Every tool only reads the docs tree, the index or git. Saying so lets clients that gate
 # tools by mode (plan mode, read-only agents) still call them.
 READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -224,7 +239,7 @@ async def commits_for_doc(doc_path: str, ctx: Context) -> list[dict]:
     e.g. 'specs/billing/refund-flow.md'), most recent first — each with its history doc's one-line
     `headline`, its `impact` (feature | improvement | fix | internal) and `history_path`, read
     those with read_doc for what changed and why."""
-    return catalog.commits_for_doc(await _repo(ctx), doc_path)
+    return _answer(doc_tools.doc_history, await _repo(ctx), doc_path, limit=COMMITS_FOR_DOC_MAX)
 
 
 # --- the Spec Assistant's docs tools --------------------------------------------------------------
@@ -265,10 +280,61 @@ async def doc_behaviours(path: str, ctx: Context) -> list[dict]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-async def search_history(query: str, ctx: Context) -> list[dict]:
-    """Commits whose message or summary matches `query` — what used to be true, and why it
-    changed. Requires `specky index`."""
-    return doc_tools.search_history(await _repo(ctx), query)
+async def search_history(
+    ctx: Context,
+    query: str = "",
+    author: str = "",
+    module: str = "",
+    since: str = "",
+    impact: str = "",
+    limit: int = doc_tools.HISTORY_LIMIT,
+) -> list[dict]:
+    """The changes recorded in the docs' history, newest first (by relevance with a `query`): what
+    used to be true, and why it changed. Every filter is optional, but give at least one:
+    `query` (full text), `author` (part of a name or email), `module` (a domain like 'billing', or a
+    doc path), `since` (a duration like '24h', '7d', '2w', or an ISO date) and `impact` (feature |
+    improvement | fix | internal | breaking). E.g. since='24h' for the last day's changes, or
+    author='dany', module='chat', since='7d'. Each row: path (the history doc, read it with
+    read_doc), headline, date, authors, impact, docs it touched, what and why."""
+    return _answer(
+        doc_tools.search_history,
+        await _repo(ctx),
+        query,
+        limit,
+        author=author,
+        module=module,
+        since=since,
+        impact=impact,
+    )
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def module_acceptance_tests(
+    module: str, ctx: Context, include_edge_cases: bool = False
+) -> list[dict]:
+    """Every acceptance test a module's docs state, grouped by doc: [{path, title, tests: [{id,
+    text, fields}]}]. `module` is a domain (a docs folder, e.g. 'billing' — list_domains names them)
+    or one doc path. `include_edge_cases` adds the EDGE-n rows of each doc's Edge Cases table."""
+    return _answer(
+        doc_tools.module_acceptance_tests, await _repo(ctx), module, include_edge_cases
+    )
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def doc_context(topic: str, ctx: Context) -> dict:
+    """The doc a topic is about, with what surrounds it — start here. `topic` is a doc path or a
+    few words (the best search hit is taken; `alternatives` names the runners-up). Returns its
+    frontmatter fields, content, behaviours by id (STEP/OUT/EDGE/AT), `neighbours` (docs linked by
+    `related:` or a shared tag, with the reason) and its `recent` changes from the history."""
+    return _answer(doc_tools.doc_context, await _repo(ctx), topic)
+
+
+@mcp.tool(annotations=READ_ONLY)
+async def recent_activity(ctx: Context, since: str = "7d", module: str = "") -> dict:
+    """What changed in a window, by module, with counts per author and impact — the history docs
+    summed up. `since` as search_history takes it ('24h', '7d', an ISO date); `module` narrows it
+    to one domain or doc."""
+    return _answer(doc_tools.recent_activity, await _repo(ctx), since, module)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -279,13 +345,59 @@ def render_acceptance_table(rows: list[dict]) -> str:
     return spec_draft.acceptance_table(rows)
 
 
+# --- resources: the docs as something a host can attach ------------------------------------------
+
+
+def _static_root() -> Path:
+    """The repo a static resource reads from. The SDK gives those no `Context`, so no client roots:
+    the pinned repo on `specky serve`, else `SPECKY_REPO_ROOT` or the cwd as `_repo` has them."""
+    root = _pinned_root or _startup_root()
+    if root is None:
+        raise RepoNotFound("specky-mcp can't tell which repo to read: set SPECKY_REPO_ROOT")
+    return root
+
+
+def _read_overview(path_for) -> str:
+    root = _static_root()
+    path = path_for(root)
+    if not path.is_file():
+        raise ToolError(f"{path.relative_to(root)} does not exist in this repo")
+    return path.read_text()
+
+
+@mcp.resource("specky://product", name="product", mime_type="text/markdown")
+def product_resource() -> str:
+    """What the product is and who it's for — the docs tree's PRODUCT.md."""
+    return _read_overview(paths.product_doc)
+
+
+@mcp.resource("specky://modules", name="modules", mime_type="text/markdown")
+def modules_resource() -> str:
+    """Every module (domain) and the docs in it, with one line each — the docs tree's MODULES.md."""
+    return _read_overview(paths.modules_index)
+
+
+@mcp.resource("specky://glossary", name="glossary", mime_type="text/markdown")
+def glossary_resource() -> str:
+    """The domain's own terms and what they mean — the docs tree's GLOSSARY.md."""
+    return _read_overview(paths.glossary)
+
+
+@mcp.resource("specky://doc/{domain}/{topic}", name="doc", mime_type="text/markdown")
+async def doc_resource(domain: str, topic: str, ctx: Context) -> str:
+    """One doc as `<domain>/<topic>.md` under the docs tree, e.g.
+    specky://doc/billing/refund-flow.md."""
+    return _answer(doc_tools.read_doc, await _repo(ctx), f"{unquote(domain)}/{unquote(topic)}")
+
+
 @mcp.prompt(title="Explore the docs")
 def explore(question: str) -> str:
     """Answer a question from this project's docs: a short answer first, then the details."""
     return (
         f"Answer this question from the project's docs: {question}\n\n"
-        "Use the specky tools search_docs and read_doc to find and read the docs it is about, and "
-        "search_history when the answer is about why something changed. Answer only from what "
+        "Use the specky tool doc_context to find the doc it is about and what surrounds it, "
+        "search_docs and read_doc for anything further, and search_history when the answer is about "
+        "why something changed. Answer only from what "
         f"they say, citing the doc path each part comes from.\n\n{EXPLORE_FORMAT}"
     )
 

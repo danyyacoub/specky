@@ -303,3 +303,203 @@ def test_what_tells_a_host_when_to_use_specky_names_only_real_tools():
     assert {"search_docs", "read_doc", "doc_behaviours"} <= in_instructions & in_skill
     assert in_instructions <= tools
     assert in_skill <= tools
+
+
+# --- the history, the module tests and the graph, read from the docs alone ----------------------
+#
+# These run in `tmp_repo`, whose git is one commit that knows none of the history below: the shape
+# of a deployed `specky serve`, where the docs were copied into a fresh `git init`.
+
+from datetime import datetime, timezone  # noqa: E402
+
+from specky.doc_tools import (  # noqa: E402
+    doc_context,
+    history_entries,
+    module_acceptance_tests,
+    parse_since,
+    recent_activity,
+    search_history,
+)
+
+NOW = datetime(2026, 10, 8, 12, 0, tzinfo=timezone.utc)
+
+
+def _history(write_doc, name, *, date, author, features, headline, impact="feature", why="Because."):
+    write_doc(
+        f"history/{name}.md",
+        f"# {headline}\n\n- **Date:** {date}\n- **Author:** {author}\n- **Message:** {headline}\n\n"
+        f"## What changed\n\n{headline}, in detail.\n\n## Why\n\n{why}\n",
+        {"commits": [name * 5], "impact": impact, "features": features},
+    )
+
+
+@pytest.fixture
+def history_repo(docs_repo, write_doc):
+    write_doc(
+        "billing/refund-limits.md",
+        "# Billing — Refund Limits\n\n## Acceptance Tests\n\n| Given | When | Then |\n|---|---|---|\n"
+        "| Order of 10 | Refund 20 | Refused |\n\n## Edge Cases\n\n| Case | Result |\n|---|---|\n"
+        "| Zero refund | Ignored |\n",
+        {"type": "feature", "tags": ["refunds"], "related": ["billing/refund-flow"]},
+    )
+    # 11:00 +02:00 is 09:00 UTC: inside a 24h window that a naive string compare would misjudge.
+    _history(write_doc, "aaaaaaaa", date="2026-10-08T11:00:00+02:00", author="Ann <ann@shop.io>",
+             features=["specs/billing/refund-limits.md"], headline="Refunds are capped", impact="fix")
+    _history(write_doc, "bbbbbbbb", date="2026-10-01T10:00:00+00:00 → 2026-10-05T10:00:00+00:00",
+             author="Bob <bob@shop.io>, Ann <ann@shop.io>", features=["specs/chat/panel.md"],
+             headline="The panel docks on wide screens")
+    _history(write_doc, "cccccccc", date="2026-09-01T10:00:00+00:00", author="Bob <bob@shop.io>",
+             features=["specs/billing/refund-flow.md"], headline="Refund flow settles nightly",
+             why="Settlement batches nightly.")
+    run_index(docs_repo)
+    return docs_repo
+
+
+def _headlines(rows):
+    return [row["headline"] for row in rows]
+
+
+def test_parse_since_reads_durations_and_dates():
+    assert parse_since("24h", NOW) == datetime(2026, 10, 7, 12, tzinfo=timezone.utc)
+    assert parse_since("2w", NOW) == datetime(2026, 9, 24, 12, tzinfo=timezone.utc)
+    assert parse_since("90m", NOW) == datetime(2026, 10, 8, 10, 30, tzinfo=timezone.utc)
+    assert parse_since("2026-10-01", NOW) == datetime(2026, 10, 1, tzinfo=timezone.utc)
+    assert parse_since("", NOW) is None
+    with pytest.raises(ValueError, match="24h"):
+        parse_since("yesterday", NOW)
+
+
+def test_history_is_filtered_by_time_across_offsets(history_repo):
+    assert _headlines(history_entries(history_repo, since="24h", now=NOW)) == ["Refunds are capped"]
+    # An entry's date is a span; its end is when it last moved.
+    assert _headlines(history_entries(history_repo, since="7d", now=NOW)) == [
+        "Refunds are capped",
+        "The panel docks on wide screens",
+    ]
+
+
+def test_history_is_filtered_by_author_name_or_email(history_repo):
+    assert _headlines(history_entries(history_repo, author="bob")) == [
+        "The panel docks on wide screens",
+        "Refund flow settles nightly",
+    ]
+    assert len(history_entries(history_repo, author="ANN@shop.io")) == 2
+    assert history_entries(history_repo, author="carol") == []
+
+
+def test_history_is_filtered_by_module_or_doc(history_repo):
+    assert _headlines(history_entries(history_repo, module="billing")) == [
+        "Refunds are capped",
+        "Refund flow settles nightly",
+    ]
+    assert _headlines(history_entries(history_repo, module="specs/billing/refund-flow.md")) == [
+        "Refund flow settles nightly"
+    ]
+    assert _headlines(history_entries(history_repo, module="chat/panel.md")) == [
+        "The panel docks on wide screens"
+    ]
+
+
+def test_history_filters_combine_with_a_query(history_repo):
+    rows = history_entries(history_repo, author="bob", module="billing", since="60d", now=NOW)
+    assert _headlines(rows) == ["Refund flow settles nightly"]
+    [row] = history_entries(history_repo, query="settlement", author="bob")
+    assert row["path"] == "specs/history/cccccccc.md"
+    assert row["authors"] == ["Bob <bob@shop.io>"]
+    assert row["docs"] == ["specs/billing/refund-flow.md"]
+    assert row["why"] == "Settlement batches nightly."
+    assert history_entries(history_repo, impact="fix")[0]["headline"] == "Refunds are capped"
+
+
+def test_search_history_needs_a_filter_and_reports_a_bad_window(history_repo):
+    assert search_history(history_repo) == []
+    assert len(search_history(history_repo, module="billing")) == 2
+    with pytest.raises(ValueError):
+        search_history(history_repo, since="last week")
+
+
+def test_module_acceptance_tests_cover_every_doc_in_the_module(history_repo):
+    assert module_acceptance_tests(history_repo, "billing") == [
+        {
+            "path": "specs/billing/refund-limits.md",
+            "title": "Billing — Refund Limits",
+            "tests": [
+                {
+                    "id": "AT-1",
+                    "text": "Given: Order of 10 · When: Refund 20 · Then: Refused",
+                    "fields": {"Given": "Order of 10", "When": "Refund 20", "Then": "Refused"},
+                }
+            ],
+        }
+    ]  # refund-flow.md states none, so it isn't listed
+    with_edges = module_acceptance_tests(history_repo, "specs/billing", include_edge_cases=True)
+    assert [t["id"] for t in with_edges[0]["tests"]] == ["EDGE-1", "AT-1"]
+    [panel] = module_acceptance_tests(history_repo, "chat/panel.md")
+    assert [t["id"] for t in panel["tests"]] == ["AT-1", "AT-2"]
+
+
+def test_an_unknown_module_names_the_real_ones(history_repo):
+    with pytest.raises(ValueError, match="billing, chat"):
+        module_acceptance_tests(history_repo, "payments")
+
+
+def test_doc_context_brings_the_neighbours_and_the_recent_changes(history_repo):
+    context = doc_context(history_repo, "billing/refund-limits.md")
+    assert context["path"] == "specs/billing/refund-limits.md"
+    assert context["domain"] == "billing" and context["tags"] == ["refunds"]
+    assert {"path": "specs/billing/refund-flow.md", "reason": "related", "title": "Billing — Refund Flow"} in context["neighbours"]
+    assert "AT-1  Given: Order of 10" in context["behaviours"]
+    assert _headlines(context["recent"]) == ["Refunds are capped"]
+    assert context["alternatives"] == []
+
+
+def test_doc_context_finds_a_doc_by_topic(history_repo):
+    context = doc_context(history_repo, "panel docked")
+    assert context["path"] == "specs/chat/panel.md"
+    with pytest.raises(ValueError):
+        doc_context(history_repo, "specs/nowhere/missing.md")
+
+
+def test_recent_activity_groups_the_window_by_module(history_repo, monkeypatch):
+    real = doc_tools.history_entries
+    monkeypatch.setattr(doc_tools, "history_entries", lambda *a, **k: real(*a, **k, now=NOW))
+    activity = recent_activity(history_repo, "7d")
+    assert activity["changes"] == 2
+    assert [(m["module"], len(m["changes"])) for m in activity["modules"]] == [("billing", 1), ("chat", 1)]
+    assert activity["authors"] == {"Ann <ann@shop.io>": 2, "Bob <bob@shop.io>": 1}
+    assert activity["impacts"] == {"fix": 1, "feature": 1}
+
+
+def test_the_spec_assistant_filters_history_too(history_repo):
+    toolbox = DocToolbox(history_repo, IMPACT_TOOLS)
+    answer = toolbox.invoke("search_history", {"author": "bob", "module": "billing"})
+    assert "Refund flow settles nightly (specs/history/cccccccc.md)" in answer
+    assert toolbox.invoke("search_history", {"since": "soon"}).startswith("search_history:")
+
+
+def test_commits_for_doc_falls_back_to_the_history_docs(history_repo, monkeypatch):
+    monkeypatch.setattr(mcp_server, "repo_root", lambda: history_repo)
+    [row] = anyio.run(lambda: mcp_server.commits_for_doc("specs/billing/refund-flow.md", None))
+    assert row["headline"] == "Refund flow settles nightly"
+    assert row["history_path"] == "specs/history/cccccccc.md"
+
+
+def test_the_new_mcp_tools_report_bad_input_to_the_model(history_repo, monkeypatch):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    monkeypatch.setattr(mcp_server, "repo_root", lambda: history_repo)
+    with pytest.raises(ToolError, match="duration"):
+        anyio.run(lambda: mcp_server.search_history(None, since="whenever"))
+    with pytest.raises(ToolError, match="no module"):
+        anyio.run(lambda: mcp_server.module_acceptance_tests("nope", None))
+    rows = anyio.run(lambda: mcp_server.module_acceptance_tests("billing", None))
+    assert rows[0]["path"] == "specs/billing/refund-limits.md"
+
+
+def test_the_docs_are_resources(history_repo, monkeypatch):
+    monkeypatch.setattr(mcp_server, "repo_root", lambda: history_repo)
+    monkeypatch.setattr(mcp_server, "_startup_root", lambda: history_repo)
+    [modules] = asyncio.run(mcp_server.mcp.read_resource("specky://modules"))
+    assert "chat/panel.md" in modules.content
+    [doc] = asyncio.run(mcp_server.mcp.read_resource("specky://doc/chat/panel.md"))
+    assert "# Chat — Panel" in doc.content
