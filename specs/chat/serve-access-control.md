@@ -19,6 +19,7 @@ related: [chat/local-rag-server]
 5. **Login for a deployed server** — set `SPECKY_AUTH_USERNAME` and `SPECKY_AUTH_PASSWORD` in the server's environment and every route — pages, stylesheets, `/chat`, `/search`, `/mcp` — answers 401 with a `WWW-Authenticate: Basic` challenge until the request carries those credentials. The browser shows its own login prompt and then re-sends the credentials on every same-origin load, which is why, unlike the token, this can gate static files. Only CORS preflights skip it, because browsers never attach credentials to one. The credentials live in the environment only, never in `specky.toml`: that file is easily copied into an image or a backup along with the repo, and a password in it would travel with the docs it is meant to protect. Setting only one of the two variables stops `serve` from starting rather than serving the repo open.
 6. **Exposure warning** — `--host`/`[serve] host` can bind anywhere. When no login is configured, `serve()` prints a warning naming what is exposed whenever the bind address isn't a loopback address. When a login is configured it says so instead, and reminds you that Basic auth sends the password in the clear, so a deployed server belongs behind HTTPS.
 7. **MCP for remote agents** — `/mcp` is a Streamable HTTP MCP endpoint serving the same tools and prompts as the stdio `specky-mcp`: `search_docs`, `read_doc`, `doc_behaviours`, `get_graph`, `commits_for_doc` and the rest. They answer for the repo `serve` was started in, whatever the client's own workspace is. It's stateless and answers each POST with one JSON body, so it needs nothing from the client beyond the request: no session, no `roots/list`. It sits behind everything the API does: the login, `allow_origins`, and `token`. That's what lets an agent on another machine use a deployed server's docs as its knowledge graph with one Basic `Authorization` header (`claude mcp add --transport http … --header "Authorization: Basic …"`).
+8. **A personal link for agents that only take a URL** — most agents add a remote MCP server from a URL alone (`codex mcp add … --url`, `devin mcp add`, Cursor's, VS Code's and Kiro's install links), with no way to attach a header. So `/mcp/k/<key>` is `/mcp` with the credential in the path. The key is an HMAC of the username, keyed by the password and `[serve] token`. Nothing is stored, and changing either secret revokes every link handed out. A right key stands in for the login and the token on that one route; the origin allowlist still applies. A wrong key is a plain 404 with no Basic challenge, so an agent never prompts for a password it was never meant to need. `GET /mcp/connect`, behind the normal login, hands the logged-in viewer its link as a path (`/mcp` when the server has no login or token). The viewer's **Connect an agent** page, linked from the titlebar of every page, turns that into one command or install button per agent. The link is built in the browser from the origin the page reached, so it is never baked into the rendered site. Opened without a server, the page says to open it from the deployed one.
 
 ## Models on a deployed server
 
@@ -54,6 +55,10 @@ With `allow_origins = ["*"]` and no token, any page open in a reader's browser c
 | Login set, MCP client sends it as Basic auth to `/mcp` | The specky tools, answered from the served repo |
 | Login set, `/mcp` without credentials | 401 with a Basic challenge, no tool runs |
 | `token` or a narrowed `allow_origins`, `/mcp` without them | 403, as for `/chat` |
+| Logged-in viewer opens Connect an agent | A personal `/mcp/k/<key>` link, as a command or install button per agent |
+| Agent added with that link | Answered with no `Authorization` header and no token |
+| Password or token changed | Every earlier link is a 404 |
+| Viewer opened from `file://` with no server running | Connect an agent says to open it from the deployed server |
 
 ## Acceptance Tests
 
@@ -80,3 +85,7 @@ With `allow_origins = ["*"]` and no token, any page open in a reader's browser c
 | `SPECKY_AUTH_USERNAME=admin`, `SPECKY_AUTH_PASSWORD=pw` | POST an MCP `initialize` to `/mcp` without credentials, then with `admin:pw` | 401, then 200 from server `specky` |
 | Same login, a doc at `specs/billing/refunds.md` | MCP `tools/call` `read_doc` on that path with the login | The doc's text, read from the served repo |
 | Login, `token = "s3cret"`, `allow_origins = ["https://docs.example"]` | MCP `initialize` without the token, then from `https://evil.example`, then from `https://docs.example` with it | 403, 403, 200 |
+| `SPECKY_AUTH_USERNAME=admin`, `SPECKY_AUTH_PASSWORD=pw` | GET `/mcp/connect` without credentials, then with them | 401, then `{"path": "/mcp/k/<key>"}` |
+| Same login and `token = "s3cret"` | MCP `initialize` POSTed to `/mcp/k/<key>` with no credentials and no token | 200 from server `specky` |
+| Login changed from `old` to `new` | MCP `initialize` to the key issued under `old`, or to `/mcp/k/nope` | 404, no `WWW-Authenticate` |
+| No login and no token | GET `/mcp/connect` | `{"path": "/mcp"}` |

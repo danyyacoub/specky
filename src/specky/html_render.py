@@ -90,6 +90,7 @@ ICON_SPRITE = """
 <symbol id="icon-arrow-up" viewBox="0 0 20 20"><line x1="10" y1="16" x2="10" y2="4.5"/><polyline points="5,9.5 10,4.5 15,9.5"/></symbol>
 <symbol id="icon-copy" viewBox="0 0 20 20"><rect x="7" y="7" width="10" height="10" rx="1.5"/><polyline points="13,4.5 13,3 3,3 3,13 4.5,13"/></symbol>
 <symbol id="icon-check" viewBox="0 0 20 20"><polyline points="4,10.5 8,14.5 16,5.5"/></symbol>
+<symbol id="icon-plug" viewBox="0 0 20 20"><line x1="8" y1="3" x2="8" y2="6.5"/><line x1="12" y1="3" x2="12" y2="6.5"/><path d="M5.5 6.5 H14.5 V9.5 A4.5 4.5 0 0 1 5.5 9.5 Z"/><line x1="10" y1="14" x2="10" y2="17.5"/></symbol>
 <symbol id="icon-stop" viewBox="0 0 20 20"><rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/></symbol>
 </svg>
 """
@@ -229,7 +230,11 @@ _PAGE_TEMPLATE = _env.from_string(
     '<input id="search-input" class="search-box" placeholder="Search docs…" '
     'autocomplete="off" aria-label="Search docs">'
     '<div id="search-results"></div>'
-    "</div></div>"
+    "</div>"
+    '<a class="titlebar-link" href="connect.html" title="Use these docs from your AI agent">'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-plug"></use></svg>'
+    "<span>Connect an agent</span></a>"
+    "</div>"
     '<div class="body-row">{{ rail | safe }}'
     '<div class="content-pane"><div class="doc"{% if doc_type %} data-type="{{ doc_type }}"'
     '{% endif %}>{{ body | safe }}</div></div>'
@@ -551,6 +556,51 @@ body.nav-collapsed .sidebar { display: none; }
   margin: 0 0 10px; border: none; padding: 0;
 }
 .empty-state { color: var(--text-secondary); }
+
+/* Pushed to the far end of the titlebar; just the plug on a narrow screen. */
+.titlebar-link {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0;
+  padding: 5px 10px; border-radius: var(--radius-sm); color: var(--text-secondary);
+  font-size: 0.75rem; font-weight: 500; text-decoration: none;
+}
+.titlebar-link .icon { width: 1.1em; height: 1.1em; }
+.titlebar-link:hover { background: var(--chrome-hover); color: var(--text-primary); }
+@media (max-width: 640px) { .titlebar-link span { display: none; } }
+
+/* --- the Connect page (connect.html, CONNECT_JS). */
+.connect-status { color: var(--text-secondary); }
+.connect-status.connect-offline {
+  color: var(--text-primary); background: var(--surface-secondary); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 12px 16px;
+}
+.connect-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 12px; margin-top: 20px;
+}
+.connect-card {
+  background: var(--surface-secondary); border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+.doc .connect-card h2 { font-size: 0.9375rem; margin: 0; padding: 0; border: none; }
+.doc .connect-card h2::before { content: none; }
+.connect-hint { margin: 0; font-size: 0.75rem; color: var(--text-secondary); }
+/* Until the server has answered there is nothing to act on. */
+.connect:not(.connect-ready) .connect-action { display: none; }
+.connect-action { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.connect-command {
+  display: flex; align-items: flex-start; gap: 6px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 4px 4px 4px 10px; min-width: 0;
+}
+/* Wrapped, not scrolled: the reader should see the whole line they're about to run. */
+.doc .connect-command code {
+  flex: 1; min-width: 0; overflow-wrap: anywhere; background: none; padding: 4px 0;
+}
+.doc a.connect-install {
+  align-self: flex-start; padding: 6px 14px; border-radius: var(--radius-sm); background: var(--accent);
+  color: var(--accent-fg); font-size: 0.8125rem; font-weight: 500; text-decoration: none;
+}
+.doc a.connect-install:hover { filter: brightness(1.08); }
+.connect-note { margin-top: 20px; font-size: 0.8125rem; color: var(--text-secondary); }
 
 /* --- home page: recent activity, one collapsed row per person (activity.py). */
 .activity { margin-top: 28px; }
@@ -1640,18 +1690,22 @@ function setCopyLabel(button, icon, label) {
 }
 
 function copyMarkdownButton(markdown) {
+  return copyTextButton(markdown, 'Copy the answer as markdown');
+}
+
+function copyTextButton(text, title) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'chat-copy';
-  button.title = 'Copy the answer as markdown';
+  button.title = title;
   setCopyLabel(button, 'copy', 'Copy');
   button.addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(markdown);
+      await navigator.clipboard.writeText(text);
     } catch (err) {
       // clipboard.writeText needs a secure context, which a file:// page isn't.
       const area = document.createElement('textarea');
-      area.value = markdown;
+      area.value = text;
       document.body.appendChild(area);
       area.select();
       document.execCommand('copy');
@@ -2364,9 +2418,78 @@ for (const type of ['mouseout', 'focusout']) {
 # (`draftWaiting`/`showDraft` one way, `appendSources`/`copyMarkdownButton` the other) from event
 # handlers only; DRAFT_JS's one load-time step, rebuilding a draft in progress, runs after CHAT_JS
 # has declared everything it touches. Splitting these into separate <script> tags would break that.
+# The Connect page (`connect.html`). The page is already logged in, so it asks the server for this
+# reader's personal MCP URL (`/mcp/connect`, see chat_server) and turns it into one action per
+# agent: a command to paste, or an install link the agent's own app opens. Every one of them takes
+# just a URL — which is the point of the personal URL: no agent has to be taught a header.
+CONNECT_JS = """
+(function () {
+  const root = document.getElementById('connect-root');
+  if (!root) return;
+  const status = document.getElementById('connect-status');
+
+  function command(text) {
+    const row = document.createElement('div');
+    row.className = 'connect-command';
+    const code = document.createElement('code');
+    code.textContent = text;
+    row.append(code, copyTextButton(text, 'Copy'));
+    return row;
+  }
+
+  function install(label, href) {
+    const link = document.createElement('a');
+    link.className = 'connect-install';
+    link.href = href;
+    link.textContent = label;
+    return link;
+  }
+
+  const ACTIONS = {
+    claude: (url) => [command(`claude mcp add --transport http specky ${url}`)],
+    codex: (url) => [command(`codex mcp add specky --url ${url}`)],
+    devin: (url) => [command(`devin mcp add specky ${url}`)],
+    cursor: (url) => [install('Add to Cursor',
+      'cursor://anysphere.cursor-deeplink/mcp/install?name=specky&config='
+      + encodeURIComponent(btoa(JSON.stringify({ url }))))],
+    vscode: (url) => [install('Add to VS Code',
+      'vscode:mcp/install?' + encodeURIComponent(JSON.stringify({ name: 'specky', type: 'http', url })))],
+    kiro: (url) => [install('Add to Kiro',
+      'https://kiro.dev/launch/mcp/add?name=specky&config='
+      + encodeURIComponent(JSON.stringify({ url, disabled: false, autoApprove: [] })))],
+    opencode: (url) => [command('opencode mcp add'), command(url)],
+    other: (url) => [command(url)],
+  };
+
+  function fill(url) {
+    root.querySelectorAll('[data-agent]').forEach((card) => {
+      const slot = card.querySelector('.connect-action');
+      slot.replaceChildren(...ACTIONS[card.dataset.agent](url));
+    });
+  }
+
+  speckyFetch('/mcp/connect')
+    .then((res) => {
+      if (!res.ok) throw new Error(String(res.status));
+      return res.json();
+    })
+    .then(({ path }) => {
+      // The origin the page actually reached the API at — proxy, port and scheme included.
+      fill(`${speckyApiBase || location.origin}${path}`);
+      status.hidden = true;
+      root.classList.add('connect-ready');
+    })
+    .catch(() => {
+      status.textContent = 'Open this page from your deployed specky server to get your '
+        + 'connection link.';
+      status.classList.add('connect-offline');
+    });
+})();
+"""
+
 APP_JS_BLOCKS = (
     API_JS, SEARCH_JS, FILTER_JS, NAV_JS, CHAT_JS, DRAFT_JS, MENTION_JS, GLOSSARY_JS,
-    diagram_render.DIAGRAM_JS,
+    CONNECT_JS, diagram_render.DIAGRAM_JS,
 )
 
 _DOMAIN_ORDER_FIRST = "root"
@@ -3203,6 +3326,40 @@ def _home_body(
     )
 
 
+# (data-agent, name, where the action goes). The action itself is filled in by CONNECT_JS, once the
+# server has said what this reader's URL is.
+_CONNECT_AGENTS = (
+    ("claude", "Claude Code", "Run this in a terminal."),
+    ("cursor", "Cursor", "Opens Cursor and asks you to confirm."),
+    ("vscode", "VS Code (Copilot)", "Opens VS Code and asks you to confirm."),
+    ("kiro", "Kiro", "Opens Kiro and asks you to confirm."),
+    ("codex", "Codex", "Run this in a terminal."),
+    ("devin", "Devin", "Run this in a terminal."),
+    ("opencode", "opencode", "Run the command, choose Remote, then paste the link."),
+    ("other", "Another agent", "Paste this link wherever your agent adds an MCP server by URL."),
+)
+
+
+def _connect_body() -> str:
+    cards = "".join(
+        f'<section class="connect-card" data-agent="{agent}"><h2>{html.escape(name)}</h2>'
+        f'<p class="connect-hint">{html.escape(hint)}</p><div class="connect-action"></div></section>'
+        for agent, name, hint in _CONNECT_AGENTS
+    )
+    return (
+        '<div id="connect-root" class="connect">'
+        "<h1>Connect an agent</h1>"
+        "<p>Let your AI agent read these docs. It can then search them, read a doc and follow its "
+        "history while it works, citing the doc it got each answer from.</p>"
+        '<p id="connect-status" class="connect-status">Getting your connection link…</p>'
+        f'<div class="connect-grid">{cards}</div>'
+        '<p class="connect-note"><strong>This link is personal.</strong> It works like your '
+        "password, so don't share it or commit it to a repo. Changing the server's password turns "
+        "every link off.</p>"
+        "</div>"
+    )
+
+
 def _render_rail(
     domains: dict[str, list[dict]],
     tag_chips: list[dict],
@@ -3428,6 +3585,7 @@ def render_site(repo_root: Path) -> Path:
         tag_chips,
         _render_activity(repo_root, pages, doc_info),
     )
+    (site_dir / "connect.html").write_text(_page("Connect an agent", rail_html, _connect_body()))
     home_page = _page("specky docs", rail_html, home_body)
     (site_dir / "index.html").write_text(home_page)
 

@@ -32,6 +32,10 @@ runs it and explains the result.
 
 ## Other agents
 
+If your team deploys `specky serve`, you don't need any of this to read the docs: the site's
+**Connect an agent** page gives each agent a one-line command or install button that points it at
+the server.
+
 These agents have no plugin, so you add the MCP server and copy in the skills yourself. Each guide
 has the exact config and commands. Once the `setup` skill is copied in, asking the agent to "set up
 specky" runs the steps above for you, as `/specky:setup` does in Claude Code.

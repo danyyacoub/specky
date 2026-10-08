@@ -7,6 +7,13 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+### Added
+- **A Connect an agent page in the viewer.** It's linked from the titlebar of every page. Logged
+  into a deployed `specky serve`, it gives you a personal MCP link and one command or one-click
+  install per agent: Claude Code, Cursor, VS Code, Kiro, Codex, Devin and opencode. No headers or
+  config files to edit. The link (`/mcp/k/<key>`) is derived from the server's password and token,
+  so changing either revokes every link.
+
 ## [0.3.0]
 
 ### Added

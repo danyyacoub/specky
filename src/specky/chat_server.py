@@ -51,6 +51,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import ipaddress
 import json
 import mimetypes
@@ -86,6 +88,13 @@ TOKEN_HEADER = "X-Specky-Token"
 AUTH_USERNAME_ENV = "SPECKY_AUTH_USERNAME"
 AUTH_PASSWORD_ENV = "SPECKY_AUTH_PASSWORD"
 AUTH_REALM = "specky"
+
+# A personal MCP URL, `/mcp/k/<key>`, for agents that can only add a server by URL: the key stands
+# in for the login (and the token) on that one route. `/mcp/connect` hands a logged-in page its key.
+MCP_CONNECT_PATH = f"{MCP_PATH}/connect"
+MCP_KEY_PREFIX = f"{MCP_PATH}/k/"
+# 32 base64url characters is 192 bits of the HMAC: unguessable, and short enough to paste.
+CONNECTION_KEY_CHARS = 32
 
 # Ceiling on `GET /search?limit=`: the viewer asks for 15, and a caller asking for 100k rows
 # would be asking this process to serialize the whole index in one response.
@@ -566,6 +575,23 @@ class ServeConfig:
             return True
         return supplied is not None and secrets.compare_digest(supplied, self.token)
 
+    def connection_key(self) -> str:
+        """The key in this server's personal MCP URL, or "" when there's nothing to stand in for.
+
+        Derived, not stored: an HMAC of the username keyed by the password and the token. Nothing
+        has to be kept anywhere for it to verify, and changing either secret revokes every URL ever
+        handed out — the same thing that locks the browser out locks the agents out.
+        """
+        if not self.auth_required and not self.token:
+            return ""
+        secret = f"{self.password}\n{self.token}".encode()
+        digest = hmac.new(secret, f"specky-mcp\n{self.username}".encode(), hashlib.sha256)
+        return base64.urlsafe_b64encode(digest.digest()).decode()[:CONNECTION_KEY_CHARS]
+
+    def connection_key_ok(self, supplied: str) -> bool:
+        key = self.connection_key()
+        return bool(key) and secrets.compare_digest(supplied.encode(), key.encode())
+
 
 def _is_loopback(host: str) -> bool:
     if host in ("localhost", ""):
@@ -661,9 +687,11 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             route = urlparse(self.path)
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length) if length else b""
+            # Never hand the key on to the SDK: a personal URL is `/mcp` once it has been checked.
+            headers = [(k, v) for k, v in self.headers.items() if k.lower() != "authorization"]
             try:
                 status, headers, payload = mcp_bridge.handle(
-                    self.command, route.path, route.query, list(self.headers.items()), body
+                    self.command, MCP_PATH, route.query, headers, body
                 )
             except Exception as exc:
                 print(f"specky serve: {self.command} {MCP_PATH} failed", file=sys.stderr, flush=True)
@@ -682,7 +710,30 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             self.end_headers()
             self.wfile.write(payload)
 
+        def _keyed_mcp(self) -> bool:
+            """`/mcp/k/<key>`: the personal URL an agent was added with. True when the request was
+            for such a URL, answered or refused. A wrong key is a plain 404 — no Basic challenge,
+            which would only make an agent prompt for a password it was never meant to need."""
+            path = urlparse(self.path).path
+            if not path.startswith(MCP_KEY_PREFIX):
+                return False
+            if not self._origin_ok():
+                return True
+            if not config.connection_key_ok(path[len(MCP_KEY_PREFIX) :]):
+                self._json(404, {"error": "not found"})
+                return True
+            self._mcp()
+            return True
+
+        def _connect_info(self) -> None:
+            """`GET /mcp/connect`: the logged-in page asking for its personal MCP URL. A path, not
+            a URL — only the page knows the origin it was reached at, proxy and all."""
+            key = config.connection_key()
+            self._json(200, {"path": f"{MCP_KEY_PREFIX}{key}" if key else MCP_PATH})
+
         def do_POST(self) -> None:
+            if self._keyed_mcp():
+                return
             if not self._authenticated() or not self._api_allowed():
                 return
             path = urlparse(self.path).path
@@ -743,9 +794,15 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
 
         def do_GET(self) -> None:
             """Serve `.specky/site/`, so the viewer and its chat share an origin."""
+            if self._keyed_mcp():
+                return
             if not self._authenticated() or not self._origin_ok():
                 return
             route = urlparse(self.path)
+            if route.path == MCP_CONNECT_PATH:
+                if self._api_allowed():
+                    self._connect_info()
+                return
             if route.path == MCP_PATH:
                 if self._api_allowed():
                     self._mcp()

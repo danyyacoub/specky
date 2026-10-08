@@ -50,6 +50,7 @@ def test_a_page_per_doc_plus_a_home_page(site):
     pages = {p.name for p in site.glob("*.html")}
     assert pages == {
         "index.html",
+        "connect.html",
         "billing-refund-flow.html",
         "billing-refund-limits.html",
         "history-abc12345.html",
@@ -818,3 +819,34 @@ def test_a_step_carrying_a_sub_list_leaves_the_whole_section_alone(tmp_repo, wri
     # The sub-list is intact and nothing leaked out of it.
     assert "<li>via the portal</li>" in page
     assert page.count("<ul>") == page.count("</ul>")
+
+
+def test_every_page_links_to_the_connect_page(site):
+    assert (site / "connect.html").is_file()
+    for page in site.glob("*.html"):
+        assert 'href="connect.html"' in page.read_text()
+
+
+def test_the_connect_page_offers_every_agent_a_one_step_action(site):
+    page = (site / "connect.html").read_text()
+    for agent in ("claude", "cursor", "vscode", "kiro", "codex", "devin", "opencode", "other"):
+        assert f'data-agent="{agent}"' in page
+    app_js = (site / "assets" / "app.js").read_text()
+    # The URL comes from the server the page is logged into, never from the render.
+    assert app_js.count("speckyFetch('/mcp/connect')") == 1
+    for marker in (
+        "claude mcp add --transport http specky",
+        "codex mcp add specky --url",
+        "devin mcp add specky",
+        "cursor://anysphere.cursor-deeplink/mcp/install?name=specky&config=",
+        "vscode:mcp/install?",
+        "https://kiro.dev/launch/mcp/add?name=specky&config=",
+        "opencode mcp add",
+    ):
+        assert marker in app_js
+
+
+def test_no_connection_url_is_baked_into_the_site(site):
+    for path in site.rglob("*"):
+        if path.is_file():
+            assert "/mcp/k/" not in path.read_text(errors="ignore")

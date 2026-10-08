@@ -183,15 +183,21 @@ asks for that login, so put the server behind HTTPS.
 **Agents.** The server also answers MCP at `/mcp`, behind the same login. It serves the same tools
 as `specky-mcp` (`search_docs`, `read_doc`, `get_graph`, `commits_for_doc` and the rest), answered
 from the server's copy of the repo. An agent can then use the docs as a knowledge graph with no
-checkout and no local install:
+checkout and no local install.
+
+The easy way: open the site, log in, and click **Connect an agent** in the top bar. The page gives
+you a personal link and, for each agent, one command to paste or one button to click: Claude Code,
+Cursor, VS Code, Kiro, Codex, Devin and opencode. The link works like your password, and changing
+the server's password turns every link off.
+
+By hand, with the login as a header:
 
 ```bash
 claude mcp add --transport http specky-docs https://docs.example.com/mcp \
   --header "Authorization: Basic $(printf '%s' "$SPECKY_USER:$SPECKY_PASS" | base64)"
 ```
 
-Any MCP host that can send a header on a Streamable HTTP server works the same way. If
-`[serve] token` is set, send `X-Specky-Token` as well.
+If `[serve] token` is set, send `X-Specky-Token` as well.
 
 **The models.** `SPECKY_AI_<KEY>` sets `[ai] <key>`. `SPECKY_AI_PROVIDER` makes the environment the
 whole `[ai]` table, so nothing from a local config leaks in. `SPECKY_AI_CHAT_MODEL` and

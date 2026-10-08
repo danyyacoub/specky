@@ -1204,3 +1204,70 @@ def test_mcp_honours_the_token_and_the_origin_allowlist(tmp_repo, unpinned):
         ok = _mcp(port, _INITIALIZE, token="s3cret", origin="https://docs.example")
     assert (no_token[0], bad_origin[0], ok[0]) == (403, 403, 200)
     assert ok[1]["Access-Control-Allow-Origin"] == "https://docs.example"
+
+
+# --- the personal MCP URL (`/mcp/connect`, `/mcp/k/<key>`) ---------------------------------------
+
+
+def _get_json(port, path, auth=None):
+    status, _, body = _request(port, "GET", path, auth=auth)
+    return status, json.loads(body)
+
+
+def test_connection_key_is_derived_from_the_login_and_token():
+    key = ServeConfig(username="admin", password="pw").connection_key()
+    assert key == ServeConfig(username="admin", password="pw").connection_key()
+    assert len(key) == chat_server.CONNECTION_KEY_CHARS
+    others = {
+        ServeConfig(username="other", password="pw").connection_key(),
+        ServeConfig(username="admin", password="pw2").connection_key(),
+        ServeConfig(username="admin", password="pw", token="t").connection_key(),
+    }
+    assert key not in others and len(others) == 3
+    assert ServeConfig().connection_key() == ""
+
+
+def test_connect_hands_a_logged_in_page_its_personal_url(tmp_repo, unpinned):
+    config = ServeConfig(username="admin", password="pw")
+    with _running(tmp_repo, config) as port:
+        anonymous = _request(port, "GET", "/mcp/connect")
+        status, info = _get_json(port, "/mcp/connect", auth=("admin", "pw"))
+    assert anonymous[0] == 401
+    assert (status, info) == (200, {"path": f"/mcp/k/{config.connection_key()}"})
+
+
+def test_an_open_server_hands_out_plain_mcp(tmp_repo, unpinned):
+    with _running(tmp_repo) as port:
+        assert _get_json(port, "/mcp/connect") == (200, {"path": "/mcp"})
+
+
+def test_the_personal_url_needs_no_login_or_token(tmp_repo, unpinned):
+    config = ServeConfig(username="admin", password="pw", token="s3cret")
+    key = config.connection_key()
+    with _running(tmp_repo, config) as port:
+        keyed = _mcp_at(port, f"/mcp/k/{key}")
+        plain_without_token = _mcp(port, _INITIALIZE)
+    assert keyed[0] == 200
+    assert json.loads(keyed[2])["result"]["serverInfo"]["name"] == "specky"
+    assert plain_without_token[0] == 403
+
+
+def test_a_wrong_or_revoked_key_is_a_plain_404(tmp_repo, unpinned):
+    """No Basic challenge: an agent added by URL would only prompt for a password it can't use."""
+    old_key = ServeConfig(username="admin", password="old").connection_key()
+    with _running(tmp_repo, ServeConfig(username="admin", password="new")) as port:
+        for path in (f"/mcp/k/{old_key}", "/mcp/k/nope", "/mcp/k/"):
+            status, headers, _ = _mcp_at(port, path)
+            assert status == 404
+            assert "WWW-Authenticate" not in headers
+
+
+def _mcp_at(port, path):
+    conn = HTTPConnection("127.0.0.1", port, timeout=30)
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    try:
+        conn.request("POST", path, body=json.dumps(_INITIALIZE).encode(), headers=headers)
+        res = conn.getresponse()
+        return res.status, res.headers, res.read()
+    finally:
+        conn.close()
