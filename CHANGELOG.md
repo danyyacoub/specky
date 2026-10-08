@@ -7,6 +7,8 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.3.1]
+
 ### Added
 - **A Connect an agent page in the viewer.** It's linked from the titlebar of every page. Logged
   into a deployed `specky serve`, it gives you a personal MCP link and one command or one-click
