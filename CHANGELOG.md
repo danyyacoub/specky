@@ -7,6 +7,8 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.3.0]
+
 ### Added
 - **A deployed `specky serve` answers MCP at `/mcp`.** It serves the same tools as `specky-mcp`
   (`search_docs`, `read_doc`, `get_graph`, `commits_for_doc`, …) over Streamable HTTP, answered from
