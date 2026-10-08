@@ -15,9 +15,10 @@ When an MCP host connects to the specky server, the server hands the host's mode
 3. **Tools declared read-only**: every tool is registered with `ToolAnnotations(readOnlyHint=True, openWorldHint=False)`, because they only read the docs tree, the index or git. Clients that gate tools by mode (plan mode, read-only agents) can still call them.
 4. **Pick up the skill**: where the host loads skills, the model also has `find-feature` and `explore-docs` available; both spell out the lookup — search, read, the doc's behaviour ids, its history, and the sources check.
 5. **Explore the docs**: on a behaviour question, the model starts with `doc_context` (the doc, its neighbours, behaviours and recent changes in one call), widens with `search_docs` and `read_doc`, uses `doc_behaviours` or `module_acceptance_tests` for the exact promises, and `search_history` (filterable by author, module and time window) or `commits_for_doc` for the why when asked.
-6. **Check against the code when it matters**: before an answer drives a code change, the model compares the doc's last commit against its sources' to catch a doc that may be stale.
-7. **Answer with citations**: the model leads with the short answer and the doc it came from, cites every doc path and behaviour id the answer rests on, and says what it verified in code.
-8. **Tool names stay real**: a test pins every tool name the instructions and the lookup skills mention to a tool that actually exists.
+6. **Read the docs, not git, for history**: a deployed server's checkout is the docs copied into a fresh `git init`, so git history there is one synthetic commit and a git-log walk can only come back empty. `search_history`, `recent_activity` and `commits_for_doc` instead read the history docs' own `Date`, `Author`, `Message`, impact and features — the same fields the docs-only activity brief uses — with the git walk kept as the richer path where a real checkout is present. `doc_context`, `module_acceptance_tests` and the `specky://` resources need nothing but the docs tree.
+7. **Check against the code when it matters**: before an answer drives a code change, the model compares the doc's last commit against its sources' to catch a doc that may be stale.
+8. **Answer with citations**: the model leads with the short answer and the doc it came from, cites every doc path and behaviour id the answer rests on, and says what it verified in code.
+9. **Tool names stay real**: a test pins every tool name the instructions and the lookup skills mention to a tool that actually exists.
 
 ```mermaid
 flowchart TD
