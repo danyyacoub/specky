@@ -7,7 +7,15 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+## [0.3.2]
+
 ### Added
+- **MCP agents get the project's history from the docs, not git.** On a deployed `specky serve`,
+  whose checkout is the docs copied into a fresh `git init`, `search_history` (now filterable by
+  `author`, `module`, `since` and `impact`), `recent_activity` and `commits_for_doc` read the
+  history docs' own dates, authors, impact and features, so they answer over the MCP URL instead of
+  coming back empty. New `doc_context` and `module_acceptance_tests` tools, and `specky://`
+  resources, need nothing but the docs tree.
 - **A changelog, by day.** `changelog.html` (linked from the titlebar) lists what changed in the
   product one day at a time, from the history docs: days with only internal work are left out, and
   a release tag shows as a marker on the day it was cut rather than as an entry. The home page shows
