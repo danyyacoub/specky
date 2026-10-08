@@ -237,8 +237,8 @@ async def commit_info(sha: str, ctx: Context) -> dict:
 async def commits_for_doc(doc_path: str, ctx: Context) -> list[dict]:
     """Commits linked to a given feature/workflow doc (path relative to the repo root,
     e.g. 'specs/billing/refund-flow.md'), most recent first — each with its history doc's one-line
-    `headline`, its `impact` (feature | improvement | fix | internal) and `history_path`, read
-    those with read_doc for what changed and why."""
+    `headline`, its `impact` (breaking | feature | improvement | fix | internal) and `history_path`,
+    read those with read_doc for what changed, an example of it before and after, and why."""
     return _answer(doc_tools.doc_history, await _repo(ctx), doc_path, limit=COMMITS_FOR_DOC_MAX)
 
 
@@ -333,7 +333,9 @@ async def doc_context(topic: str, ctx: Context) -> dict:
 async def recent_activity(ctx: Context, since: str = "7d", module: str = "") -> dict:
     """What changed in a window, by module, with counts per author and impact — the history docs
     summed up. `since` as search_history takes it ('24h', '7d', an ISO date); `module` narrows it
-    to one domain or doc."""
+    to one domain or doc. `days` is the changelog: one row per day with user-facing changes,
+    breaking ones first, each with a before/after `example`, and the release tags cut that day —
+    the answer to "what changed since the last release" or "what shipped this week"."""
     return _answer(doc_tools.recent_activity, await _repo(ctx), since, module)
 
 

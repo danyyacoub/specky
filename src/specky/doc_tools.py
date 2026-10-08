@@ -30,7 +30,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from specky import catalog, frontmatter, matrix, paths, source
+from specky import catalog, changelog, frontmatter, matrix, paths, source
 from specky.commit_doc import doc_stamp, read_history
 from specky.db import connect, fts_match_query
 from specky.generator import modules_purposes
@@ -428,6 +428,11 @@ def history_entries(
                     "commits": [sha[:8] for sha in doc.commits],
                     "what": clip(doc.what, COMMIT_SUMMARY_CHARS),
                     "why": clip(doc.why, COMMIT_SUMMARY_CHARS),
+                    **(
+                        {"example": {"scenario": doc.scenario, "before": doc.before, "after": doc.after}}
+                        if doc.scenario
+                        else {}
+                    ),
                 },
             )
         )
@@ -569,8 +574,10 @@ def recent_activity(repo_root: Path, since: str = "7d", module: str = "") -> dic
     the same on a laptop as on a deployed server with no git history.
 
     `{since, changes, modules: [{module, changes: [{path, headline, date, authors, impact}]}],
-    authors: {author: n}, impacts: {impact: n}}`. A change touching two modules is listed under
-    both; one touching none sits under `""`.
+    authors: {author: n}, impacts: {impact: n}, days: [{date, releases, changes: [...]}]}`. A
+    change touching two modules is listed under both; one touching none sits under `""`. `days` is
+    the changelog's view of the same window: one row per day with user-facing changes, `breaking`
+    first, each with its example, and the release tags cut that day.
     """
     entries = history_entries(
         repo_root, module=module, since=since or "7d", limit=None
@@ -594,7 +601,38 @@ def recent_activity(repo_root: Path, since: str = "7d", module: str = "") -> dic
         "modules": [{"module": name, "changes": rows} for name, rows in sorted(modules.items())],
         "authors": dict(sorted(authors.items(), key=lambda kv: -kv[1])),
         "impacts": impacts,
+        "days": _changelog_days(repo_root, {entry["path"] for entry in entries}, since or "7d"),
     }
+
+
+def _changelog_days(repo_root: Path, keep: set[str], since: str) -> list[dict]:
+    """The changelog's days for the window, limited to the history docs in `keep` (the window's,
+    after the module filter)."""
+    cutoff = parse_since(since)
+    now = datetime.now(timezone.utc)
+    window = max(1, -(-int((now - cutoff).total_seconds()) // 86_400)) if cutoff else 3650
+    rows = []
+    for day in changelog.days(repo_root, window, now=now):
+        changes = [
+            {
+                "path": e.path,
+                "headline": e.headline,
+                "impact": e.impact,
+                "what": clip(e.what, COMMIT_SUMMARY_CHARS),
+                **(
+                    {"example": {"scenario": e.scenario, "before": e.before, "after": e.after}}
+                    if e.scenario
+                    else {}
+                ),
+                "docs": list(e.features),
+                "authors": list(e.authors),
+            }
+            for e in day.entries
+            if e.path in keep
+        ]
+        if changes:
+            rows.append({"date": day.anchor, "releases": day.releases, "changes": changes})
+    return rows
 
 
 # --- the terminal tools' payloads -----------------------------------------------------------------

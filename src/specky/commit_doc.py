@@ -341,11 +341,12 @@ def diff_files(diff: str) -> list[str]:
     return [m[2] for line in diff.splitlines() if (m := _DIFF_FILE.match(line))]
 
 
-# What a commit did to the product, as the micro-doc reports it. `internal` is everything a user
-# can't observe. New entries are never `internal` — a commit with no business logic in it is
+# What a commit did to the product, as the micro-doc reports it, in the order a reader should see
+# it: `breaking` (users or integrations must adapt) first. `internal` is everything a user can't
+# observe. New entries are never `internal` — a commit with no business logic in it is
 # skipped instead (`MicroDoc.skip`) — but entries written before that still say it, and the brief
 # still folds them away.
-IMPACTS = ("feature", "improvement", "fix", "internal")
+IMPACTS = ("breaking", "feature", "improvement", "fix", "internal")
 
 # The micro-doc instruction, identical for every commit, so it rides as the cacheable prefix.
 #
@@ -368,13 +369,21 @@ MICRO_DOC_PREFIX = (
     "dependency and version bumps, logging, and purely cosmetic UI (logos, colours, spacing). If "
     'the commit has no business logic in it, reply with only {"skip": true}.\n\n'
     "Otherwise reply with only a JSON object:\n"
-    '{"headline": "...", "impact": "...", "what_changed": "...", "why": "..."}\n\n'
+    '{"headline": "...", "impact": "...", "what_changed": "...", '
+    '"example": {"scenario": "...", "before": "...", "after": "..."}, "why": "..."}\n\n'
     "- headline: at most 80 characters, present tense, what the product now does differently, in "
     "its users' terms. No file, function or class names.\n"
-    "- impact: exactly one of feature (a new capability), improvement (existing behaviour "
+    "- impact: exactly one of breaking (existing behaviour changed in a way users or "
+    "integrations must adapt to: a command, flag, setting, field or endpoint removed or renamed, "
+    "or a default changed), feature (a new capability), improvement (existing behaviour "
     "changed), fix (wrong behaviour corrected).\n"
     "- what_changed: 1-3 sentences on behaviour before and after. Name the commands, flags, "
     "settings and screens a user would recognise; leave implementation detail out.\n"
+    "- example: one concrete situation a user or integrator would hit that shows the change: "
+    "scenario names what they do (the command, input, screen or setting, with real-looking "
+    "values), before is what happened then and after is what happens now, one sentence each. For "
+    "a feature, before is what they had to do instead or that it wasn't possible. Not \"the code "
+    "now handles X\": what the person sees. {} when no single situation shows it.\n"
     "- why: 1-2 sentences on the motivation, as the commit message or diff states it. An empty "
     "string when neither says."
 )
@@ -411,8 +420,10 @@ MICRO_DOC_EXTEND_PREFIX = MICRO_DOC_PREFIX + (
     "the commits it covers so far. Reply with the same JSON for the change as a whole, this commit "
     "included: keep what still holds, fold in what this commit adds or changes, and drop what it "
     "reverted. Work in progress, review fixes and typo fixes are steps, not changes: don't mention "
-    "them on their own. impact is the whole change's: feature if any of it adds a capability, "
-    'else improvement, else fix. Reply {"skip": true} when this commit adds no business logic to '
+    "them on their own. impact is the whole change's: breaking if any of it is, else feature if "
+    "any of it adds a capability, else improvement, else fix. example is the whole change's most "
+    "telling situation, replaced rather than added to. "
+    'Reply {"skip": true} when this commit adds no business logic to '
     "the change (only tests, docs, tooling and the like): the entry then stays as it is."
 )
 
@@ -420,6 +431,10 @@ MICRO_DOC_EXTEND_PREFIX = MICRO_DOC_PREFIX + (
 def extend_prompt(entry: MicroDoc, subjects: Sequence[str], commit: Commit) -> tuple[str, str]:
     """`(cacheable prefix, this call's half)` for a commit joining the entry `entry`."""
     so_far = [f"Headline: {entry.headline}", f"Impact: {entry.impact}", f"What changed: {entry.what}"]
+    if entry.scenario:
+        so_far.append(
+            f"Example: {entry.scenario} Before: {entry.before} After: {entry.after}"
+        )
     if entry.why:
         so_far.append(f"Why: {entry.why}")
     covered = "\n".join(f"- {subject}" for subject in subjects)
@@ -450,6 +465,10 @@ class MicroDoc:
     impact: str = ""
     what: str = ""
     why: str = ""
+    # One situation showing the change: what a user does, what happened before, what happens now.
+    scenario: str = ""
+    before: str = ""
+    after: str = ""
     features: list[str] = field(default_factory=list)
     commits: list[str] = field(default_factory=list)
     branch: str = ""
@@ -457,7 +476,8 @@ class MicroDoc:
 
     def text(self) -> str:
         """The prose, as one searchable block — what the index and the Spec Assistant read."""
-        return "\n\n".join(part for part in (self.headline, self.what, self.why) if part)
+        parts = (self.headline, self.what, self.scenario, self.before, self.after, self.why)
+        return "\n\n".join(part for part in parts if part)
 
 
 def parse_micro_doc(reply: str) -> MicroDoc:
@@ -469,6 +489,12 @@ def parse_micro_doc(reply: str) -> MicroDoc:
     if answer.get("skip") is True:
         return MicroDoc(skip=True)
     impact = str(answer.get("impact", "")).strip().lower()
+    example = answer.get("example")
+    example = example if isinstance(example, dict) else {}
+    # One line each: they render as one bold label and two list items.
+    scenario, before, after = (" ".join(str(example.get(k) or "").split()) for k in _EXAMPLE_KEYS)
+    if not (scenario and (before or after)):
+        scenario = before = after = ""
     return MicroDoc(
         # One line, whatever came back: it becomes the doc's H1, and a newline in it would end the
         # heading and leave the rest as an orphaned paragraph.
@@ -476,6 +502,9 @@ def parse_micro_doc(reply: str) -> MicroDoc:
         impact=impact if impact in IMPACTS else "",
         what=str(answer.get("what_changed", "")).strip(),
         why=str(answer.get("why", "")).strip(),
+        scenario=scenario,
+        before=before,
+        after=after,
     )
 
 
@@ -633,6 +662,10 @@ def history_doc_for(history_dir: Path, sha: str) -> Path | None:
 
 WHAT_CHANGED_HEADING = "## What changed"
 WHY_HEADING = "## Why"
+EXAMPLE_HEADING = "## Example"
+_EXAMPLE_KEYS = ("scenario", "before", "after")
+# The Example section's three lines, as `_render_body` writes them.
+_EXAMPLE_LINE = re.compile(r"^(?:- )?\*\*(?P<key>Scenario|Before|After):\*\*\s*(?P<text>.*)$")
 
 # The legacy H1, which named the commit rather than saying anything about it. `read_history` reads
 # it as "no headline", which is what marks a doc as one `--refresh-history` should rewrite.
@@ -683,6 +716,11 @@ def new_entry_path(history_dir: Path, sha: str, name: str) -> Path:
 def _render_body(doc: MicroDoc, bullets: str, sha: str) -> str:
     if doc.headline:
         sections = [f"{WHAT_CHANGED_HEADING}\n\n{doc.what}\n"] if doc.what else []
+        if doc.scenario:
+            sections.append(
+                f"{EXAMPLE_HEADING}\n\n**Scenario:** {doc.scenario}\n\n"
+                f"- **Before:** {doc.before}\n- **After:** {doc.after}\n"
+            )
         if doc.why:
             sections.append(f"{WHY_HEADING}\n\n{doc.why}\n")
         return f"# {doc.headline}\n\n{bullets}" + "\n".join(sections)
@@ -794,6 +832,20 @@ def _members_info(repo_root: Path, shas: Sequence[str]) -> list[Commit]:
     return [found[sha] for sha in dict.fromkeys(shas) if sha in found]
 
 
+def _sections(body: str) -> dict[str, str]:
+    """`{heading: its text}` for the `## ` sections a history doc is written with. A `## ` line
+    that isn't one of them stays in the text of the section it's in."""
+    known = (WHAT_CHANGED_HEADING, EXAMPLE_HEADING, WHY_HEADING)
+    found: dict[str, list[str]] = {}
+    current: list[str] = []
+    for line in body.splitlines():
+        if line.rstrip() in known:
+            current = found.setdefault(line.rstrip(), [])
+        else:
+            current.append(line)
+    return {heading: "\n".join(lines).strip() for heading, lines in found.items()}
+
+
 # A `- **Date:**` / `- **Author:**` / `- **Message:**` line of a history doc's metadata block.
 # An entry's nested commit list is indented, so `^- ` never reaches it.
 _DOC_META = re.compile(r"^- \*\*(Date|Author|Message):\*\*\s*(.+?)\s*$", re.MULTILINE)
@@ -851,9 +903,14 @@ def read_history(text: str) -> tuple[str | None, MicroDoc] | None:
     rest = "\n".join(prose).strip()
 
     what, why = rest, ""
-    if rest.startswith(WHAT_CHANGED_HEADING) or rest.startswith(WHY_HEADING):
-        what, _, why = rest.partition(WHY_HEADING)
-        what = what.removeprefix(WHAT_CHANGED_HEADING)
+    example: dict[str, str] = {}
+    if rest.startswith((WHAT_CHANGED_HEADING, EXAMPLE_HEADING, WHY_HEADING)):
+        sections = _sections(rest)
+        what = sections.get(WHAT_CHANGED_HEADING, "")
+        why = sections.get(WHY_HEADING, "")
+        for line in sections.get(EXAMPLE_HEADING, "").splitlines():
+            if m := _EXAMPLE_LINE.match(line.strip()):
+                example[m["key"].lower()] = m["text"].strip()
     what, why = what.strip(), why.strip()
     if not (headline or what):
         return None
@@ -872,6 +929,9 @@ def read_history(text: str) -> tuple[str | None, MicroDoc] | None:
             impact=impact if impact in IMPACTS else "",
             what=what,
             why=why,
+            scenario=example.get("scenario", ""),
+            before=example.get("before", ""),
+            after=example.get("after", ""),
             features=list(features) if isinstance(features, list) else [],
             commits=commits or ([sha] if sha else []),
             branch=branch if isinstance(branch, str) else "",

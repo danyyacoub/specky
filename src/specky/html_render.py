@@ -47,7 +47,7 @@ import posixpath
 import re
 import shutil
 import subprocess
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable
 from urllib.parse import unquote
@@ -55,7 +55,7 @@ from urllib.parse import unquote
 import markdown as md
 from jinja2 import Environment
 
-from specky import activity, diagram_render, frontmatter, matrix, paths
+from specky import activity, changelog, diagram_render, frontmatter, matrix, paths
 from specky.chat_server import DEFAULT_PORT as CHAT_PORT
 from specky.db import connect
 from specky.staleness import days_behind
@@ -97,7 +97,7 @@ ICON_SPRITE = """
 
 # A doc's type, as an icon: the type chips, the sidebar links and (via SEARCH_JS, which is handed
 # this map) the search results all draw from it.
-_TYPE_ICONS = {"feature": "sparkle", "workflow": "cycle"}
+_TYPE_ICONS = {"feature": "sparkle", "workflow": "cycle", "changelog": "clock"}
 _TYPE_ICON_FALLBACK = "file-text"
 
 _RAIL_TEMPLATE = _env.from_string(
@@ -231,6 +231,9 @@ _PAGE_TEMPLATE = _env.from_string(
     'autocomplete="off" aria-label="Search docs">'
     '<div id="search-results"></div>'
     "</div>"
+    '<a class="titlebar-link" href="changelog.html" title="What changed, day by day">'
+    '<svg class="icon" aria-hidden="true"><use href="#icon-clock"></use></svg>'
+    "<span>Changelog</span></a>"
     '<a class="titlebar-link" href="connect.html" title="Use these docs from your AI agent">'
     '<svg class="icon" aria-hidden="true"><use href="#icon-plug"></use></svg>'
     "<span>Connect an agent</span></a>"
@@ -652,6 +655,27 @@ body.nav-collapsed .sidebar { display: none; }
 .impact-feature { background: var(--feature-bg); color: var(--feature); }
 .impact-improvement { background: var(--accent-soft); color: var(--accent); }
 .impact-fix { background: var(--tag-2-bg); color: var(--tag-2); }
+.impact-breaking { background: var(--danger-bg); color: var(--danger); }
+/* A change's Example: one situation, then and now. */
+.example {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin: 6px 0 0;
+  padding: 6px 10px; border-left: 2px solid var(--border); font-size: 0.8125rem; line-height: 1.5;
+}
+.example .example-scenario { grid-column: 1 / -1; color: var(--text-primary); }
+.example dt { font-size: 0.625rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-tertiary); padding-top: 3px; }
+.example dd { margin: 0; color: var(--text-secondary); }
+.example code { font-size: 0.75rem; }
+/* The changelog: one block per day, a release tag as a marker on it. */
+.doc .changelog h3.changelog-day {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 0.9375rem;
+  margin: 0 0 6px; scroll-margin-top: 16px;
+}
+.release {
+  font-size: 0.6875rem; font-weight: 600; font-family: var(--font-mono, monospace);
+  color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px;
+}
+.changelog-more { font-size: 0.8125rem; margin: 4px 0 20px; }
 .internal, .change-meta { font-size: 0.75rem; color: var(--text-secondary); margin: 4px 0 0; }
 .change-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .change-meta.branch { margin: 0 0 4px; }
@@ -1319,7 +1343,10 @@ searchInput?.addEventListener('input', () => {
     .then((hits) => {
       // Ignore a response the user has already typed past, and an empty served result set that
       // would blank out usable local hits.
-      if (hits && hits.length && seq === searchSeq) showHits(hits);
+      if (!hits || !hits.length || seq !== searchSeq) return;
+      // The changelog's days exist only in this page's index, never in the served one.
+      const days = localHits(q).filter((h) => h.doc.doc_type === 'changelog');
+      showHits([...hits, ...days].slice(0, SEARCH_HIT_LIMIT));
     })
     .catch(() => { /* no server reachable — the local hits stand */ });
 });
@@ -3193,6 +3220,7 @@ def _digest_html(
                 else ""
             )
             what = f'<p class="digest-what">{_inline(line.what)}</p>' if line.what else ""
+            what += _example_html(line.scenario, line.before, line.after)
             label = html.escape(change.label)
             if change.pr_url and label:
                 label = f'<a href="{html.escape(change.pr_url, quote=True)}">{label}</a>'
@@ -3207,6 +3235,112 @@ def _digest_html(
             f'{_more(items, DIGEST_ITEMS_SHOWN, "ul", "digest-items")}</section>'
         )
     return f'<div class="digest">{"".join(sections)}</div>'
+
+
+def _example_html(scenario: str, before: str, after: str) -> str:
+    """A change's Example — one situation, what a user saw before and sees now — or ""."""
+    if not scenario:
+        return ""
+    rows = "".join(
+        f"<dt>{label}</dt><dd>{_inline(text)}</dd>"
+        for label, text in (("Before", before), ("After", after))
+        if text
+    )
+    return f'<dl class="example"><dd class="example-scenario">{_inline(scenario)}</dd>{rows}</dl>'
+
+
+def _day_title(day: changelog.Day) -> str:
+    return f"{day.day:%A} {day.day.day} {day.day:%B %Y}"
+
+
+def _changelog_days_html(
+    days: list[changelog.Day], pages: dict[str, str], doc_info: dict[str, dict]
+) -> str:
+    """One block per day: its date and release markers, then each change with its impact, its
+    headline linked to its history page, its What changed and Example, and who made it."""
+    blocks = []
+    for day in days:
+        items = []
+        for entry in day.entries:
+            headline = _inline(entry.headline)
+            if page := pages.get(entry.path):
+                headline = f'<a href="{html.escape(page, quote=True)}">{headline}</a>'
+            badge = (
+                f'<span class="impact impact-{entry.impact}">{entry.impact}</span>'
+                if entry.impact
+                else ""
+            )
+            what = f'<p class="digest-what">{_inline(entry.what)}</p>' if entry.what else ""
+            what += _example_html(entry.scenario, entry.before, entry.after)
+            chips = _activity_chips(list(entry.features), doc_info, 3)
+            who = html.escape(", ".join(entry.authors))
+            items.append(
+                f'<li class="digest-item"><p class="digest-head">{badge}{headline}</p>{what}'
+                f'<p class="digest-meta change-meta">{who}{chips}</p></li>'
+            )
+        releases = "".join(
+            f'<span class="release" title="Release tag">{html.escape(tag)}</span>'
+            for tag in day.releases
+        )
+        blocks.append(
+            f'<section class="digest-group"><h3 class="changelog-day" id="{day.anchor}">'
+            f'{_day_title(day)}<span class="digest-n">{len(day.entries)}</span>{releases}</h3>'
+            f'{_more(items, DIGEST_ITEMS_SHOWN, "ul", "digest-items")}</section>'
+        )
+    return f'<div class="digest">{"".join(blocks)}</div>'
+
+
+def _changelog_home_html(
+    days: list[changelog.Day], window: int, pages: dict[str, str], doc_info: dict[str, dict]
+) -> str:
+    """The home page's changelog: the last `window` days, and a way to the rest."""
+    if days:
+        body = _changelog_days_html(days, pages, doc_info)
+    else:
+        body = f'<p class="empty-state">No user-facing changes in the last {window} days.</p>'
+    return (
+        f'<section class="activity changelog"><h2>Changelog</h2>'
+        f'<p class="activity-meta">behaviour changes by day · last {window} days</p>{body}'
+        '<p class="changelog-more"><a href="changelog.html">Full changelog →</a></p></section>'
+    )
+
+
+def _changelog_page(
+    days: list[changelog.Day], window: int, pages: dict[str, str], doc_info: dict[str, dict]
+) -> str:
+    intro = (
+        "<h1>Changelog</h1>"
+        f'<p class="activity-meta">What changed in the product, day by day, over the last {window} '
+        "days — from the history docs. Days with only internal work are left out, and a release "
+        "tag shows on the day it was cut.</p>"
+    )
+    if not days:
+        return intro + f'<p class="empty-state">No user-facing changes in the last {window} days.</p>'
+    return f'{intro}<section class="activity changelog">{_changelog_days_html(days, pages, doc_info)}</section>'
+
+
+def _changelog_search_entries(days: list[changelog.Day]) -> list[dict]:
+    """One in-page search entry per day, so a search for what changed finds the day it changed."""
+    found = []
+    for day in days:
+        text = " ".join(
+            part for e in day.entries
+            for part in (e.headline, e.what, e.scenario, e.before, e.after) if part
+        )
+        found.append(
+            {
+                "title": f"Changelog — {day.day.day} {day.day:%b %Y}",
+                "domain": "changelog",
+                "path": f"changelog#{day.anchor}",
+                "html_path": f"changelog.html#{day.anchor}",
+                "excerpt": " · ".join(e.headline for e in day.entries)[:160],
+                "tags": [],
+                "doc_type": "changelog",
+                "slug": day.anchor,
+                "body": text.lower(),
+            }
+        )
+    return found
 
 
 def _change_item(
@@ -3295,6 +3429,7 @@ def _home_body(
     workflow_count: int,
     tag_chips: list[dict],
     activity_html: str = "",
+    changelog_html: str = "",
 ) -> str:
     stats = [
         ("docs", doc_count),
@@ -3320,6 +3455,7 @@ def _home_body(
         "<h1>specky docs</h1>"
         "<p>Auto-generated, browsable functional reference — no server required.</p>"
         f'<div class="stat-row">{stat_html}</div>'
+        f"{changelog_html}"
         f"{activity_html}"
         f"{tag_cloud}"
         '<p style="margin-top:24px" class="empty-state">Pick a doc from the left, or search above.</p>'
@@ -3536,6 +3672,9 @@ def render_site(repo_root: Path) -> Path:
     workflow_count = sum(1 for d in docs if d["doc_type"] == "workflow")
     tag_chips = [{"name": t, "cls": _tag_class(t)} for t in sorted(all_tags)]
 
+    log_cfg = changelog.ChangelogConfig.load(repo_root)
+    log_days = changelog.days(repo_root, log_cfg.days, cfg=log_cfg) if log_cfg.enabled else []
+    search_entries.extend(_changelog_search_entries(log_days))
     _write_assets(site_dir, search_entries, hover_map)
     if body_cap is None:
         print(
@@ -3584,8 +3723,20 @@ def render_site(repo_root: Path) -> Path:
         workflow_count,
         tag_chips,
         _render_activity(repo_root, pages, doc_info),
+        _changelog_home_html(
+            [d for d in log_days if d.day > date.today() - timedelta(days=log_cfg.home_days)],
+            log_cfg.home_days,
+            pages,
+            doc_info,
+        )
+        if log_cfg.enabled
+        else "",
     )
     (site_dir / "connect.html").write_text(_page("Connect an agent", rail_html, _connect_body()))
+    if log_cfg.enabled:
+        (site_dir / "changelog.html").write_text(
+            _page("Changelog", rail_html, _changelog_page(log_days, log_cfg.days, pages, doc_info))
+        )
     home_page = _page("specky docs", rail_html, home_body)
     (site_dir / "index.html").write_text(home_page)
 

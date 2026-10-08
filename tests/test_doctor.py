@@ -404,7 +404,7 @@ def test_a_rendered_site_reports_its_page_count(in_repo, write_doc):
 
     checks = _by_section(doctor.run_checks())["site"]
     assert [c.status for c in checks] == [doctor.OK]
-    assert "3 pages" in checks[0].detail  # the doc, index.html and connect.html
+    assert "4 pages" in checks[0].detail  # the doc, index.html, connect.html and changelog.html
 
 
 def _stage_draft(repo, rel: str = "billing/refund-flow.md") -> None:

@@ -17,7 +17,9 @@ below). The entry has a fixed structure because three readers use different part
   differently. The home page's activity brief lists these
   ([rendering/home-activity-brief.md](../rendering/home-activity-brief.md)), and the viewer's
   History group shows them instead of "Commit 02738efb".
-- An **`impact`** is one of `feature`, `improvement` or `fix`. Entries written before business
+- An **`impact`** is one of `breaking`, `feature`, `improvement` or `fix`. `breaking` means users
+  or integrations must adapt: a command, flag, setting, field or endpoint removed or renamed, or a
+  default changed. It is listed first wherever changes are listed. Entries written before business
   logic was the bar can also say `internal`, meaning no behaviour a user can observe. The brief
   folds those away, counting them rather than listing them ("+2 internal"), and the viewer's
   sidebar does the same: an `internal` entry keeps its page, reachable by link and by search, but
@@ -25,6 +27,13 @@ below). The entry has a fixed structure because three readers use different part
 - **What changed** and **Why** sections hold the prose the Spec Assistant retrieves when asked why
   something changed. `Why` is left out when neither the commit message nor the diff states a
   reason, rather than letting the model make one up.
+- An **Example** section, between the two, shows the change in one concrete situation: a
+  **Scenario** (what someone does, with real-looking values), then what they saw **Before** and
+  what they see **After**, one sentence each. For a new feature, Before is what they had to do
+  instead. It is written in what the person sees, never in what the code does, and it is left out
+  when no single situation shows the change. An entry that is extended gets the whole change's most
+  telling example, replacing the old one. Entries written before this have none,
+  and nothing rewrites them unasked.
 - **`features:`** names the feature or workflow docs the entry's commits were classified under.
   The entry is committed, so the link travels with the repo. A feature page's list of recent
   changes relies on that.
@@ -348,7 +357,7 @@ flowchart TD
 
 | Outcome | When | Result |
 |---------|------|--------|
-| **Summary created** | A fire finds pending commits | Each commit opens an entry in `specs/history/`, named for its branch or its subject, with a headline, an impact, What changed / Why, its `commits:` and the `features:` it was classified under; entries added to `micro_docs`; a follow-up doc-sync commit is made, with a `Specky-Documents` trailer naming the commits |
+| **Summary created** | A fire finds pending commits | Each commit opens an entry in `specs/history/`, named for its branch or its subject, with a headline, an impact, What changed / Example / Why, its `commits:` and the `features:` it was classified under; entries added to `micro_docs`; a follow-up doc-sync commit is made, with a `Specky-Documents` trailer naming the commits |
 | **Entry extended** | A commit is its branch's recent work and the branch has an open entry (see One entry per branch) | The entry is rewritten to describe the whole change, gains the commit in `commits:` and the union of `features:`, and keeps its name |
 | **Entry closed by the window** | The entry's first commit is `window_days` (4) or more days old | The next commit opens a new entry: `<branch>-2.md` on a feature branch, its subject on a long-lived one |
 | **Hotfix by someone else** | A commit on `main`/`dev` by a different author than the open entry's | It opens its own entry |

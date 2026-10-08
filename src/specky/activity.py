@@ -140,6 +140,10 @@ class Line:
     history_path: str  # the doc it came from, repo-relative; "" when the commit has none
     what: str = ""  # the doc's What changed alone — the digest's paragraph
     features: tuple[str, ...] = ()  # the doc's own `features:`, most direct first
+    # The doc's Example: one situation, and what a user saw before and sees now.
+    scenario: str = ""
+    before: str = ""
+    after: str = ""
 
 
 @dataclass
@@ -387,6 +391,9 @@ def _doc_line(path: str, doc: MicroDoc) -> Line:
         # A legacy doc's paragraph is its whole text, and its first sentence is already the line.
         what=doc.what if doc.headline else "",
         features=tuple(doc.features),
+        scenario=doc.scenario,
+        before=doc.before,
+        after=doc.after,
     )
 
 

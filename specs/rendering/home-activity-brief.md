@@ -39,6 +39,10 @@ Three things decide what appears:
 
 No model is called to build it; it is git and the committed docs only.
 
+Above it, the home page shows the last week of the [changelog](changelog.md): the same changes
+told by day rather than by feature or person. Each digest entry with an Example shows it under its
+What changed paragraph, as a scenario and its before and after.
+
 ## How It Works
 
 0. **Docs without their git history** — a history directory holding more docs than the whole

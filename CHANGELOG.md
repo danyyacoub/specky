@@ -7,6 +7,20 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+### Added
+- **A changelog, by day.** `changelog.html` (linked from the titlebar) lists what changed in the
+  product one day at a time, from the history docs: days with only internal work are left out, and
+  a release tag shows as a marker on the day it was cut rather than as an entry. The home page shows
+  the last week of it above Recent activity, each day is a result in the viewer's search, and MCP
+  `recent_activity` returns the same days. `[changelog]` sets `days`, `home_days`, `tag_pattern`
+  and `enabled`.
+- **History entries show an example.** Each new entry has an Example section: one concrete
+  scenario, what a user saw before and what they see now. It appears in the home digest, the
+  changelog and the MCP history tools. Entries written before this keep no example; nothing
+  rewrites them unasked.
+- **A `breaking` impact.** For changes users or integrations must adapt to (a removed or renamed
+  command, flag, setting or field, a changed default). It's listed first and badged in red.
+
 ## [0.3.1]
 
 ### Added

@@ -74,10 +74,56 @@ def test_a_reply_that_isnt_json_is_kept_as_legacy_prose_not_guessed_at():
 
 def test_an_unknown_impact_is_dropped_and_a_multiline_headline_is_one_line():
     doc = commit_doc.parse_micro_doc(
-        json.dumps({"headline": "Two\nlines", "impact": "Breaking", "what_changed": "x"})
+        json.dumps({"headline": "Two\nlines", "impact": "Severe", "what_changed": "x"})
     )
     assert doc.headline == "Two lines"
     assert doc.impact == ""
+
+
+def test_breaking_is_an_impact():
+    doc = commit_doc.parse_micro_doc(
+        json.dumps({"headline": "Drops --legacy", "impact": "Breaking", "what_changed": "x"})
+    )
+    assert doc.impact == "breaking"
+
+
+EXAMPLE = {
+    "scenario": "A customer asks for a 120 EUR refund on a 100 EUR order",
+    "before": "The refund went through.",
+    "after": "It is refused with\n'refund exceeds order total'.",
+}
+
+
+def test_the_example_is_read_and_each_part_is_one_line():
+    doc = commit_doc.parse_micro_doc(json.dumps({**json.loads(STRUCTURED), "example": EXAMPLE}))
+    assert doc.scenario == EXAMPLE["scenario"]
+    assert doc.before == "The refund went through."
+    assert doc.after == "It is refused with 'refund exceeds order total'."
+    assert "120 EUR" in doc.text()
+
+
+@pytest.mark.parametrize(
+    "example", ["a string", ["a", "list"], {}, {"scenario": "only a scenario"}, None]
+)
+def test_a_malformed_or_empty_example_is_no_example(example):
+    doc = commit_doc.parse_micro_doc(json.dumps({**json.loads(STRUCTURED), "example": example}))
+    assert (doc.scenario, doc.before, doc.after) == ("", "", "")
+    assert doc.headline  # the rest of the reply still stands
+
+
+def test_an_example_round_trips_between_what_changed_and_why(tmp_repo):
+    doc = commit_doc.parse_micro_doc(json.dumps({**json.loads(STRUCTURED), "example": EXAMPLE}))
+    text = commit_doc.write_history_file(tmp_repo, _commit_obj(), doc).read_text()
+    assert text.index("## What changed") < text.index("## Example") < text.index("## Why")
+    assert "**Scenario:** A customer asks" in text and "- **Before:** The refund went through." in text
+    assert commit_doc.read_history(text) == ("c" * 40, replace(doc, commits=["c" * 40]))
+
+
+def test_an_entry_being_extended_shows_the_model_its_example():
+    doc = commit_doc.parse_micro_doc(json.dumps({**json.loads(STRUCTURED), "example": EXAMPLE}))
+    _, prompt = commit_doc.extend_prompt(doc, ["first"], _commit_obj())
+    assert "Example: A customer asks for a 120 EUR refund" in prompt
+    assert "example" in commit_doc.MICRO_DOC_PREFIX and "breaking" in commit_doc.MICRO_DOC_PREFIX
 
 
 # --- the file ------------------------------------------------------------------------------

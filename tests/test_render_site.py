@@ -51,6 +51,7 @@ def test_a_page_per_doc_plus_a_home_page(site):
     assert pages == {
         "index.html",
         "connect.html",
+        "changelog.html",
         "billing-refund-flow.html",
         "billing-refund-limits.html",
         "history-abc12345.html",

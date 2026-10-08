@@ -64,10 +64,25 @@ Work through at most 5 commits unless the user asked for more. Older ones stay p
    JSON
    ```
 3. **Write the micro-doc** as the JSON object `rules` asks for, with keys `headline`, `impact`,
-   `what_changed` and `why`. Describe what the product does differently, in its users' terms.
-   Leave `why` empty when neither the commit message nor the diff states a motivation. If the
-   commit joins an entry (`extends` isn't `null`), write it for the whole change, as
+   `what_changed`, `example` and `why`. Describe what the product does differently, in its users'
+   terms. Leave `why` empty when neither the commit message nor the diff states a motivation. If
+   the commit joins an entry (`extends` isn't `null`), write it for the whole change, as
    `rules_extend` says.
+   - `impact` is `breaking` when users or integrations must adapt: a command, flag, setting,
+     field or endpoint removed or renamed, or a default changed. It's listed first in the
+     changelog, so don't use it for an ordinary improvement.
+   - `example` is one concrete situation that shows the change: `scenario` is what someone does,
+     with real-looking values; `before` is what they saw then and `after` what they see now, one
+     sentence each. For a new feature, `before` says what they had to do instead. Write what the
+     person sees, never what the code does:
+     - Good: `{"scenario": "A reader asks the Spec Assistant about specs/cli/check.md",
+       "before": "The answer names `specs/cli/check.md` as plain code.", "after": "The answer
+       links to the Check page, labelled with its title."}`
+     - Bad: `{"scenario": "Path handling", "before": "Backtick paths weren't parsed.", "after":
+       "The renderer resolves them."}`
+
+     Use `{}` only when no single situation shows the change. When extending an entry, replace
+     the example with the whole change's most telling one.
 4. **Find the feature it belongs to**, if any. Check `specs/MODULES.md`, then run `search_docs` (or
    `run_specky search "<terms>"`) with the commands, settings or screens the commit changed.
    - If it changes behaviour an existing doc describes, update that doc. Follow steps 2–9 of the
@@ -82,7 +97,8 @@ Work through at most 5 commits unless the user asked for more. Older ones stay p
    from 4, if there is one:
    ```bash
    run_specky record-commit <sha> --feature specs/<domain>/<topic>.md <<'JSON'
-   {"headline": "...", "impact": "...", "what_changed": "...", "why": "..."}
+   {"headline": "...", "impact": "...", "what_changed": "...",
+    "example": {"scenario": "...", "before": "...", "after": "..."}, "why": "..."}
    JSON
    ```
    It writes the history entry, or extends the one this commit joins, then indexes it and prints
