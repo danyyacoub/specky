@@ -94,6 +94,18 @@ def _startup_root() -> Path | None:
     return _git_root(Path(override)) if override else _git_root()
 
 
+# Set by `specky serve` when it serves these tools over HTTP (mcp_http.py): that process answers for
+# one repo, the one it serves, whatever its cwd or the remote host's workspace happens to be.
+_pinned_root: Path | None = None
+
+
+def pin_repo(root: Path) -> None:
+    """Answer every tool call for `root`, ahead of `SPECKY_REPO_ROOT`, the cwd and client roots."""
+    global _pinned_root
+    _pinned_root = root
+    mcp._lowlevel_server.instructions = instructions_for(root)
+
+
 class RepoNotFound(ToolError):
     """A `ToolError`, so its message reaches the model instead of the SDK's generic one."""
 
@@ -126,7 +138,10 @@ async def _repo(ctx: Context) -> Path:
     wherever the host starts its servers in the project (Claude Code, Codex, Kiro). Then the
     workspace roots the host reports — the only signal left when it starts them somewhere else.
     Resolved per call rather than once, since one server process can outlive a workspace switch.
+    A server pinned by `pin_repo` skips all of that.
     """
+    if _pinned_root is not None:
+        return _pinned_root
     override = os.environ.get("SPECKY_REPO_ROOT")
     if override:
         root = _git_root(Path(override).expanduser())

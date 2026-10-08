@@ -180,6 +180,19 @@ Copy `.git` in (don't `.dockerignore` it). New docs reach the server when the im
 **The login.** Set `SPECKY_AUTH_USERNAME` and `SPECKY_AUTH_PASSWORD`. Every page and API call then
 asks for that login, so put the server behind HTTPS.
 
+**Agents.** The server also answers MCP at `/mcp`, behind the same login. It serves the same tools
+as `specky-mcp` (`search_docs`, `read_doc`, `get_graph`, `commits_for_doc` and the rest), answered
+from the server's copy of the repo. An agent can then use the docs as a knowledge graph with no
+checkout and no local install:
+
+```bash
+claude mcp add --transport http specky-docs https://docs.example.com/mcp \
+  --header "Authorization: Basic $(printf '%s' "$SPECKY_USER:$SPECKY_PASS" | base64)"
+```
+
+Any MCP host that can send a header on a Streamable HTTP server works the same way. If
+`[serve] token` is set, send `X-Specky-Token` as well.
+
 **The models.** `SPECKY_AI_<KEY>` sets `[ai] <key>`. `SPECKY_AI_PROVIDER` makes the environment the
 whole `[ai]` table, so nothing from a local config leaks in. `SPECKY_AI_CHAT_MODEL` and
 `SPECKY_AI_DRAFT_MODEL` choose the models for answers and for drafts. Use an API provider: the

@@ -1119,3 +1119,88 @@ def test_search_obeys_the_origin_and_token_policy(indexed_repo):
             port, "GET", "/search?q=refund", origin="https://docs.example", token="s3cret"
         )
     assert (wrong_origin[0], no_token[0], allowed[0]) == (403, 403, 200)
+
+
+# --- MCP over HTTP (`/mcp`) -----------------------------------------------------------------------
+
+_INITIALIZE = {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {},
+        "clientInfo": {"name": "test", "version": "1"},
+    },
+}
+
+
+@pytest.fixture
+def unpinned():
+    """`/mcp` pins the shared MCP server to the repo it serves; put it back for the stdio tests."""
+    from specky import mcp_server
+
+    instructions = mcp_server.mcp.instructions
+    yield
+    mcp_server._pinned_root = None
+    mcp_server.mcp._lowlevel_server.instructions = instructions
+
+
+def _mcp(port, message, *, auth=("admin", "pw"), origin=None, token=None):
+    conn = HTTPConnection("127.0.0.1", port, timeout=30)
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if auth is not None:
+        headers["Authorization"] = _basic(*auth)
+    if origin is not None:
+        headers["Origin"] = origin
+    if token is not None:
+        headers[chat_server.TOKEN_HEADER] = token
+    try:
+        conn.request("POST", "/mcp", body=json.dumps(message).encode(), headers=headers)
+        res = conn.getresponse()
+        return res.status, res.headers, res.read()
+    finally:
+        conn.close()
+
+
+def test_mcp_is_behind_the_login(tmp_repo, unpinned):
+    with _running(tmp_repo, ServeConfig(username="admin", password="pw")) as port:
+        anonymous = _mcp(port, _INITIALIZE, auth=None)
+        wrong = _mcp(port, _INITIALIZE, auth=("admin", "nope"))
+        ok = _mcp(port, _INITIALIZE)
+    for status, headers, _ in (anonymous, wrong):
+        assert status == 401
+        assert headers["WWW-Authenticate"].startswith('Basic realm="specky"')
+    assert ok[0] == 200
+    assert json.loads(ok[2])["result"]["serverInfo"]["name"] == "specky"
+
+
+def test_mcp_answers_from_the_served_repo(tmp_repo, write_doc, unpinned):
+    """Not the server's cwd: the tools read the repo `serve` was started for."""
+    write_doc("billing/refunds.md", "# Refunds\n\nRefunds settle in five days.\n", {"type": "feature"})
+    call = {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "read_doc", "arguments": {"path": "specs/billing/refunds.md"}},
+    }
+    listing = {"jsonrpc": "2.0", "id": 3, "method": "tools/list"}
+    with _running(tmp_repo, ServeConfig(username="admin", password="pw")) as port:
+        read = _mcp(port, call)
+        tools = _mcp(port, listing)
+    assert read[0] == 200
+    assert "Refunds settle in five days." in json.loads(read[2])["result"]["content"][0]["text"]
+    names = {tool["name"] for tool in json.loads(tools[2])["result"]["tools"]}
+    assert {"search_docs", "read_doc", "get_graph", "commits_for_doc"} <= names
+
+
+def test_mcp_honours_the_token_and_the_origin_allowlist(tmp_repo, unpinned):
+    config = ServeConfig(
+        username="admin", password="pw", token="s3cret", allow_origins=("https://docs.example",)
+    )
+    with _running(tmp_repo, config) as port:
+        no_token = _mcp(port, _INITIALIZE)
+        bad_origin = _mcp(port, _INITIALIZE, token="s3cret", origin="https://evil.example")
+        ok = _mcp(port, _INITIALIZE, token="s3cret", origin="https://docs.example")
+    assert (no_token[0], bad_origin[0], ok[0]) == (403, 403, 200)
+    assert ok[1]["Access-Control-Allow-Origin"] == "https://docs.example"

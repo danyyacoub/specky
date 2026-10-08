@@ -72,6 +72,7 @@ from specky import spec_draft
 from specky.ai_provider import load_provider_from_toml
 from specky.db import connect
 from specky.doc_tools import DOC_RANK, topic_match
+from specky.mcp_http import MCP_PATH, McpBridge
 
 DEFAULT_PORT = 8420
 DEFAULT_HOST = "127.0.0.1"
@@ -580,6 +581,7 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
     # One store per server, not per module: two servers in one process (a test, a second repo)
     # shouldn't be able to see each other's conversations.
     conversations = ConversationStore()
+    mcp_bridge = McpBridge(repo_root)
 
     class Handler(BaseHTTPRequestHandler):
         def _cors(self) -> None:
@@ -595,7 +597,12 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             # (and the browser's own) must not reuse one origin's response for another.
             self.send_header("Vary", "Origin")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", f"Content-Type, {TOKEN_HEADER}")
+            # Authorization and the Mcp-* headers are for a browser-based MCP client (the MCP
+            # Inspector) calling `/mcp` cross-origin.
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                f"Content-Type, {TOKEN_HEADER}, Authorization, Mcp-Protocol-Version, Mcp-Session-Id",
+            )
 
         def _json(self, status: int, payload: dict) -> None:
             body = json.dumps(payload).encode()
@@ -648,10 +655,40 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             self._cors()
             self.end_headers()
 
+        def _mcp(self) -> None:
+            """`/mcp`: specky's MCP tools, answered by the SDK through `mcp_bridge`. Already past
+            the login, the origin allowlist and the token — it returns doc text like `/chat`."""
+            route = urlparse(self.path)
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b""
+            try:
+                status, headers, payload = mcp_bridge.handle(
+                    self.command, route.path, route.query, list(self.headers.items()), body
+                )
+            except Exception as exc:
+                print(f"specky serve: {self.command} {MCP_PATH} failed", file=sys.stderr, flush=True)
+                traceback.print_exc()
+                self._json(500, {"error": str(exc)})
+                return
+            self.send_response(status)
+            for name, value in headers:
+                # Ours, not the app's: the body is sent whole, and CORS is the allowlist's call.
+                if name.lower() not in ("content-length", "transfer-encoding") and not (
+                    name.lower().startswith("access-control-")
+                ):
+                    self.send_header(name, value)
+            self.send_header("Content-Length", str(len(payload)))
+            self._cors()
+            self.end_headers()
+            self.wfile.write(payload)
+
         def do_POST(self) -> None:
             if not self._authenticated() or not self._api_allowed():
                 return
             path = urlparse(self.path).path
+            if path == MCP_PATH:
+                self._mcp()
+                return
             if path not in ("/chat", "/chat/reset", "/draft"):
                 self._json(404, {"error": "not found"})
                 return
@@ -709,6 +746,10 @@ def _make_handler(repo_root: Path, config: ServeConfig) -> type[BaseHTTPRequestH
             if not self._authenticated() or not self._origin_ok():
                 return
             route = urlparse(self.path)
+            if route.path == MCP_PATH:
+                if self._api_allowed():
+                    self._mcp()
+                return
             if route.path == "/search":
                 if not self._api_allowed():
                     return
@@ -759,7 +800,9 @@ def serve(repo_root: Path, port: int | None = None, host: str | None = None) -> 
     # flush: stdout is block-buffered when it isn't a terminal, and these two lines have to be
     # visible *before* the server starts blocking in serve_forever — especially the warning.
     print(
-        f"specky serve: viewer on {url}/ , Spec Assistant on {url}/chat (Ctrl+C to stop)", flush=True
+        f"specky serve: viewer on {url}/ , Spec Assistant on {url}/chat , MCP on {url}{MCP_PATH} "
+        "(Ctrl+C to stop)",
+        flush=True,
     )
     if config.auth_required:
         print(

@@ -7,6 +7,14 @@ version matches `specky.__version__`, `.claude-plugin/plugin.json` and a heading
 
 ## [Unreleased]
 
+### Added
+- **A deployed `specky serve` answers MCP at `/mcp`.** It serves the same tools as `specky-mcp`
+  (`search_docs`, `read_doc`, `get_graph`, `commits_for_doc`, …) over Streamable HTTP, answered from
+  the server's copy of the repo. An agent on another machine can then use the docs as a knowledge
+  graph with no checkout: `claude mcp add --transport http specky-docs https://<server>/mcp --header
+  "Authorization: Basic …"`. It sits behind the same Basic-auth login, origin allowlist and token as
+  `/chat`.
+
 ## [0.2.5]
 
 ### Fixed
