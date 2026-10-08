@@ -1,20 +1,22 @@
 ---
-commits: [985db7ca3d8a2976b6af8e09025752362732bba9]
+commits: [985db7ca3d8a2976b6af8e09025752362732bba9, 5929454c3bbb37278a29c29ee78618a97b54f3cc]
 branch: main
 impact: feature
 features: [specs/chat/mcp-http-transport.md]
 ---
 
-# specky serve exposes MCP tools over HTTP at /mcp
+# specky serve hands out a personal MCP link to connect agents
 
-- **Date:** 2026-10-08T13:33:04+02:00
+- **Date:** 2026-10-08T13:33:04+02:00 → 2026-10-08T14:07:58+02:00
 - **Author:** dany <dany.yacoub@gmail.com>
-- **Message:** feat(mcp): serve the MCP tools over HTTP at /mcp behind the serve login
+- **Commits:**
+    - `985db7ca` feat(mcp): serve the MCP tools over HTTP at /mcp behind the serve login
+    - `5929454c` feat(viewer): add a Connect an agent page with a personal MCP link
 
 ## What changed
 
-A running specky serve now answers the same MCP tools (search_docs, read_doc, get_graph, and the rest) at /mcp, behind the existing Basic auth, origin allowlist and token. A remote agent can point at https://<server>/mcp and use the server's docs, index and git history as a knowledge graph, with no local checkout or specky-mcp install. The startup banner now prints the MCP URL alongside the viewer and Spec Assistant.
+The logged-in viewer now has a "Connect an agent" page that shows a personal MCP URL, /mcp/k/<key>, with an install command or button per agent; an agent added by that URL gets the same tools (search_docs, read_doc, get_graph, and the rest) behind the server's login without needing to attach a Basic auth header. The key is derived from the server's password and token, so changing either revokes every URL handed out, and a wrong key answers as not found rather than prompting for a password.
 
 ## Why
 
-A deployed specky serve already holds the docs, index and history behind a login, so serving the same tools from it lets a remote agent use a repo's docs as a knowledge graph without a checkout or local install.
+Most agents add a remote MCP server from a URL alone and can't attach a Basic auth header, so the server needed a way to give remote agents the same access without the standard login.

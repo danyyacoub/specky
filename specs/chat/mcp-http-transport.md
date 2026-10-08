@@ -6,41 +6,59 @@ tags: [chat, ai, security]
 # Chat — Mcp Http Transport
 
 ## What It Does
+
 `specky serve` already publishes a repo's docs, index and history behind its login. This change adds `/mcp` to that server, answering the same MCP tools (`search_docs`, `read_doc`, `get_graph` and the rest) that the stdio `specky-mcp` exposes. A remote agent can then point at `https://<server>/mcp` with a Basic `Authorization` header and use the repo's docs as a knowledge graph — no checkout, no local install.
 
+Most agents add a remote MCP server from a URL alone and can't attach a Basic auth header that way, so the logged-in viewer also hands out a **personal MCP URL**, `/mcp/k/<key>`, derived from the server's password and token. The viewer surfaces it on a **Connect an agent** page (`connect.html`, linked from the titlebar as "Connect an agent" with a plug icon), which offers one command or install button per agent. `GET /mcp/connect` returns that key to the logged-in page as a path (not an absolute URL — only the page knows the origin it was reached at, proxy and all).
+
 ## How It Works
+
 1. **Route matched** — a request whose path is `/mcp` is recognised by the `serve` handler before the `/chat`, `/draft` and `/search` routes.
 2. **Auth gate first** — the request must already have passed the same Basic login, origin allowlist and token checks as `/chat`; MCP itself does no auth.
 3. **Bridge started lazily** — on the first `/mcp` request, `McpBridge` starts the MCP SDK's streamable-HTTP app, pins the server's repo root, and runs its event loop in a background thread. A viewer-only deployment never pays for this.
-4. **Request handed over** — the handler reads the body and passes method, path, query, headers and body to `mcp_bridge.handle` on that event loop.
+4. **Request handed over** — the handler reads the body and passes method, path, query, headers and body to `mcp_bridge.handle` on that event loop. `Authorization` is stripped from the headers first: never hand the key on to the SDK — a personal URL is `/mcp` once it has been checked, and the path forwarded to the bridge is always `MCP_PATH`.
 5. **SDK answers statelessly** — the app is mounted with JSON responses and stateless HTTP: each POST is answered in a single response body, no session kept between requests.
 6. **Response relayed** — the handler sends the SDK's status and headers (dropping the app's `Content-Length`, `Transfer-Encoding` and `Access-Control-*`), adds its own `Content-Length` and the `serve` CORS headers, then writes the body whole.
 7. **Banner updated** — on startup `serve` now prints the MCP URL alongside the viewer and chat URLs.
+8. **Personal key route** — `/mcp/k/<key>` is checked by `_keyed_mcp` before the ordinary auth gate on both GET and POST: if the origin is not allowed it is refused; if the key does not verify it is a plain `404 {"error": "not found"}` with no Basic challenge (which would only make an agent prompt for a password it was never meant to need); if it verifies, the request is handled as `/mcp` (`_mcp`).
+9. **Connect page** — a logged-in `GET /mcp/connect` (after `_authenticated` and `_origin_ok`, gated by `_api_allowed`) returns `{"path": "/mcp/k/<key>"}`, or `{"path": "/mcp"}` when there is nothing to stand in for. The titlebar link and `connect.html` render that path per agent.
 
 ## Outcomes
+
 | Outcome | When |
 |---|---|
 | MCP response relayed | `/mcp` request passes login, origin and token checks; SDK returns a result |
+| MCP response relayed (personal URL) | `/mcp/k/<key>` request passes the origin check and the key verifies |
 | `500 {"error": …}` | `mcp_bridge.handle` raises; the traceback is printed to stderr |
 | `401`/`403` (unauth) or CORS refusal | Fails the handler's `_authenticated`/`_api_allowed`/`_origin_ok` checks, unchanged from `/chat` |
-| `404 {"error": "not found"}` | POST to a path that is neither `/mcp` nor a known chat route |
+| `404 {"error": "not found"}` | POST to a path that is neither `/mcp` nor a known chat route; or `/mcp/k/<key>` with a wrong key (no Basic challenge) |
+| `200 {"path": …}` | Logged-in `GET /mcp/connect` passes `_api_allowed`; path is `/mcp/k/<key>` or `/mcp` |
 | MCP URL printed at startup | Always, in the `specky serve:` banner line |
 
 ## Constants & Invariants
-- `MCP_PATH = "/mcp"` — the only path that routes to the bridge.
+
+- `MCP_PATH = "/mcp"` — the only path forwarded to the bridge; the SDK is always handed `MCP_PATH`.
 - `CALL_TIMEOUT = 60.0` seconds — longest a single MCP call may take before the handler gives up.
+- `MCP_CONNECT_PATH = f"{MCP_PATH}/connect"` = `/mcp/connect` — the logged-in page's key lookup.
+- `MCP_KEY_PREFIX = f"{MCP_PATH}/k/"` = `/mcp/k/` — the personal MCP URL prefix.
+- `CONNECTION_KEY_CHARS = 32` — a 32-character base64url prefix of the HMAC digest: 192 bits, unguessable and short enough to paste.
 - Mount options are fixed: `json_response=True`, `stateless_http=True`, `streamable_http_path=MCP_PATH`.
 - Response headers from the SDK are filtered: `content-length` and `transfer-encoding` (lowercased) are dropped, and any header starting `access-control-` is dropped; CORS is the handler's call.
+- `Authorization` is stripped from the headers passed to `mcp_bridge.handle` (case-insensitive).
 - Added CORS-allowed headers on `/chat`-style responses: `Content-Type`, the token header, `Authorization`, `Mcp-Protocol-Version`, `Mcp-Session-Id`.
 - `logging.getLogger("mcp")` is forced to `WARNING` so stateless-session INFO lines don't appear in `serve`'s quiet access log.
-- Auth precedence: handler checks (`_authenticated`, then `_api_allowed`/`_origin_ok`) run **before** the request reaches `McpBridge`; the SDK's own auth is not used.
+- Auth precedence: handler checks (`_authenticated`, then `_api_allowed`/`_origin_ok`) run **before** the request reaches `McpBridge`; the SDK's own auth is not used. The keyed route (`/mcp/k/<key>`) runs before those checks, substituting the key for the login **and** the token; a bad key is a plain `404`, never a `401` challenge.
 
 ## Maintainer Notes
+
 - The tools and prompts come from `specky.mcp_server`'s `MCPServer` (its own `mcp` object); the HTTP bridge wraps that same server so the stdio and HTTP transports cannot drift. Changes to `MCPServer` tools must not need a matching edit here.
 - `McpBridge._start` calls `mcp_server.pin_repo(self._repo_root)` — the served repo is pinned so no server-to-client channel (`roots/list`, sampling) is needed. If a future tool needs that channel, stateless HTTP will not provide it.
 - Because the mount is stateless with JSON responses, there is no session to keep alive between calls; `CALL_TIMEOUT` bounds each single call instead.
 - The DNS-rebinding guard is being disabled (`TransportSecuritySettings`) so a deployed hostname isn't refused by the SDK's localhost-only Host/Origin check.
 - Any new cross-origin MCP headers must be added to the `Access-Control-Allow-Headers` list in `_cors`.
+- `ServeConfig.connection_key()` is **derived, not stored**: an HMAC-SHA256 of `f"specky-mcp\n{username}"` keyed by `f"{password}\n{token}"`, base64url-encoded and truncated to `CONNECTION_KEY_CHARS`. Nothing has to be kept anywhere for it to verify, and changing either the password or the token revokes every URL ever handed out — the same thing that locks the browser out locks the agents out. It returns `""` when `auth_required` is false **and** no token is set, meaning there is nothing for the URL to stand in for; `connection_key_ok` then always fails.
+- `/mcp/k/<key>` still passes through `_origin_ok`, so a stolen key is only usable from an allowed origin; a wrong key is a `404` rather than a `401` so agents don't prompt for a password.
+- `GET /mcp/connect` returns a **path**, not a URL — the page supplies the origin it was reached at, so proxies and hostnames don't have to be known server-side.
 
 ## Acceptance Tests
 
@@ -66,3 +84,7 @@ Given/When/Then cases:
 | A deployment that never receives `/mcp` traffic | The server runs as viewer-only | No MCP event loop thread is started and the MCP server is not imported |
 | Startup banner is printed | `serve` starts | The line lists viewer, `/chat` and the MCP URL (`/mcp`) |
 | An MCP call runs longer than `CALL_TIMEOUT` | The handler waits | The handler gives up on the call |
+| An agent that can only be added by URL | It is given `/mcp/k/<key>` from the Connect page | A POST there passes the origin check and key check and is handled as `/mcp` |
+| `/mcp/k/<key>` with a wrong or missing key | The request arrives from an allowed origin | `404 {"error": "not found"}` with no Basic challenge, and `routed_to_mcp` reflects the refusal |
+| A logged-in viewer page | It requests `GET /mcp/connect` | It receives `{"path": "/mcp/k/<key>"}`, or `{"path": "/mcp"}` when no key exists |
+| `Authorization` is present on an `/mcp` request | The bridge is called | The header is stripped before `mcp_bridge.handle` sees it, and the forwarded path is `MCP_PATH` |
